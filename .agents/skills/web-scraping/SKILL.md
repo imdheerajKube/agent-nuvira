@@ -210,4 +210,3 @@ curl -s https://example.com | grep -o '<title>[^<]*</title>'
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('web-scraping', 'references/guide.md')`.

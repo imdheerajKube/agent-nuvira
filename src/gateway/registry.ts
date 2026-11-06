@@ -115,7 +115,7 @@ import {
   measureUnattendedProgress,
   scheduleFromPendingWork,
 } from '../learning/unattended-progress.js';
-import { costSince } from '../learning/cost-tracker.js';
+import { costSinceSplit } from '../learning/cost-tracker.js';
 import { logger } from '../utils/logger.js';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
@@ -2690,20 +2690,21 @@ export class GatewayRegistry {
     try {
       outcome = await run;
     } catch (err) {
-      const economy = costSince(startedAt);
+      const economy = costSinceSplit(startedAt);
       return {
         error: err instanceof Error ? err.message : String(err),
         durationMs: Date.now() - startedAt,
-        costUsd: economy.costUsd,
-        tokens: economy.tokens,
+        spend: economy.spend,
       };
     }
 
-    const economy = costSince(startedAt);
+    // The whole breakdown, not the evidence-backed bill alone: a batch on a
+    // provider with no declared billing tier bills 0 there, so passing only that
+    // number made a paid run report every batch as `$0.00000`.
+    const economy = costSinceSplit(startedAt);
     const envelope = {
       durationMs: Date.now() - startedAt,
-      costUsd: economy.costUsd,
-      tokens: economy.tokens,
+      spend: economy.spend,
     };
     const measured = measureUnattendedProgress(job);
     // Refresh the schedule from the newest snapshot: a composite job only knows

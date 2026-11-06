@@ -125,8 +125,13 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
     { icon: '📦', value: formatNumber(health.vectors), label: 'Vector Entries' },
   ];
 
-  // Cost by provider chart data
-  const providerEntries = Object.entries(cost.byProvider || {})
+  // Cost by provider chart data — the EVIDENCE-BACKED figure when the server sends
+  // the classified split (`byProviderBilled`), so this chart agrees with the
+  // "Billed" tile above it. `byProvider` is the ledger AS RECORDED (retired-table
+  // prices, test-origin rows included); it stays the fallback for an older server,
+  // and the title says which of the two is on screen.
+  const billedByProvider = cost.byProviderBilled;
+  const providerEntries = Object.entries(billedByProvider ?? cost.byProvider ?? {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
 
@@ -310,7 +315,9 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
         </p>
       </div>
 
-      <h2 className="section-subtitle">💰 Cost by Provider</h2>
+      <h2 className="section-subtitle">
+        💰 Cost by Provider {billedByProvider ? '(billed, evidence-backed)' : '(recorded, not evidence-filtered)'}
+      </h2>
       <div className="chart-container">
         {providerEntries.length > 0 ? (
           <ResponsiveContainer width="100%" height={260}>
@@ -321,7 +328,7 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
               <Tooltip
                 contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
                 labelStyle={{ color: 'var(--text-primary)' }}
-                formatter={(value: number) => [formatCost(value), 'Cost']}
+                formatter={(value: number) => [formatCost(value), billedByProvider ? 'Billed' : 'Recorded']}
               />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
                 {providerEntries.map((entry) => (

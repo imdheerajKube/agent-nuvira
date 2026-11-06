@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ChatCommand } from '../../src/cli/chat.js';
@@ -324,6 +324,76 @@ describe('ChatCommand — P4 project auto-recall (dashboard chat)', () => {
       .spyOn(ChatCommand.prototype as unknown as { getProvider: (o?: unknown) => Promise<{ type: string; provider: InferenceProvider }> }, 'getProvider')
       .mockResolvedValue({ type: 'groq', provider });
   }
+
+  it('P — a PINNED skill is loaded into the system message before the model speaks', async () => {
+    // The user-visible path for `nuvira chat --skill` / the dashboard's `/skill`:
+    // a real SKILL.md in the attached project is resolved by the SAME resolver
+    // the `skill` tool uses, and its methodology reaches the model in the system
+    // message. Nothing here is a mock of the pin mechanism.
+    const skillDir = join(projDir, '.agents', 'skills', 'pin-chat-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: pin-chat-skill\ndescription: Pin test skill\n---\n\n# Pin\n\nALWAYS write openapi.yaml before implementing.\n',
+      'utf-8',
+    );
+
+    const { provider, calls } = makeCapturingProvider();
+    stubGetProvider(provider);
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+
+    await cmd.answerOnce('build the API', {
+      provider: 'groq',
+      model: 'mock-model',
+      projectPath: projDir,
+      skills: ['pin-chat-skill'],
+    });
+
+    const system = calls[0]?.messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(system).toContain('PINNED by the user');
+    expect(system).toContain('ALWAYS write openapi.yaml before implementing');
+
+    // …and an UNPINNED turn is unchanged: no pin block appears for it.
+    calls.length = 0;
+    await cmd.answerOnce('build the API', { provider: 'groq', model: 'mock-model', projectPath: projDir });
+    const systemWithout = calls[0]?.messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(systemWithout).not.toContain('PINNED by the user');
+  });
+
+  it('honours a skill NAMED in the ask, while a plain mention stays advisory', async () => {
+    const skillDir = join(projDir, '.agents', 'skills', 'request-chat-skill');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(
+      join(skillDir, 'SKILL.md'),
+      '---\nname: request-chat-skill\ndescription: Requested skill test\n---\n\n# Request\n\nALWAYS use request-chat-skill methodology.\n',
+      'utf-8',
+    );
+
+    const { provider, calls } = makeCapturingProvider();
+    stubGetProvider(provider);
+    const cmd = new ChatCommand() as unknown as { answerOnce: Function };
+
+    await cmd.answerOnce('please use the request-chat-skill skill to build the API', {
+      provider: 'groq',
+      model: 'mock-model',
+      projectPath: projDir,
+    });
+    const system = calls[0]?.messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(system).toContain('PINNED by the user');
+    expect(system).toContain('ALWAYS use request-chat-skill methodology');
+    expect(system).toContain('do not force');
+
+    // A mention is not a request: the same skill is in the catalog, but the
+    // model keeps the model-driven choice and no pin block is fabricated.
+    calls.length = 0;
+    await cmd.answerOnce('what is the request-chat-skill skill?', {
+      provider: 'groq',
+      model: 'mock-model',
+      projectPath: projDir,
+    });
+    const plain = calls[0]?.messages.find((m) => m.role === 'system')?.content ?? '';
+    expect(plain).not.toContain('PINNED by the user');
+  });
 
   it('injects the recalled project context when a project is attached', async () => {
     // Seed prior work for the attached project: one workspace row is enough —

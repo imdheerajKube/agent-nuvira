@@ -259,6 +259,10 @@ export class OpenRouterAdapter implements InferenceProvider {
             // Non-critical.
           }
         },
+        // OpenRouter is the one endpoint that needs the top-level `usage`
+        // request object to report `usage.cost` on a stream; sending it
+        // anywhere else can 400 the whole request (see tools.ts).
+        usageInclude: true,
         reasoningBody,
       },
       onToken,

@@ -1,6 +1,6 @@
 ---
 name: cron-job
-description: Set up scheduled tasks and cron jobs. Use when the goal asks to automate recurring tasks, schedule jobs, or set up crons.
+description: Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to automate recurring tasks, schedule jobs, set up crons, or run work on a timer.
 version: 2.0.0
 whenToUse: Scheduled tasks, periodic cleanup, backup automation, report generation, data synchronization
 whenNotToUse: Real-time event processing (use message queue), long-running processes (use systemd)
@@ -12,7 +12,7 @@ Set up scheduled tasks with enterprise patterns.
 
 ## Goal pattern
 
-cron schedule task automate periodic cleanup backup report
+cron schedule job recurring task automated periodic timer interval report cleanup sync jobs
 
 ## Parameters
 
@@ -159,4 +159,3 @@ grep "Starting\|completed" /var/log/myapp/backup.log
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('cron-job', 'references/guide.md')`.

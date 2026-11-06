@@ -48,6 +48,7 @@ import {
   requestNamesPath,
 } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction, envelopeNamesPath } from '../learning/intent-envelope.js';
+import { isOwnContent, isOwnUnchangedWrite, rememberOwnWrite } from './own-writes.js';
 import { sessionGrantCovers } from '../learning/session-grant.js';
 import { grantCategoryOfTool } from './capability-registry.js';
 
@@ -426,9 +427,20 @@ export async function runListDir(args: ListDirArgs, ctx: ToolContext): Promise<s
  * The confirmation-gate message every state-changing coding tool returns
  * when `confirm` is not set — the model must call ask_user first, then
  * retry with confirm:true (the run_cli precedent, applied to edits).
+ *
+ * It says WHY this one is the user's call (content that exists and is not this
+ * run's own output), because the harness's other rule — never ask permission for
+ * work the request already ordered — is what a model otherwise follows: two live
+ * traces (trace-1793852461961-1250gv, trace-1793853385112-sf2exl) contained zero
+ * `ask_user` calls, so the refusal reached nobody and the deliverable was
+ * silently abandoned. Naming the exception is what makes the two rules one rule.
  */
-function confirmFirst(tool: string, path: string, what: string): string {
-  return `${tool}: state-changing — NOT applied. Ask the user first via ask_user ("Apply ${what} to ${path}?" with a one-line summary), then retry ${tool} with confirm:true once they approve.`;
+function confirmFirst(tool: string, path: string, what: string, reason: string): string {
+  return (
+    `${tool}: state-changing — NOT applied (${reason}). This ONE question is the user’s decision ` +
+    `(not permission-seeking): call ask_user with "Apply ${what} to ${path}?" and a one-line ` +
+    `summary, then retry ${tool} with confirm:true once they approve.`
+  );
 }
 
 /**
@@ -692,6 +704,12 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
     const newChars = pairs.reduce((n, p) => n + (p.new_string ?? '').length, 0);
     const touched = Math.max(oldChars, newChars);
     const share = fileChars > 0 ? Math.round((touched / fileChars) * 100) : 100;
+    // A file that still holds exactly what this run wrote is the run's OWN
+    // output — a "rewrite" of it recovers nothing, it just finishes the job.
+    // Measured (trace-1793853385112-sf2exl): a 396% edit of the report this run
+    // had created three steps earlier was refused as "replaces too much of what
+    // already exists", and the deliverable stopped mid-document.
+    const ownUnchanged = isOwnContent(ctx, gated.abs, content);
     // The durable grant is consulted FIRST: inside an approved intent, the edit
     // is EXECUTION, not a new decision — which is the whole point of agreeing
     // the work once instead of confirming it per keystroke. When there is no
@@ -717,7 +735,7 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
           action: `rewriting ${share}% of '${gated.rel}'`,
           changeClass: 'modify',
           namedByRequest: requestNamesPath(ctx.authorizationRequest ?? '', gated.rel),
-          recoverable: isSurgicalEdit(fileChars, oldChars, newChars),
+          recoverable: ownUnchanged || isSurgicalEdit(fileChars, oldChars, newChars),
           authorizedByRequest: ctx.writesAuthorized?.authorized === true,
         });
     if (verdict.action !== 'proceed') {
@@ -729,7 +747,8 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
         : `Apply this edit to ${gated.rel}? — replace "${abbrev(pairs[0].old_string)}" with "${abbrev(pairs[0].new_string)}"`;
       return (
         `edit_file: state-changing — NOT applied (${verdict.reason}). ` +
-        `Ask the user first via ask_user ("${question}" with a one-line summary), ` +
+        'This ONE question is the user’s decision (not permission-seeking): ' +
+        `call ask_user ("${question}" with a one-line summary), ` +
         'then retry edit_file with confirm:true once they approve.'
       );
     }
@@ -773,6 +792,9 @@ export async function runEditFile(args: EditFileArgs, ctx: ToolContext): Promise
   } catch (err) {
     return `edit_file: write failed on '${gated.rel}': ${(err as Error).message}`;
   }
+  // The edit is now this run's own output too — a later write to the same path
+  // must not re-ask about content the run itself authored (see own-writes.ts).
+  rememberOwnWrite(ctx, gated.abs, working);
 
   // Single-pair keeps its original, byte-compatible message.
   let result: string;
@@ -852,8 +874,16 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
   // autonomy policy supplies the missing input: creating a file the request
   // asked for, where nothing exists yet, destroys nothing and is undone by
   // deleting it, so it proceeds and REPORTS the decision. Authorization is
-  // absent without a loop context and overwriting stays gated either way.
+  // absent without a loop context, and overwriting stays gated unless the run
+  // itself wrote the file.
+  //
+  // Is this the run's OWN file, still holding exactly the bytes it wrote? That
+  // is the one case where existing content is RECOVERABLE (the bytes are in this
+  // run's transcript), so it is measured rather than assumed — see
+  // tools/own-writes.ts. False for a file this run never wrote.
+  const ownUnchanged = existed ? await isOwnUnchangedWrite(ctx, gated.abs) : false;
   let decidedAutonomously = false;
+  let autonomyReason = '';
   if (!args.confirm) {
     // Consult the durable grant first, then the per-request judgment.
     const envVerdict = envelopeCoversAction(ctx.envelope, {
@@ -878,13 +908,22 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
             tool: 'write_file',
             path: gated.rel,
             exists: existed,
+            append,
+            ownUnchanged,
+            namedByRequest: requestNamesPath(ctx.authorizationRequest ?? '', gated.rel),
             authorizedByRequest: ctx.writesAuthorized?.authorized === true,
           });
     if (verdict.action !== 'proceed') {
       ctx.pendingConfirmation = { tool: 'write_file', command: gated.rel, category: 'write' };
-      return confirmFirst('write_file', args.path, `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`);
+      return confirmFirst(
+        'write_file',
+        args.path,
+        `writing ${args.content.length} chars${abbrev(args.content) ? ` ("${abbrev(args.content)}")` : ''}`,
+        verdict.reason,
+      );
     }
     decidedAutonomously = true;
+    autonomyReason = verdict.reason;
     ctx.emit?.('autonomy:write-applied', {
       tool: 'write_file',
       path: gated.rel,
@@ -900,6 +939,15 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
   } catch (err) {
     return `write_file: write failed on '${gated.rel}': ${(err as Error).message}`;
   }
+  // Remember whose bytes these are. An APPEND needs a read-back because the
+  // final content is the old tail plus the new chunk; if that read fails nothing
+  // is recorded and the file keeps the stricter treatment (a missed record costs
+  // a confirmation, a wrong one would claim a file this run never wrote).
+  rememberOwnWrite(
+    ctx,
+    gated.abs,
+    append ? await readFile(gated.abs, 'utf-8').catch(() => null) : args.content,
+  );
   // I3 — a written file IS a deliverable. Record it on the session's artifact
   // store (when the surface has one) so the dashboard's Artifacts tab shows what
   // this turn actually produced instead of always reading 0. Best-effort by
@@ -917,9 +965,8 @@ export async function runWriteFile(args: WriteFileArgs, ctx: ToolContext): Promi
   // Reported, never silent: the model must tell the user what it decided, or
   // the judgment call is indistinguishable from a bug.
   return (
-    `${outcome}\n💡 Applied without asking: the request already authorized creating this file ` +
-    'and nothing existed at that path. State plainly in your answer that you created it — do not ' +
-    'ask for permission to do work the user already asked for.'
+    `${outcome}\n💡 Applied without asking: ${autonomyReason}. State plainly in your answer what ` +
+    'you wrote — do not ask for permission to do work the user already asked for.'
   );
 }
 

@@ -27,6 +27,7 @@ import {
   toolCallCard,
   type PresenterOptions,
 } from './ui/index.js';
+import { startWaitProgress } from './ui/wait-progress.js';
 // WS5 (#27) — isolation (a git worktree around the turn) and resume (replaying
 // recorded steps instead of re-paying for them). See the module headers for why
 // the worktree is created HERE, around the whole turn, and why a replay is
@@ -45,6 +46,19 @@ import {
   type OpenResume,
   type ResumeOutcome,
 } from '../learning/step-checkpoint.js';
+// Phase 4b/4c — the PERSISTENT SESSION STORE for chat turns. Until now only
+// `execute` and subagents checkpointed their thread: a chat turn that crashed or
+// hit its step budget left nothing to continue, because the conversation lived
+// only in memory. Opened per turn, saved at every step boundary, closed only on a
+// CLEAN end — so `nuvira resume` has a real turn to pick up.
+import {
+  findResumableSessionFor,
+  formatSessionResume,
+  openSession,
+  rehydrateThread,
+  resolveSessionStore,
+  type SessionStore,
+} from '../learning/session-store.js';
 import { applyActiveModel } from './model.js';
 import { resetMCPManager } from '../mcp/manager.js';
 import { ConfigManager } from '../config/manager.js';
@@ -60,7 +74,7 @@ import type { ComplexityLevel } from '../learning/hybrid-router.js';
 import { getRouterBandit } from '../learning/router-bandit.js';
 import { UnusableModelResponseError } from '../learning/response-usability.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
-import { resolveTurnBudget } from '../learning/turn-budget.js';
+import { resolveStepBudget, resolveTurnBudget } from '../learning/turn-budget.js';
 import { getAutoRouter, isAgentAutoRoute, isAutoModel, isAutoProvider, governanceVerdict, adminBudgetVerdict, isAgenticTask } from '../learning/auto-router.js';
 import { continuationSoftwareText } from '../learning/continuation-intent.js';
 import { buildAssessmentTurnContext } from '../learning/assessment-turn-context.js';
@@ -70,10 +84,9 @@ import {
   renderExhaustionReport,
   type ExhaustionAttempt,
 } from '../learning/exhaustion-report.js';
-import { estimateTokens } from '../learning/cost-tracker.js';
+import { estimateTokens, costSinceSplit } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
-import { costSince } from '../learning/cost-tracker.js';
 import { refreshModelRegistry } from '../inference/model-probe.js';
 import { startWarmupDaemon } from '../learning/model-warmup.js';
 import { recordRoutingDecision, type RoutingScoreBasis } from '../learning/routing-history.js';
@@ -1129,6 +1142,14 @@ export class ChatCommand extends BaseCommand {
      */
     projectPath?: string;
     /**
+     * Skills the user PINNED for this turn — the dashboard's `/skill <name>`,
+     * or an API caller's `skills: []`. Not a hint: each one's methodology is
+     * placed in the turn before the model speaks (see `learning/skill-pin.ts`),
+     * and the load is recorded exactly as the `skill` tool records it. Absent /
+     * empty = today's behaviour byte for byte.
+     */
+    skills?: string[];
+    /**
      * Decision recall — the related decisions this project already recorded
      * (`ask_user` → `.nuvira/decisions.jsonl`), injected as a labelled advisory
      * block so a settled question is not re-asked. Computed internally from
@@ -1511,7 +1532,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, onToken: opts.onToken, onReasoning: opts.onReasoning, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, skills: opts.skills, onToken: opts.onToken, onReasoning: opts.onReasoning, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1591,12 +1612,12 @@ export class ChatCommand extends BaseCommand {
         // ask_user default), so the report discloses them instead of letting the
         // answer read as a choice the user made.
         assumptions: answer.runTrace?.assumptions,
-        // C6 — what the turn cost, from the ledger, so an expensive turn is visible
-        // where the turn is described instead of only in a session total.
-        cost: (() => {
-          const spend = costSince(turnCostSince);
-          return { usd: spend.costUsd, tokens: spend.tokens, calls: spend.requests };
-        })(),
+        // C6 — what the turn SPENT and on what evidence, so an expensive turn is
+        // visible where the turn is described instead of only in a session total.
+        // Every bucket is carried: the evidence-backed bill alone reads `$0` on a
+        // list-priced turn whose account has no declared `billingTier`, which is the
+        // DEFAULT install — i.e. a turn that was never priced, printed as free.
+        cost: costSinceSplit(turnCostSince).spend,
         flags: {
           unverifiedActionClaim: answer.unverifiedActionClaim,
           unverifiedEdit: answer.unverifiedEdit,
@@ -1825,6 +1846,14 @@ export class ChatCommand extends BaseCommand {
         'Run this turn in its own git worktree of the project and report the diff against the base commit. Refuses rather than running unisolated when the directory cannot be isolated (also asked for by NUVIRA_ISOLATE=1)',
       )
       .option('--keep-worktree', 'Keep the isolated worktree after the turn instead of removing it')
+      // The PIN. Repeatable, and deliberately NOT a hint: the named skill's
+      // methodology is placed in every turn of this session, so "use the
+      // api-design skill" is carried out even by a model that would ignore an
+      // advisory catalogue. Nothing is pinned unless this flag is typed.
+      .option(
+        '--skill <name...>',
+        'Pin a skill for this session — its methodology is loaded into every turn (repeatable: --skill api-design --skill api-testing)',
+      )
       .option(
         '--resume [id]',
         'Replay the recorded steps of this ask whose input is unchanged instead of paying for them again (defaults to the record for this goal + directory; also asked for by NUVIRA_RESUME=1)',
@@ -1838,7 +1867,7 @@ export class ChatCommand extends BaseCommand {
           '  repair-and-announce behaviour instead (fall over to an available model and\n' +
           '  report which one answered), set NUVIRA_STRICT_MODEL=0.\n',
       )
-      .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean }) => {
+      .action(async (prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean; skill?: string[] }) => {
         // R2 — when stdin is not a TTY this invocation is headless: nobody can
         // type another message, so the process must exit once the turn is done
         // instead of parking on an MCP child's pipes. Tests and library callers
@@ -2038,7 +2067,7 @@ export class ChatCommand extends BaseCommand {
     process.exit(0);
   }
 
-  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean; exitOnComplete?: boolean }): Promise<void> {
+  private async execute(prompt?: string, options?: { file?: string; provider?: string; model?: string; cache?: boolean; dev?: boolean; worktree?: boolean; keepWorktree?: boolean; resume?: string | boolean; skill?: string[]; exitOnComplete?: boolean }): Promise<void> {
     // Apply the active model state from `nuvira model switch` as defaults
     const activeOpts = applyActiveModel({ provider: options?.provider, model: options?.model });
     const mergedOpts = { ...options, provider: activeOpts.provider, model: activeOpts.model };
@@ -2260,8 +2289,9 @@ export class ChatCommand extends BaseCommand {
           cacheEnabled,
           { auto: autoMode },
           parseRequestSync(picked),
-          // P5 — a picked followup continues the previous execution.
-          { continuation: true, ...this.ws5Overrides(options), ...liveNext.overrides },
+          // P5 — a picked followup continues the previous execution. A pinned
+          // skill stays pinned for it: the followup is the same task.
+          { continuation: true, ...this.ws5Overrides(options), ...(options?.skill ? { skills: options.skill } : {}), ...liveNext.overrides },
         ).finally(() => liveNext.stop());
         const nextText = stripToolCallArtifacts(next.content);
         if (nextText) {
@@ -2382,6 +2412,9 @@ export class ChatCommand extends BaseCommand {
             {
               continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups),
               ...this.ws5Overrides(options),
+              // A `--skill` pin holds for every message in the session, not
+              // only the first — the flag names a way of working, not one turn.
+              ...(options?.skill ? { skills: options.skill } : {}),
               ...live.overrides,
             },
           ),
@@ -2580,6 +2613,12 @@ export class ChatCommand extends BaseCommand {
        * CLI running inside the project.
        */
       projectPath?: string;
+      /**
+       * Skills the user PINNED for this turn (see `answerOnce`). Loaded into
+       * the turn by the harness, not hinted — the one way a surface can make
+       * "use xyz skill" mean something on a model that ignores suggestions.
+       */
+      skills?: string[];
       /**
        * P4 — stream answer tokens live. The dashboard console feeds the GUI's
        * answer typewriter; the CLI REPL feeds its live Ink view (see
@@ -2926,6 +2965,14 @@ export class ChatCommand extends BaseCommand {
      * tree is not isolated, it is confused.
      */
     const turnCwd = worktree?.dir ?? projectDir;
+    // Phase 4b/4c — open this turn's session. DEFAULT ON (see
+    // `resolveSessionStore`): the snapshot is what lets a dead process be
+    // continued instead of re-asked. `--no-session-store` / `NUVIRA_SESSION_STORE=0`
+    // turn it off, and a read-only home degrades to "no continuity", never a
+    // failed turn.
+    const turnSession: SessionStore | null = resolveSessionStore({ configManager: this.configManager })
+      ? openSession({ goal: message, cwd: turnCwd })
+      : null;
     // The ledger is only opened when a resume was asked for (a `--resume`, or the
     // environment asking for every turn on this surface). An ordinary turn never
     // touches the record store: no read, no write, no directory created.
@@ -2996,6 +3043,54 @@ export class ChatCommand extends BaseCommand {
       skillHint = await buildConfiguredSkillHint(this.configManager);
     } catch {
       skillHint = ''; // best-effort — a hint failure never breaks the turn
+    }
+
+    // Pinned skills — the user NAMED these (`--skill`, the dashboard's /skill,
+    // or an API `skills: []`). This is the opposite contract to the hint above:
+    // the methodology goes INTO the turn before the model speaks, so it cannot
+    // be "considered" and skipped, and the load is recorded so the obligation
+    // report and the outcome ledger see the same skill the user asked for.
+    //
+    // Best-effort like every other block here: an unresolvable name injects
+    // nothing and the turn proceeds — reported, never silently fabricated.
+    let pinnedSkillsBlock = '';
+    try {
+      const explicitNames = ctxOverrides?.skills ?? [];
+      // A user who says "use the rag-pipeline skill" has named a skill, even
+      // without the CLI flag. Detect that exact request against the catalog; a
+      // plain mention is not a request, and a non-match changes nothing.
+      let requestedNames: string[] = [];
+      try {
+        const [{ collectSkillEntries }, { detectRequestedSkillNames }] = await Promise.all([
+          import('../tools/loop-skill-hint.js'),
+          import('../learning/skill-request.js'),
+        ]);
+        const entries = await collectSkillEntries(this.configManager, {
+          projectRoot: ctxOverrides?.projectPath ?? process.cwd(),
+        });
+        requestedNames = detectRequestedSkillNames(
+          message,
+          entries.map((entry) => entry.name),
+        );
+      } catch {
+        requestedNames = []; // best-effort — detection must never break the turn
+      }
+      const names = Array.from(new Set([...explicitNames, ...requestedNames]));
+      if (names.length > 0) {
+        const { buildPinnedSkillsForTurn, describePinnedResolution } = await import('../learning/skill-pin.js');
+        const pinned = await buildPinnedSkillsForTurn(names, { cwd: ctxOverrides?.projectPath ?? process.cwd() });
+        pinnedSkillsBlock = pinned.block;
+        const note = describePinnedResolution(pinned.resolution);
+        if (note) reportDiagnostic(`🧩 ${note}`);
+        // A pin that did not resolve must not be silent on a surface with no
+        // terminal: the dashboard renders progress lines, so an unknown or
+        // disabled name is SAID there instead of leaving a chip that did nothing.
+        if (pinned.resolution.unknown.length > 0 || pinned.resolution.disabled.length > 0) {
+          ctxOverrides?.onProgress?.(`🧩 ${note}`);
+        }
+      }
+    } catch {
+      pinnedSkillsBlock = ''; // best-effort — a pin failure never breaks the turn
     }
 
     // Machine facts — the host stated ONCE (OS / arch / shell / installed package
@@ -3126,7 +3221,7 @@ export class ChatCommand extends BaseCommand {
     // turn, where it used to occupy ~80% of the ask on WhatsApp turns.
     const systemPolicyBlock = ctxOverrides?.systemPolicy ? `\n\n${ctxOverrides.systemPolicy}` : '';
     const thread: ToolMessage[] = [
-      { role: 'system', content: systemText + systemPolicyBlock + machineBlock + mcpBlock + skillHint },
+      { role: 'system', content: systemText + systemPolicyBlock + machineBlock + mcpBlock + skillHint + pinnedSkillsBlock },
       // P3 — the attached project's bounded snapshot (path + file tree +
       // symbol map) rides in before the conversation, exactly like --file
       // context: the model knows what it is looking at without being told.
@@ -3410,6 +3505,9 @@ export class ChatCommand extends BaseCommand {
           { name: 'system:identity+tool-contract', chars: systemText.length },
           { name: 'system:channel-policy', chars: systemPolicyBlock.length },
           { name: 'skill-hint', chars: skillHint.length, dropPriority: 10 },
+          // A PINNED skill has no drop priority on purpose: the user named it,
+          // so the budget may trim a hint or a snapshot, never this.
+          { name: 'pinned-skills', chars: pinnedSkillsBlock.length },
           // Which MCP servers exist is a FACT about this host (like the machine
           // facts), and the block is tiny — kept ahead of the advisory hints.
           { name: 'mcp-servers', chars: mcpBlock.length, dropPriority: 14 },
@@ -3447,7 +3545,8 @@ export class ChatCommand extends BaseCommand {
             systemPolicyBlock +
             (trimmed.has('machine-facts') ? '' : machineBlock) +
             (trimmed.has('mcp-servers') ? '' : mcpBlock) +
-            (trimmed.has('skill-hint') ? '' : skillHint),
+            (trimmed.has('skill-hint') ? '' : skillHint) +
+            pinnedSkillsBlock,
         };
       }
       // Applied rather than merely reported (as the two system blocks above are):
@@ -3720,6 +3819,36 @@ export class ChatCommand extends BaseCommand {
         configExposure: getLoopExposureMode(this.configManager),
       });
       const turnBudget = resolveTurnBudget(this.configManager);
+      // The step bound is a SETTING, not a literal. It used to be `16` here, which
+      // put a hard ceiling under every build no caller could raise — see
+      // `learning/turn-budget.ts` `resolveStepBudget`.
+      const stepBudget = resolveStepBudget(this.configManager);
+      // Phase 4c — rehydrate a conversation a DEAD turn left OPEN. Skipped when
+      // this run replays the resume ledger: the ledger's record IS the transcript
+      // of model calls, and prepending a session tail would make every digest
+      // miss (the rule both engine paths follow — see
+      // `tests/cli/resume-session-interaction.test.ts`). The fresh HEAD (system
+      // prompt + project context) replaces the stored one; the conversation tail
+      // is the work that already happened.
+      if (turnSession && !resume?.ledger.willServe()) {
+        try {
+          const prior = findResumableSessionFor(message, turnCwd);
+          if (prior) {
+            let headLen = 0;
+            while (headLen < thread.length && thread[headLen].role === 'system') headLen += 1;
+            if (
+              thread[headLen]?.role === 'user' &&
+              thread[headLen].content.startsWith('[Project context]')
+            ) {
+              headLen += 1;
+            }
+            thread.splice(0, thread.length, ...rehydrateThread(thread.slice(0, headLen), prior));
+            reportDiagnostic(formatSessionResume(prior));
+          }
+        } catch {
+          // Best-effort — a rehydration failure is a cold start, not a broken turn.
+        }
+      }
       result = await runToolLoop({
         messages: thread,
         // The route the model is TOLD about itself. Read fresh each step from the
@@ -3728,7 +3857,14 @@ export class ChatCommand extends BaseCommand {
         // whatever the config or the model's training data suggests.
         servedRoute: () => ({ providerType: session.type, model: session.model ?? '' }),
         context: toolContext,
-        maxSteps: 16,
+        maxSteps: stepBudget.maxSteps,
+        // THE ABSOLUTE GUARD, never the budget: the turn normally ends because the
+        // ask is satisfied (or because two granted rounds moved no requirement),
+        // not because a count was spent.
+        maxTotalSteps: stepBudget.maxTotalSteps,
+        // Say it explicitly so a pinned base slice cannot silently restore the old
+        // fixed allowance: the requirement ledger decides when this turn is done.
+        requirementDrivenBudget: true,
         // Model-window-aware thread budget: a 1M-token model keeps its window
         // instead of being trimmed to the fixed ~50K-token default. Undefined
         // (unknown window) leaves the tool-loop default untouched.
@@ -3751,6 +3887,24 @@ export class ChatCommand extends BaseCommand {
         // WS5 — the resume ledger, when this turn was asked to resume. Omitted
         // entirely otherwise, so an ordinary turn never consults it.
         ...(resume ? { resume: resume.ledger } : {}),
+        // Phase 4b — step boundary: the tool results are IN the thread, so a
+        // process that dies on the NEXT step leaves a record through this one.
+        ...(turnSession
+          ? {
+              onStep: (step: {
+                thread: readonly ToolMessage[];
+                steps: number;
+                successfulTools: readonly string[];
+                mutatedPaths: readonly string[];
+              }) => {
+                turnSession.save(step.thread, {
+                  steps: step.steps,
+                  successfulTools: [...step.successfulTools],
+                  mutatedPaths: [...step.mutatedPaths],
+                });
+              },
+            }
+          : {}),
         // WALL CLOCK — the budget the user actually has. Steps are not a unit of
         // time; without this, a turn whose last ten minutes go into a broken browser
         // runner ends at an external timeout with no handover (measured 2026-10-27).
@@ -3775,6 +3929,51 @@ export class ChatCommand extends BaseCommand {
           // and landed on the local last resort. The plan knows whether waiting
           // is worth it (a proven pair, or alternatives that would de-escalate),
           // so the loop asks the CALLER rather than inventing a backoff.
+          // ── EVIDENCE, NOT PANIC: probe a pair that answered nothing ──────
+          //
+          // An empty step with no `finish_reason`/usage evidence cannot say
+          // whether the pair is down or merely choked on this prompt. Rather
+          // than wait out a blip on a dead key (or rotate away from a model that
+          // is up), the loop asks this to PING the pair with a one-line prompt
+          // before it judges it. A reply → `alive` (re-ask the real step); an
+          // auth/credit/not-found refusal → `unavailable` (rotate with that
+          // evidence, patience skipped); anything ambiguous (timeout, 429) →
+          // `unknown`, which leaves the existing patience policy in charge — a
+          // rate limit comes back on its own and is exactly the case patience
+          // exists for.
+          // AUTO-ONLY, deliberately. On a pinned turn the pair is the user's
+          // explicit choice: the loop's budget re-ask (same pair) still applies,
+          // but a probe must not shorten the pin's own grace window or trigger
+          // the handoff hook earlier than it did before. Pinned turns keep
+          // their previous behaviour exactly.
+          ...(mode.auto
+            ? {
+          assessServedPair: async (): Promise<'alive' | 'unavailable' | 'unknown'> => {
+            const prov = session.provider;
+            const mdl = session.model;
+            if (!prov || !mdl || mdl === 'default') return 'unknown';
+            try {
+              const text = await prov.generate('Reply with the single word: ok', {
+                model: mdl,
+                maxTokens: 32,
+                temperature: 0,
+                signal: AbortSignal.timeout(15_000),
+              });
+              // An empty probe does NOT condemn the pair: a reasoning model can
+              // spend 32 tokens thinking. Only a real reply proves liveness.
+              return text.trim().length > 0 ? 'alive' : 'unknown';
+            } catch (err) {
+              const kind = classifyFallbackError(err);
+              if (kind === 'auth' || kind === 'credit-exhausted') return 'unavailable';
+              const message = err instanceof Error ? err.message : String(err);
+              if (/\b(401|402|403|404)\b|not found|no such model|does not exist|access denied/i.test(message)) {
+                return 'unavailable';
+              }
+              return 'unknown';
+            }
+          },
+              }
+            : {}),
           emptyResponsePatienceMs: ({ emptyStreak, deliveredWorkThisTurn }) => {
             try {
               const pair = {
@@ -3895,7 +4094,10 @@ export class ChatCommand extends BaseCommand {
           kind: 'failover',
           summary:
             `the model layer failed — eligible pool ${report.poolSize ?? '?'} model(s) across ` +
-            `${report.poolProviders ?? '?'} provider(s), ${tried.length} tried, ${parked.length} parked` +
+            `${report.poolProviders ?? '?'} provider(s)` +
+            (typeof report.poolRoutable === 'number' ? ` (${report.poolRoutable} verified/callable)` : '') +
+            (typeof report.poolNeverTried === 'number' ? ` (${report.poolNeverTried} never tried)` : '') +
+            `, ${tried.length} tried, ${parked.length} parked` +
             (triedList ? `; tried: ${triedList}` : '') +
             (parkedList ? `; parked: ${parkedList}` : ''),
         });
@@ -3968,6 +4170,8 @@ export class ChatCommand extends BaseCommand {
             exclusions,
             ...(typeof breadth.poolSize === 'number' ? { poolSize: breadth.poolSize } : {}),
             ...(typeof breadth.poolProviders === 'number' ? { poolProviders: breadth.poolProviders } : {}),
+            ...(typeof breadth.poolRoutable === 'number' ? { poolRoutable: breadth.poolRoutable } : {}),
+            ...(typeof breadth.poolNeverTried === 'number' ? { poolNeverTried: breadth.poolNeverTried } : {}),
             task: message,
             // The user's PIN, when there was one — so the report's own advice
             // respects the quality bar they set instead of inviting a downgrade
@@ -3992,7 +4196,8 @@ export class ChatCommand extends BaseCommand {
               kind: 'failover',
               summary:
                 `exhaustion report delivered — ${attempts.filter((a) => !a.skipped).length} model(s) tried, ` +
-                `${exclusions.length} unavailable, eligible pool ${breadth.poolSize ?? '?'}`,
+                `${exclusions.length} unavailable, eligible pool ${breadth.poolSize ?? '?'}` +
+                (typeof breadth.poolRoutable === 'number' ? ` (${breadth.poolRoutable} verified/callable)` : ''),
             });
           }
         }
@@ -4176,6 +4381,23 @@ export class ChatCommand extends BaseCommand {
       }
     } catch {
       // Best-effort.
+    }
+
+    // Phase 4b/4c — close the session only on a CLEAN end. A failed, cancelled
+    // or STEP-BOUNDED turn stays OPEN: a bounded turn ran out of budget with
+    // work still open, and closing it would erase the only record `nuvira resume`
+    // could continue. Best-effort — closing must never break the turn.
+    if (
+      turnSession &&
+      !result.generationFailed &&
+      !result.cancelled &&
+      !result.bounded
+    ) {
+      try {
+        turnSession.finish();
+      } catch {
+        // Best-effort.
+      }
     }
 
     // Finalize the turn (cache + memory + registry telemetry).
@@ -5214,8 +5436,12 @@ export class ChatCommand extends BaseCommand {
           // (the E2E repair-failover contract): one warn per walk, one
           // success log per landed candidate — and now the failure KIND in the
           // line, so the console says what went wrong instead of only that it did.
-          logger.debug(
-            `   ⚠️ ${session.provider.name} failed (${describeFailureKind(primaryKind)}) — trying the next auto candidate...`,
+          // Visible at normal verbosity: a failover walk that takes minutes
+          // looked like a hang when the only proof of life was --debug output
+          // (measured 2026-11-04).
+          logger.info(
+            `   ⚠️ ${session.type}/${session.model ?? 'default'} failed ` +
+              `(${describeFailureKind(primaryKind)}) — trying the next auto candidate...`,
           );
           /**
            * ── PAIR-SCOPED WALK: follow what is ROUTABLE, not one model per
@@ -5349,7 +5575,9 @@ export class ChatCommand extends BaseCommand {
               }
             }
             try {
-              const resp = await tryGenerate(next.provider, next.type, next.model);
+              const resp = await tryGenerate(next.provider, next.type, next.model).finally(
+                startWaitProgress(`${next.type}/${next.model ?? 'default'}`),
+              );
               session.type = next.type;
               session.provider = next.provider;
               // Keep the model that actually answered: `next.model` is often
@@ -5386,8 +5614,9 @@ export class ChatCommand extends BaseCommand {
               // the walk and the exclusion filter can never disagree.
               const providerOut = providerIsOut(next.type);
               if (providerOut) failedProviders.add(next.type);
-              logger.debug(
-                `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) — ` +
+              logger.info(
+                `   ⚠️ ${next.type}/${next.model ?? 'default'} failed (${describeFailureKind(nextKind)}) ` +
+                  `on failover attempt ${i + 2} — ` +
                   (providerOut
                     ? 'that provider is out; trying the next auto candidate...'
                     : `trying ${next.type}'s next model, then the next provider...`),

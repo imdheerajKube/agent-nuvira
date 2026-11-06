@@ -22,6 +22,7 @@ import { scrubSecrets } from '../gateway/gateway-log.js';
 import { resolveBuffConfigDir, resolveBuffConfigPath, resolveNuviraHome } from '../config/paths.js';
 import { createRequire } from 'node:module';
 import { loadEnv } from '../utils/env.js';
+import type { SpendBreakdown } from '../utils/spend.js';
 import { ConfigManager } from '../config/manager.js';
 import { parseRuntimeSpec } from '../mcp/runtime.js';
 import { runAllChecks, type CheckResult, type HealthStatus } from '../cli/doctor.js';
@@ -35,6 +36,7 @@ import type { WireFinding } from '../findings/verdicts.js';
 import { getAutoRouter } from '../learning/auto-router.js';
 import {
   classifyEntries,
+  spendFromTotals,
   type ClassifiableEntry,
 } from '../learning/cost-classification.js';
 // Type-only: the payload SHAPE of an invoice check. A value import would pull the
@@ -1126,6 +1128,9 @@ export interface UnattendedBatchView {
   index: number;
   progress: number;
   progressLine?: string;
+  /** The batch's spend with its evidence; undefined when nothing was metered. */
+  spend?: SpendBreakdown;
+  /** LEGACY: rows written before `spend` existed (billed figure, no provenance). */
   costUsd?: number;
   tokens?: number;
   durationMs?: number;
@@ -1140,6 +1145,8 @@ export interface UnattendedJobView {
   progress: number;
   progressLine?: string;
   batches: number;
+  spend?: SpendBreakdown;
+  /** LEGACY: jobs written before `spend` existed. */
   costUsd?: number;
   tokens?: number;
   stopReason?: string;
@@ -1164,6 +1171,7 @@ export function readUnattendedJobs(): { total: number; jobs: UnattendedJobView[]
         progress: Math.max(0, Math.min(100, Math.round(job.progress))),
         ...(job.progressLine ? { progressLine: job.progressLine } : {}),
         batches: job.batches,
+        ...(job.spend ? { spend: job.spend } : {}),
         ...(job.costUsd === undefined ? {} : { costUsd: job.costUsd }),
         ...(job.tokens === undefined ? {} : { tokens: job.tokens }),
         ...(job.stopReason ? { stopReason: job.stopReason } : {}),
@@ -1172,6 +1180,7 @@ export function readUnattendedJobs(): { total: number; jobs: UnattendedJobView[]
           index: s.index,
           progress: s.progress,
           ...(s.progressLine ? { progressLine: s.progressLine } : {}),
+          ...(s.spend ? { spend: s.spend } : {}),
           ...(s.costUsd === undefined ? {} : { costUsd: s.costUsd }),
           ...(s.tokens === undefined ? {} : { tokens: s.tokens }),
           ...(s.durationMs === undefined ? {} : { durationMs: s.durationMs }),
@@ -2088,15 +2097,23 @@ function readCostData(): Record<string, unknown> {
     }
   }
 
-  const recent = entries.slice(-50).reverse().map((e) => ({
-    provider: e.provider,
-    model: e.model,
-    costUsd: e.costUsd,
-    totalTokens: e.totalTokens,
-    timestamp: e.timestamp,
-    measured: e.measured === true,
-    reported: e.costReported === true,
-  }));
+  const recent = entries.slice(-50).reverse().map((e) => {
+    // Each row as a ONE-CALL window, classified by the same rules as the page
+    // headline. `costUsd` alone cannot say whether this call was billed, list-priced
+    // on a declared account, priced on an undeclared one, free or unpriced — and the
+    // recent list printed all five as the same `$`.
+    const spend = spendFromTotals(classifyEntries([e as unknown as ClassifiableEntry]));
+    return {
+      provider: e.provider,
+      model: e.model,
+      costUsd: e.costUsd,
+      totalTokens: e.totalTokens,
+      timestamp: e.timestamp,
+      measured: e.measured === true,
+      reported: e.costReported === true,
+      spend,
+    };
+  });
 
   // ── Invoice checks: the only EXTERNAL figures on this page ───────────────
   // Written by `nuvira stats cost reconcile` when the operator enters the
@@ -3831,6 +3848,26 @@ export function setWhatsappPairingForTest(manager: WhatsAppPairingManager): void
 }
 
 /**
+ * The spawner behind `POST /api/resume/run`.
+ *
+ * `null` (the default) → the REAL detached `nuvira resume run` process. Swapped
+ * by a route test so exercising the HTTP contract never launches a child that
+ * would outlive the test runner (the same reason the shutdown and gateway-stop
+ * actions have test hooks).
+ */
+type ResumeSpawner = (input: {
+  id?: string;
+  all?: boolean;
+  cwd?: string;
+  minutes?: number;
+}) => { pid?: number; logPath: string };
+let resumeSpawnForTest: ResumeSpawner | null = null;
+
+export function setResumeSpawnForTest(spawner: ResumeSpawner | null): void {
+  resumeSpawnForTest = spawner;
+}
+
+/**
  * Login brute-force throttle (the control layer's first hardening): per-IP
  * failed-attempt counter with a 1-minute window. After 10 failures the IP is
  * refused with 429 until the window rolls. A successful login clears the IP's
@@ -5135,6 +5172,86 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     })();
     return;
   }
+  // ── P4 — skill routing preview + update (the "why didn't it pick my skill?"
+  // debugger, and the update button behind it). ────────────────────────────
+  //
+  // The preview returns EXACTLY what the model sees this turn, built through the
+  // same functions the chat loop calls (`buildConfiguredSkillHint`), so the
+  // dashboard can never show a flattering list the runtime does not produce.
+  if (pathname === '/api/skills/index-preview' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      try {
+        const [{ collectSkillEntries, buildConfiguredSkillHint, resolveSkillHintMode }, { buildSkillIndex }] =
+          await Promise.all([
+            import('../tools/loop-skill-hint.js'),
+            import('../learning/skill-index.js'),
+          ]);
+        const entries = await collectSkillEntries(new ConfigManager());
+        const index = buildSkillIndex(entries);
+        const active = await buildConfiguredSkillHint(new ConfigManager());
+        writeJson(res, 200, {
+          ok: true,
+          mode: resolveSkillHintMode(new ConfigManager()),
+          skills: entries.length,
+          chars: index.chars,
+          withTrigger: index.withTrigger,
+          nameOnly: index.nameOnly,
+          index: index.text,
+          active,
+        });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+  if (pathname === '/api/skills/update' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot update skills (requires admin or operator).`,
+        });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const name = typeof body?.name === 'string' ? body.name.trim() : '';
+      if (name && !/^[a-z0-9-]+$/.test(name)) {
+        writeJson(res, 400, { ok: false, error: 'Invalid skill name.' });
+        return;
+      }
+      try {
+        const { updateHubSkills } = await import('../learning/skills-hub.js');
+        const result = await updateHubSkills(process.cwd(), new ConfigManager());
+        if (name) {
+          // Single-skill update: report this skill's outcome, not the batch's.
+          const failed = result.failed.find((f) => f.startsWith(name));
+          const updated = result.updated.includes(name);
+          if (failed) {
+            writeJson(res, 400, { ok: false, error: failed });
+            return;
+          }
+          writeJson(res, 200, { ok: true, name, updated, alreadyCurrent: !updated });
+          return;
+        }
+        writeJson(res, 200, { ok: true, ...result });
+      } catch (err) {
+        writeJson(res, 500, { ok: false, error: err instanceof Error ? err.message : String(err) });
+      }
+    })();
+    return;
+  }
+
   // ── Knowledge base (tag-scoped retrieval over the operator's own documents) ──
   // Thin endpoints over learning/knowledge-base.ts: list tags, ingest a file or
   // folder under a tag, query a tag, and forget a tag. Documents are extracted,
@@ -8229,6 +8346,72 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // GET /api/resume — every unfinished (OPEN) turn, for the Chat page's Resume
+  // panel. Same auth/capability as the continuity store: this is local work the
+  // user owns. `?cwd=` scopes it to one project, exactly like `resume list --cwd`.
+  if (pathname === '/api/resume' && req.method === 'GET') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot view unfinished work.` });
+      return;
+    }
+    void (async () => {
+      const { listResumableRuns } = await import('../learning/durable-runs.js');
+      const cwd = url.searchParams.get('cwd') ?? undefined;
+      writeJson(res, 200, { ok: true, runs: listResumableRuns(cwd) });
+    })();
+    return;
+  }
+
+  // POST /api/resume/run — continue one or all unfinished turns in a DETACHED
+  // process. Body: { id?, all?, cwd?, deadlineMinutes? }.
+  //
+  // `id` is the exact snapshot to continue; `all` continues every open turn
+  // (oldest-stored first); neither means the newest open turn in `cwd` — the
+  // same rule as the CLI, never a guess across directories. The response carries
+  // the pid + log path because the work outlives this request.
+  if (pathname === '/api/resume/run' && req.method === 'POST') {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+      return;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot continue work.` });
+      return;
+    }
+    void (async () => {
+      const body = await readJsonBody(req);
+      const id = typeof body?.id === 'string' ? body.id.trim() : '';
+      const all = body?.all === true;
+      const cwd = typeof body?.cwd === 'string' && body.cwd.trim() ? body.cwd.trim() : process.cwd();
+      const requested = Number(body?.deadlineMinutes);
+      const minutes = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 43_200) : 1440;
+      try {
+        const spawner =
+          resumeSpawnForTest ??
+          (await import('../learning/durable-runs.js')).spawnResumeProcess;
+        const started = spawner({
+          ...(id ? { id } : {}),
+          all,
+          cwd,
+          minutes,
+        });
+        writeJson(res, 200, { ok: true, pid: started.pid, log: started.logPath });
+      } catch (err) {
+        writeJson(res, 500, {
+          ok: false,
+          error: `Could not start the continuation: ${err instanceof Error ? err.message : String(err)}`,
+        });
+      }
+    })();
+    return;
+  }
+
   // POST /api/continuity/clear — forget stored continuity data. Body:
   //   { target: 'sessions' | 'recall' }      — clear all of one kind
   //   { target: 'session' | 'recall-entry', id } — clear one entry
@@ -8371,6 +8554,14 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           : newChatSessionId();
       const provider = typeof body?.provider === 'string' ? body.provider : undefined;
       const model = typeof body?.model === 'string' ? body.model : undefined;
+      // Pinned skills — the composer's `/skill <name>`, or an API caller's
+      // `skills: []`. Validated with the same name rules the install path uses
+      // (the names never reach a filesystem path here, but an unbounded or
+      // malformed list should not reach the turn either). Resolution to actual
+      // skills happens inside the engine, through the `skill` tool's own
+      // resolver, so a pin and a load cannot disagree.
+      const { parsePinnedSkillNames } = await import('../learning/skill-pin.js');
+      const pinnedSkills = parsePinnedSkillNames(body?.skills).slice(0, 8);
       // Strict-model pin for THIS turn (the dashboard chat's "pin this model
       // only" switch). Scoped to the turn with AsyncLocalStorage rather than a
       // process env write, because two sessions can run concurrently and a
@@ -8594,6 +8785,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           // dashboard process was started from (see `unscopedWriteRefusal`).
           ...(workspace.unscoped ? { unscopedWorkspace: true } : {}),
           attachments,
+          ...(pinnedSkills.length > 0 ? { skills: pinnedSkills } : {}),
           ...(worktree === undefined ? {} : { worktree }),
           ...(keepWorktree === undefined ? {} : { keepWorktree }),
           ...(resume === undefined ? {} : { resume }),
@@ -8741,6 +8933,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // so the GUI can render the trust verdict instead of inferring it from the
         // transcript. Absent when the turn produced no non-trivial report.
         ...(result.turnReport ? { turnReport: result.turnReport } : {}),
+        // The skills this turn PINNED, echoed so the client can show them on the
+        // turn instead of assuming the request was honoured. Absent = none.
+        ...(pinnedSkills.length > 0 ? { pinnedSkills } : {}),
         // WS5 — whether the turn declined to run, so the client labels the failure
         // as the refusal it is instead of offering a Retry that cannot help.
         refused: result.refused === true,

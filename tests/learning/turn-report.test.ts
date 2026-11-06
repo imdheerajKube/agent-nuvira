@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { buildTurnReport, formatTurnReport } from '../../src/learning/turn-report.js';
+import { buildTurnReport, formatTurnReport, type TurnSpend } from '../../src/learning/turn-report.js';
 import type { Plan } from '../../src/tools/plan-store.js';
 
 function plan(steps: Array<{ id: string; description: string; status: Plan['steps'][number]['status']; note?: string }>): Plan {
@@ -315,8 +315,30 @@ describe('assumptions taken on the user\'s behalf (E1)', () => {
   });
 });
 
-describe('C6 — what the turn COST', () => {
-  const SPEND = { usd: 0.0234, tokens: 1_192_115, calls: 82 };
+describe('C6 — what the turn SPENT', () => {
+  /** A spend object with nothing claimed, so each test states only its own bucket. */
+  const spend = (over: Partial<TurnSpend> = {}): TurnSpend => ({
+    tokens: 12_345,
+    calls: 1,
+    reportedCalls: 0,
+    exactUsd: 0,
+    listedCalls: 0,
+    estimatedUsd: 0,
+    unverifiedCalls: 0,
+    unverifiedUsd: 0,
+    unverifiedProviders: [],
+    freeCalls: 0,
+    freeValueUsd: 0,
+    unpricedCalls: 0,
+    ...over,
+  });
+
+  const SPEND = spend({
+    tokens: 1_192_115,
+    calls: 82,
+    reportedCalls: 82,
+    exactUsd: 0.0234,
+  });
 
   it('states the spend on a turn that did work', () => {
     // The measured run A: 1,192,115 input tokens over 82 steps, reported nowhere.
@@ -329,7 +351,7 @@ describe('C6 — what the turn COST', () => {
       cost: SPEND,
     });
     expect(r.cost).toEqual(SPEND);
-    expect(r.summary).toContain('cost: $0.0234');
+    expect(r.summary).toContain('cost: $0.0234 exact');
     expect(r.summary).toContain('1.19M tok');
     expect(r.summary).toContain('82 calls');
   });
@@ -337,8 +359,9 @@ describe('C6 — what the turn COST', () => {
   it('does NOT shout about a cheap turn that did nothing', () => {
     // A one-line answer on a cheap model costs a fraction of a cent; a cost line
     // on every reply is noise, which is the opposite of making spend visible.
-    const r = buildTurnReport({ goal: 'say hi', cost: { usd: 0.00003, tokens: 420, calls: 1 } });
-    expect(r.cost).toEqual({ usd: 0.00003, tokens: 420, calls: 1 });
+    const cheap = spend({ tokens: 420, reportedCalls: 1, exactUsd: 0.00003 });
+    const r = buildTurnReport({ goal: 'say hi', cost: cheap });
+    expect(r.cost).toEqual(cheap);
     expect(r.summary).toBeNull();
     // …but it is still RENDERED, for a caller that prints the report on its own
     // terms (the dashboard reads `report.cost` rather than the summary).
@@ -346,9 +369,12 @@ describe('C6 — what the turn COST', () => {
   });
 
   it('speaks up when a trivial-looking turn actually cost something', () => {
-    const r = buildTurnReport({ goal: 'say hi', cost: { usd: 0.02, tokens: 90_000, calls: 3 } });
+    const r = buildTurnReport({
+      goal: 'say hi',
+      cost: spend({ tokens: 90_000, calls: 3, reportedCalls: 3, exactUsd: 0.02 }),
+    });
     expect(r.summary).not.toBeNull();
-    expect(r.summary).toContain('cost: $0.0200');
+    expect(r.summary).toContain('cost: $0.0200 exact');
   });
 
   it('says nothing about cost when the ledger recorded no call', () => {
@@ -366,10 +392,74 @@ describe('C6 — what the turn COST', () => {
       toolCalls: ['edit_file'],
       successfulToolCalls: ['edit_file'],
       mutations: 1,
-      cost: { usd: 0.0004, tokens: 12_345, calls: 2 },
+      cost: spend({ tokens: 12_345, calls: 2, reportedCalls: 2, exactUsd: 0.0004 }),
     });
     const text = formatTurnReport(r);
-    expect(text).toContain('💰 cost: $0.000400 / 12.3K tok (2 calls)');
+    expect(text).toContain('💰 cost: $0.000400 exact · 12.3K tok · 2 calls');
+  });
+
+  // ── The three-way split: the same tokens, three different truths ──────────
+  // The defect this replaces: one `usd` field, which is 0 whenever the account's
+  // billing tier is undeclared — so an un-priced turn printed `$0.000000`, a free
+  // turn printed `$0.000000`, and a provider that stated $0 also printed
+  // `$0.000000`. Three different claims, one string.
+
+  it('never prints $0 for an un-priced turn: it names the undeclared tier', () => {
+    // THE DEFAULT INSTALL. Nothing declares `billingTier`, so the evidence-backed
+    // bill is 0 — and the old single-`usd` line printed `cost: $0.000000` for it.
+    const r = buildTurnReport({
+      goal: 'say hi',
+      cost: spend({
+        tokens: 12_345,
+        unverifiedCalls: 1,
+        unverifiedUsd: 0.0044,
+        unverifiedProviders: ['deepseek'],
+      }),
+    });
+    const text = formatTurnReport(r);
+    expect(text).toContain('~$0.004400 unverified');
+    expect(text).toContain('declare providers.deepseek.billingTier');
+    expect(text).not.toContain('$0.000000');
+    // A fraction of a cent stays out of the one-line summary — that is the noise
+    // rule, and it must not be confused with the free claim it used to make.
+    expect(r.summary).toBeNull();
+  });
+
+  it('states a list price as an estimate once the account is declared paid', () => {
+    const r = buildTurnReport({
+      goal: 'say hi',
+      cost: spend({ listedCalls: 1, estimatedUsd: 0.0044 }),
+    });
+    const text = formatTurnReport(r);
+    expect(text).toContain('~$0.004400 est.');
+    expect(text).not.toContain('unverified');
+    expect(text).toContain('12.3K tok');
+  });
+
+  it('says a local/free turn was free — a true $0, not an unknown', () => {
+    const r = buildTurnReport({ goal: 'say hi', cost: spend({ freeCalls: 1 }) });
+    const text = formatTurnReport(r);
+    expect(text).toContain('$0 free');
+    expect(text).not.toContain('price unknown');
+  });
+
+  it('prints tokens and no dollar at all when nothing is priced', () => {
+    const r = buildTurnReport({ goal: 'say hi', cost: spend({ unpricedCalls: 1 }) });
+    const text = formatTurnReport(r);
+    expect(text).toContain('price unknown');
+    expect(text).toContain('12.3K tok');
+    expect(text).not.toContain('$');
+  });
+
+  it('treats an un-priced cent as worth saying, not as zero', () => {
+    // The threshold reads the spend CEILING: an unverified charge might be real
+    // money, so it must not silence the line the way a billed-only figure would.
+    const r = buildTurnReport({
+      goal: 'say hi',
+      cost: spend({ unverifiedCalls: 3, unverifiedUsd: 0.02, unverifiedProviders: ['groq'] }),
+    });
+    expect(r.summary).not.toBeNull();
+    expect(r.summary).toContain('~$0.0200 unverified');
   });
 });
 

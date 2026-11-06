@@ -15,6 +15,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import Layout from './Layout';
+import { __resetChatFocusForTests, setChatFocus } from '../chat-focus';
 
 /** Where the router currently is — asserted for the `g` chords. */
 function LocationProbe() {
@@ -22,7 +23,10 @@ function LocationProbe() {
   return <span data-testid="path">{location.pathname}</span>;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  __resetChatFocusForTests();
+});
 
 function renderShell(props: Partial<Parameters<typeof Layout>[0]> = {}) {
   return render(
@@ -41,6 +45,9 @@ function renderShell(props: Partial<Parameters<typeof Layout>[0]> = {}) {
 
 const toggle = () => screen.getByRole('button', { name: /toggle navigation/i });
 const rail = () => document.getElementById('app-nav') as HTMLElement;
+
+/** The chat-focus attribute the shell's CSS hangs off. */
+const focusAttr = () => document.documentElement.getAttribute('data-chat-focus');
 
 describe('shell navigation', () => {
   it('links to every route App declares', () => {
@@ -285,5 +292,31 @@ describe('shell status and actions', () => {
     const button = screen.getByRole('button', { name: /refreshing/i });
     expect((button as HTMLButtonElement).disabled).toBe(true);
     expect(button.getAttribute('aria-busy')).toBe('true');
+  });
+});
+
+describe('shell — command palette and chat focus', () => {
+  it('opens the palette with the modifier chord and closes it with Escape', () => {
+    renderShell();
+    expect(screen.queryByRole('dialog')).toBeNull();
+
+    fireEvent.keyDown(document, { key: 'k', ctrlKey: true });
+    expect(screen.getByRole('dialog', { name: /search and jump/i })).toBeDefined();
+
+    fireEvent.keyDown(screen.getByRole('combobox', { name: /search pages and actions/i }), {
+      key: 'Escape',
+    });
+    expect(screen.queryByRole('dialog')).toBeNull();
+  });
+
+  it('leaves chat focus mode when the user navigates somewhere else', () => {
+    renderShell();
+    act(() => setChatFocus(true));
+    expect(focusAttr()).toBe('on');
+
+    fireEvent.click(screen.getByRole('link', { name: /Costs/ }));
+    // The chat page is gone but its mode would have hidden the navigation the
+    // user just used — the mode ends with the navigation that ended it.
+    expect(focusAttr()).toBe('off');
   });
 });

@@ -294,4 +294,26 @@ describe('install from a local-dir source', () => {
     expect(result.version).toBe('0.9.0');
     expect(existsSync(join(projectDir, '.agents', 'skills', 'security-audit', 'SKILL.md'))).toBe(true);
   });
+
+  it('P1 — a directory-backed source installs the whole PACKAGE, not just SKILL.md', async () => {
+    // Give the source skill real siblings — the shape ui-ux-pro-max ships.
+    const sourceDir = join(registryDir, 'security-audit');
+    mkdirSync(join(sourceDir, 'references'), { recursive: true });
+    writeFileSync(join(sourceDir, 'references', 'audit.md'), '# Audit guide\ncheck lockfiles\n', 'utf-8');
+
+    const found = await findEntryAcrossRegistries('security-audit');
+    const result = await installFromSource(found!.value, found!.source, projectDir);
+    expect(result.ok).toBe(true);
+
+    const installed = join(projectDir, '.agents', 'skills', 'security-audit');
+    expect(existsSync(join(installed, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installed, 'references', 'audit.md'))).toBe(true);
+
+    // Provenance now describes the package — a tree hash covers the script too.
+    const { listHubSkills } = await import('../../src/learning/skills-hub.js');
+    const record = listHubSkills(undefined, projectDir)[0];
+    expect(record.installKind).toBe('package');
+    expect(record.fileCount).toBe(2);
+    expect(record.treeHash).toMatch(/^[0-9a-f]{64}$/);
+  });
 });

@@ -337,7 +337,7 @@ export class ConfigCommand extends BaseCommand {
       if (key === 'defaultProvider') {
         this.configManager.save({ defaultProvider: value as ProviderType });
       } else {
-        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  providers.<name>.billingTier paid|free|subscription|unknown  (what this account is billed)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
+        logger.error(`Unknown config key: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"  (M2.3 multi-account rotation)\n  providers.<name>.billingTier paid|free|subscription|unknown  (what this account is billed)\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  turn.maxSteps 32  (first step slice; the ask earns more while work remains)\n  turn.maxTotalSteps 500  (absolute step guard, never the budget)\n  fallback.enabled\n  fallback.providers\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"  (M2.4 admin policy)\n  routing.contextWindows.<model> 16384  (M2.5 context preflight)\n  routing.nuviraSidecar.enabled  (P5 sidecar flag, default false)\n  routing.compression.enabled  (M4.4 conservative compression, default false)`);
         return;
       }
     } else if (parts.length === 2 && parts[0] === 'history') {
@@ -762,6 +762,27 @@ export class ConfigCommand extends BaseCommand {
           ? '  The turn wall clock is OFF — step budgets only, as before.'
           : `  Each turn may run ${minutes} minute(s); the last ~20% is reserved for closing the deliverable.`,
       );
+    } else if (key === 'turn.maxSteps' || key === 'turn.maxTotalSteps') {
+      // STEP BUDGET — the first slice and the absolute guard. Both are settings
+      // because a literal 16 in `chat.ts` was a ceiling no caller could raise
+      // (measured 2026-11-06: a build stopped at 50 steps with named work open).
+      const steps = Number(value.trim());
+      const guard = key === 'turn.maxTotalSteps';
+      const ceiling = guard ? 1_000_000 : 10_000;
+      if (!Number.isInteger(steps) || steps < 1 || steps > ceiling) {
+        logger.error(
+          `Invalid ${key}: "${value}". Use a whole number of steps (1–${ceiling.toLocaleString('en-US')}).`,
+        );
+        return;
+      }
+      this.configManager.save({
+        turn: guard ? { maxTotalSteps: steps } : { maxSteps: steps },
+      } as Partial<BuffConfig>);
+      logger.info(
+        guard
+          ? `  One turn may never exceed ${steps} steps — the absolute guard, not the budget. The ask decides when a turn is done.`
+          : `  Each turn starts with ${steps} step(s) and earns more while requirements, plan steps or named artifacts are still open.`,
+      );
     } else if (parts[0] === 'mcp') {
       // MCP configuration surface (`src/mcp/settings.ts` owns defaults + bounds).
       // This is the "nothing requires code" rule made literal: caps, auto-connect,
@@ -798,7 +819,7 @@ export class ConfigCommand extends BaseCommand {
     } else if (key === 'dashboard.cwd.clear') {
       this.configManager.save({ dashboard: { cwd: undefined } } as Partial<BuffConfig>);
     } else {
-      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  providers.<name>.billingTier paid|free|subscription|unknown\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
+      logger.error(`Invalid config key format: ${key}. Expected formats:\n  defaultProvider\n  providers.<name>.<field>\n  providers.<name>.apiKeys "k1,k2"\n  providers.<name>.billingTier paid|free|subscription|unknown\n  pricing.<provider>.inputPer1K\n  pricing.<provider>.outputPer1K\n  history.retentionDays\n  history.semanticSearch\n  turn.maxMinutes 30  (how long ONE turn may run; 0 = no wall clock)\n  turn.maxSteps 32  (first step slice; the ask earns more while work remains)\n  turn.maxTotalSteps 500  (absolute step guard, never the budget)\n  fallback.enabled\n  fallback.providers\n  modality.image.provider\n  modality.image.model\n  dashboard.cwd "<dir>"  (working dir for unattached dashboard chat turns)\n  routing.bandit\n  routing.allowPaid\n  routing.quota.<provider>.requestsPerWindow\n  routing.governance.allowProviders "groq,local"\n  routing.nuviraSidecar.enabled\n  routing.compression.enabled  (M4.4, DEFAULT FALSE)\n  routing.gatewayTelemetry.enabled  (M7.4, DEFAULT FALSE)`);
       return;
     }
 

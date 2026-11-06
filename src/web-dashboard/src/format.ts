@@ -13,6 +13,22 @@ export { formatCount } from '../../utils/format.js';
 import { formatCount } from '../../utils/format.js';
 
 /**
+ * Spend formatting, from the SAME module the CLI prints with (`utils/spend.ts`).
+ *
+ * Re-exported rather than re-implemented because the labels ARE the claim: `~` says
+ * "list price, an estimate", `?` says "some calls could not be priced", `free` says
+ * "provably no per-call charge". A dashboard copy would drift and start calling an
+ * unknown a zero — which is the exact bug this module exists to end.
+ */
+export {
+  formatSpendCell,
+  formatSpendFull,
+  formatTokenCount,
+  spendCeilingUsd,
+  SPEND_MARKS_LEGEND,
+} from '../../utils/spend.js';
+
+/**
  * Money, at the precision the amount actually has.
  *
  * Sub-cent spend is normal here (a single small call can cost $0.00004), so a

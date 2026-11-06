@@ -57,7 +57,10 @@ export function setTheme(patch: Partial<ThemeState>): void {
     next.palette === current.palette &&
     next.mode === current.mode &&
     next.a11y === current.a11y &&
-    next.fontScale === current.fontScale;
+    next.fontScale === current.fontScale &&
+    next.glass === current.glass &&
+    next.compact === current.compact &&
+    next.motion === current.motion;
   if (unchanged) return;
 
   current = next;
@@ -73,6 +76,36 @@ export function resetTheme(): void {
   saveTheme(current);
   emit();
 }
+
+/**
+ * Follow the OS while `mode` is `system`.
+ *
+ * The resolution itself is synchronous and lives in `theme.ts`; what this adds is
+ * the REACTION. Without it, `system` would behave exactly like a frozen snapshot
+ * of the OS at load time: a machine that switches to dark at sunset would keep a
+ * light dashboard until the next reload, which is the bug a `system` option is
+ * supposed to fix. `applyTheme` re-resolves `data-mode` from `matchMedia`, so
+ * there is no second copy of the rule here.
+ *
+ * Sits at module scope because there is exactly one document; a component effect
+ * would register and drop a listener every time the switcher mounted.
+ */
+function watchSystemMode(): void {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return;
+  const query = window.matchMedia('(prefers-color-scheme: dark)');
+  const onChange = () => {
+    if (current.mode !== 'system') return;
+    applyTheme(current);
+    // The switcher's announcement says which mode is in force, so it has to be
+    // told that the RESOLUTION changed even though the choice did not.
+    emit();
+  };
+  if (typeof query.addEventListener === 'function') query.addEventListener('change', onChange);
+  // Older Safari only has the deprecated form, and it is still the only one there.
+  else query.addListener?.(onChange);
+}
+
+watchSystemMode();
 
 /** The theme, re-rendering the caller whenever it changes. */
 export function useTheme(): ThemeState {

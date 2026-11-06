@@ -222,4 +222,3 @@ print(f'Number of trees: {model.n_estimators}')
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('ml-model', 'references/model-training.md')`.

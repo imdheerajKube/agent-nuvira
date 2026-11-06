@@ -130,12 +130,14 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
     // — spying on the statically imported one would capture nothing.
     const { logger: loopLogger } = await import('../../src/utils/logger.js');
     const warnSpy = vi.spyOn(loopLogger, 'warn').mockImplementation(() => {});
-    // The failover walk reports on the DEBUG channel: a candidate the walk
-    // rejected is diagnosis, and a normal run must show only the answer (see
-    // `loop-executor` — `logger.debug` for the per-candidate lines). Spied
-    // separately so a case can assert BOTH where the line went and that it did
-    // not reach the default console.
+    // The failover walk reports its per-candidate lines on the INFO channel at
+    // normal verbosity — a walk that spends minutes on dead candidates looked
+    // exactly like a hang (measured 2026-11-04, see docs/wait-progress), so the
+    // "rejected → next candidate" line is progress the user watches, not debug
+    // noise. It is still NOT a warning or an error: a walk in progress is not a
+    // fault report. Spied separately so a case can assert both.
     const debugSpy = vi.spyOn(loopLogger, 'debug').mockImplementation(() => {});
+    const infoSpy = vi.spyOn(loopLogger, 'info').mockImplementation(() => {});
     const result = await runLoopExecutor(goal, new ConfigManager(), {
       provider: 'scripted',
       skipProjectContext: true,
@@ -145,6 +147,7 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
       result,
       warned: warnSpy.mock.calls.map((c) => String(c[0])).join('\n'),
       debugged: debugSpy.mock.calls.map((c) => String(c[0])).join('\n'),
+      informed: infoSpy.mock.calls.map((c) => String(c[0])).join('\n'),
     };
   }
 
@@ -173,17 +176,21 @@ describe('loop engine — a DEV ask is never answered with the model\'s thinking
       native: true,
       responses: [{ content: REASONING_REPLY, toolCalls: [] }],
     });
-    const { warned, debugged } = await run(
+    const { warned, informed } = await run(
       'Develop the calculator as per the plan created by agent-nuvira',
       provider,
       false,
     );
 
-    expect(debugged).toMatch(/its own reasoning instead of the task/);
-    expect(debugged).toMatch(/trying the next loop candidate/);
-    // …and it is NOT on the default console: a walk the user does not have to
-    // act on is diagnosis, so a plain run prints the answer and nothing else.
-    expect(warned).not.toMatch(/trying the next loop candidate/);
+    // The rejection is NAMED with its kind — the reader can tell a quality
+    // rejection from a quota error without turning on --debug.
+    expect(informed).toMatch(/failed \(quality-rejected\)/);
+    // …and the walk says what happens next, which is what makes it a walk
+    // rather than a dead end.
+    expect(informed).toMatch(/trying .+ \(\d+ of \d+\)|no candidate left/);
+    // Progress, never a fault: the same line on `warn` would read as an error
+    // report for a turn that is still working.
+    expect(warned).not.toMatch(/quality-rejected/);
   });
 
   it('rejects contract meta-talk on this surface too', async () => {

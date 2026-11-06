@@ -762,6 +762,15 @@ describe('Dashboard Server', () => {
         // The recent rows carry the per-call reported flag.
         expect(body.recent[0].reported).toBe(false); // anthropic, newest
         expect(body.recent[1].reported).toBe(true); // openrouter
+
+        // …and each row's own ONE-CALL spend, so the list can say whether that
+        // dollar was provider-stated, list-priced, free or unpriced. `costUsd`
+        // alone could not: it is 0 for every one of those but the first.
+        expect(body.recent[1].spend.calls).toBe(1);
+        expect(body.recent[1].spend.reportedCalls).toBe(1);
+        expect(body.recent[1].spend.exactUsd).toBe(0);
+        expect(body.recent[0].spend.calls).toBe(1);
+        expect(body.recent[0].spend.reportedCalls).toBe(0);
       } finally {
         // Restore the shared default fixtures for the remaining tests.
         writeDefaultFixtures();

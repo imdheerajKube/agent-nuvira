@@ -139,7 +139,14 @@ const TEST_CLASSES: Array<{
   {
     id: 'e2e-tests',
     kind: 'e2e-tests',
-    pattern: /\be2e\b|\bend[- ]to[- ]end\b|\bplaywright\b|\bcypress\b/i,
+    // "end to end" describes a FLOW as often as it names a test suite. The
+    // 2026-11-05 audit ask said "How the app works end to end: entry point to
+    // synthesis" in its architecture section, and this pattern turned that into a
+    // requirement for e2e tests the ask never made — the turn then built a 292-line
+    // suite instead of the three report sections it was missing. Bare "end to end"
+    // is prose; only an explicitly test-shaped phrase is a job.
+    pattern:
+      /\b(?:e2e|playwright|cypress)\b|\bend[- ]to[- ]end\s+(?:tests?|testing|suite|coverage|specs?)\b|\b(?:tests?|testing|suite|coverage)\b[^.\n]{0,16}\bend[- ]to[- ]end\b/i,
     match: /e2e|end-to-end|playwright|cypress/i,
     describe: 'end-to-end tests (no e2e spec or runner config exists)',
   },

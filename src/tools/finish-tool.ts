@@ -25,6 +25,8 @@ import {
   judgeCompletion,
   type CompletionClaim,
 } from '../learning/completion-contract.js';
+import { evaluateObligations, obligationsEnforced } from '../learning/skill-obligations.js';
+import { recordSkillSession } from '../learning/skill-outcomes.js';
 
 /** The proof, as the model states it; the loop checks it against its own record. */
 export interface FinishArgs extends CompletionClaim {}
@@ -69,19 +71,61 @@ function accountLine(snapshot: { satisfied: number; total: number; unknown: numb
 /** Run the completion claim. Returns the text the model reads next. */
 export async function runFinish(args: unknown, ctx: ToolContext): Promise<string> {
   const claim = normalizeClaim(args);
+
+  // ── P6 — skill obligations ──────────────────────────────────────────────
+  // A skill loaded this session may declare what "used" MEANS (read the
+  // checklist, run the validator, produce the plan, verify with tests).
+  //
+  // HELD OFF BY DEFAULT. The refusal below is the only mid-turn behaviour this
+  // work adds, and it was never measured in a bench where a skill actually loads
+  // (see `obligationsEnforced`). Until it has been, an unmet obligation is
+  // ADVISORY: it is shown to the model here and carried into the answer, but it
+  // cannot refuse an ending. `NUVIRA_ENFORCE_SKILL_OBLIGATIONS=1` turns the gate
+  // on for a measured A/B.
+  //
+  // Even when enabled, `verified:false` is NEVER blocked: an honest "I could not
+  // do it" ending is accepted and carries the gaps to the user, so a turn cannot
+  // be trapped by an obligation it genuinely could not satisfy.
+  const obligations = evaluateObligations({ cwd: ctx.cwd });
+  const obligationAdvisory =
+    !obligationsEnforced() && obligations.unmet.length > 0
+      ? [
+          '',
+          `Skill obligations not met (${obligations.satisfied}/${obligations.total}) — advisory only, enforcement is off. State these gaps in your answer rather than presenting the work as complete:`,
+          ...obligations.unmet.map((u) => `  - ${u}`),
+        ]
+      : [];
+  if (obligationsEnforced() && obligations.unmet.length > 0 && claim.verified !== false) {
+    return [
+      `${FINISH_REFUSED_MARKER} — a skill you loaded requires work that is not done yet ` +
+        `(${obligations.satisfied}/${obligations.total} obligation(s) met):`,
+      ...obligations.unmet.map((u) => `  - ${u}`),
+      '',
+      'Do the items above, then call finish again.',
+      'If they genuinely cannot be done in this turn, call finish with `verified:false` and list them under `unmet` — that ending is accepted, and the user is told what is missing.',
+    ].join('\n');
+  }
+
   const snapshot = ctx.turnLedger?.() ?? null;
 
   // No ledger attached (a direct call, a surface that does not publish one): the
   // claim is still normalized and echoed, but nothing can be checked against it and
   // the result says so instead of implying it was verified.
   if (!snapshot) {
+    const obligationNote =
+      obligations.unmet.length > 0
+        ? [`\n\n${obligations.unmet.length} skill obligation(s) from ${obligations.skills.join(', ')} are unmet and are reported to the user:`].concat(
+            obligations.unmet.map((u) => `  - ${u}`),
+          ).join('\n')
+        : '';
     const note = claim.verified === false
-      ? `${FINISH_ACCEPTED_MARKER} with ${claim.unmet?.length ?? 0} stated gap(s).`
-      : `${FINISH_ACCEPTED_MARKER} — no turn ledger is attached, so the claim was not checked against the turn's evidence.`;
+      ? `${FINISH_ACCEPTED_MARKER} with ${claim.unmet?.length ?? 0} stated gap(s).${obligationNote}`
+      : `${FINISH_ACCEPTED_MARKER} — no turn ledger is attached, so the claim was not checked against the turn's evidence.${obligationNote}`;
+    const noteWithObligations = note + obligationAdvisory.join('\n');
     if (!String(claim.summary ?? '').trim()) {
       return `${FINISH_REFUSED_MARKER} — say in one line what you delivered (\`summary\`), then call finish again.`;
     }
-    return note;
+    return noteWithObligations;
   }
 
   const verdict = judgeCompletion(claim, {
@@ -89,6 +133,7 @@ export async function runFinish(args: unknown, ctx: ToolContext): Promise<string
     redChecks: snapshot.redChecks,
     unboundModules: snapshot.unboundModules,
     ...(snapshot.namedDeliverables ? { namedDeliverables: snapshot.namedDeliverables } : {}),
+    ...(snapshot.deliverableShape ? { deliverableShape: snapshot.deliverableShape } : {}),
     ...(snapshot.quickstart ? { quickstart: snapshot.quickstart } : {}),
     ...(snapshot.production ? { production: snapshot.production } : {}),
     wroteFiles: snapshot.wroteFiles,
@@ -96,6 +141,11 @@ export async function runFinish(args: unknown, ctx: ToolContext): Promise<string
   });
 
   if (verdict.accepted) {
+    // Outcome ledger: the turn has ENDED, and its own claim is the only honest
+    // verdict on whether the skills it loaded helped. `verified:false` counts as
+    // a miss — that ending is explicitly "this did not land". A refusal never
+    // reaches here, so work-in-progress is never recorded against a skill.
+    recordSkillSession(obligations.skills, claim.verified !== false);
     // The advisory notes are TRUE statements about the tree that the loop had OPINIONS
     // about (a README it expected, a module no static import reaches). They are shown
     // here — the model may still act on them — and they can never refuse the ending.
@@ -106,6 +156,7 @@ export async function runFinish(args: unknown, ctx: ToolContext): Promise<string
       claim.verified === false
         ? `Your ${claim.unmet?.length ?? 0} stated gap(s) will be given to the user verbatim; do not describe the work as complete.`
         : 'The claim matches the turn\'s evidence. Write the answer for the user now, then suggest_followups.',
+      ...obligationAdvisory,
       ...(advisories.length > 0          ? [
             '',
             'Advisory notes (never reasons to refuse an ending — any statement by a command outranks them). If one does not apply to this task, say why; if it does, close it now or in the answer:',

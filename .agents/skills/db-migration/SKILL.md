@@ -2,6 +2,12 @@
 name: db-migration
 description: Design and implement a database migration: analyze the current schema, design the migration (what changes, in what order), write the migration SQL/scripts, test backward compatibility, and document the change. Use when the goal asks to migrate a database, add/modify columns, change schema, or restructure tables.
 version: 1.0.0
+# P6 — binding: the finish gate refuses a "done" claim until these are met.
+obligations:
+  must_run:
+    - scripts/validate_migration.py
+  must_verify:
+    - test
 ---
 
 # db-migration

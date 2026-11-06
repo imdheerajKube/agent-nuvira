@@ -171,4 +171,3 @@ ab -n 100 -c 10 http://example.com/
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('load-balancer', 'references/guide.md')`.

@@ -41,6 +41,7 @@ import {
   fetchHubIndex,
   searchHubSkills,
   installHubSkill,
+  installSkillPackage,
   updateHubSkills,
   listHubSkills,
   getHubSkillEntry,
@@ -293,5 +294,91 @@ describe('skills-hub — list + helpers', () => {
     clearSkillsIndexCache();
     const skills = await fetchHubIndex();
     expect(skills).toHaveLength(2);
+  });
+});
+
+// ─── P1 — package install (multi-file skills) ───────────────────────────────
+
+/** A registry skill DIRECTORY with the files a real skill needs. */
+function makeSourcePackage(name: string, extra = 'first'): string {
+  const dir = join(registryDir, name);
+  mkdirSync(join(dir, 'references'), { recursive: true });
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'SKILL.md'), skillMarkdown(name), 'utf-8');
+  writeFileSync(join(dir, 'references', 'guide.md'), `# Guide\n${extra}\n`, 'utf-8');
+  writeFileSync(join(dir, 'scripts', 'run.py'), 'print("ok")\n', 'utf-8');
+  return dir;
+}
+
+describe('skills-hub — package install (P1: the whole skill, not one file)', () => {
+  it('copies every file and records a tree fingerprint', async () => {
+    const src = makeSourcePackage('release-bumper');
+    const result = installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    expect(result.ok).toBe(true);
+
+    const installed = join(projectDir, '.agents', 'skills', 'release-bumper');
+    expect(existsSync(join(installed, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(installed, 'references', 'guide.md'))).toBe(true);
+    expect(existsSync(join(installed, 'scripts', 'run.py'))).toBe(true);
+
+    const record = listHubSkills(undefined, projectDir)[0];
+    expect(record.installKind).toBe('package');
+    expect(record.fileCount).toBe(3);
+    expect(record.bytes).toBeGreaterThan(0);
+    expect(record.treeHash).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('is a no-op when the tree is identical', () => {
+    const src = makeSourcePackage('release-bumper');
+    installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    const again = installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    expect(again.ok).toBe(true);
+    expect(again.reason).toBe('already up to date');
+  });
+
+  it('quarantines a CHANGED SIBLING and leaves the install untouched', () => {
+    const src = makeSourcePackage('release-bumper');
+    installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    const installedGuide = join(projectDir, '.agents', 'skills', 'release-bumper', 'references', 'guide.md');
+    const before = readFileSync(installedGuide, 'utf-8');
+
+    // A script/reference changed while SKILL.md stayed byte-identical — the case
+    // a SKILL.md-only checksum could not see.
+    writeFileSync(join(src, 'references', 'guide.md'), '# Guide\nsecond\n', 'utf-8');
+    const result = installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    expect(result.ok).toBe(false);
+    expect(result.quarantined).toBe(true);
+    expect(readFileSync(installedGuide, 'utf-8')).toBe(before);
+  });
+
+  it('force (the explicit update path) replaces the package', () => {
+    const src = makeSourcePackage('release-bumper');
+    installSkillPackage(makeEntry('release-bumper'), src, projectDir);
+    writeFileSync(join(src, 'references', 'guide.md'), '# Guide\nsecond\n', 'utf-8');
+
+    const result = installSkillPackage(makeEntry('release-bumper'), src, projectDir, true);
+    expect(result.ok).toBe(true);
+    expect(result.reason).toBe('updated');
+    const installedGuide = join(projectDir, '.agents', 'skills', 'release-bumper', 'references', 'guide.md');
+    expect(readFileSync(installedGuide, 'utf-8')).toContain('second');
+  });
+
+  it('refuses a traversal name and a frontmatter mismatch', () => {
+    const src = makeSourcePackage('release-bumper');
+    const traversal = installSkillPackage(
+      { ...makeEntry('release-bumper'), name: '../evil' },
+      src,
+      projectDir,
+    );
+    expect(traversal.ok).toBe(false);
+    expect(existsSync(join(projectDir, '.agents', 'skills', '..', 'evil'))).toBe(false);
+
+    const mismatch = installSkillPackage(
+      { ...makeEntry('release-bumper'), name: 'security-audit' },
+      src,
+      projectDir,
+    );
+    expect(mismatch.ok).toBe(false);
+    expect(mismatch.reason).toContain('frontmatter declares name');
   });
 });

@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import type { UnattendedJobView } from '../types';
+import { formatSpendCell, SPEND_MARKS_LEGEND } from '../format';
+import type { SpendBreakdown, UnattendedJobView } from '../types';
 
 /**
  * Per-batch cost & latency for unattended runs (G27), on the dashboard.
@@ -18,9 +19,22 @@ import type { UnattendedJobView } from '../types';
  * accounting gap that makes a long run's bill a surprise.
  */
 
-/** USD to micro-cent precision — matches the cost ledger's rounding. */
-function formatCost(value: number | undefined): string {
-  return value === undefined ? '—' : `$${value.toFixed(5)}`;
+/**
+ * One cost cell, from the batch's OWN spend breakdown.
+ *
+ * A batch is not free just because nothing was billed: a list-priced call on a
+ * provider whose tier was never declared has a price and no proof it was charged.
+ * `formatSpendCell` (shared with the CLI table, via `utils/spend.ts`) says which of
+ * those it is; this function only decides where the number comes from.
+ *
+ * LEGACY rows — persisted before `spend` existed — carry a bare `costUsd` with no
+ * provenance, so they keep their figure and take the `?` mark: the money was
+ * computed, the evidence behind it was not recorded.
+ */
+function spendCell(spend: SpendBreakdown | undefined, legacyCostUsd: number | undefined) {
+  if (spend) return formatSpendCell(spend);
+  if (legacyCostUsd === undefined) return { text: '—', marks: [] as string[] };
+  return { text: `$${legacyCostUsd.toFixed(5)}?`, marks: ['?'] };
 }
 
 /** Compact human duration (`850ms`, `12.4s`, `3m 07s`, `1h 12m`). */
@@ -57,11 +71,18 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
   const totalMs = timed.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
   const averageMs = timed.length > 0 ? totalMs / timed.length : undefined;
 
+  const cells = stats.map((s) => spendCell(s.spend, s.costUsd));
+  const totalCell = spendCell(selected.spend, selected.costUsd);
+  const totalTokens = selected.spend?.tokens ?? selected.tokens;
+  // The legend prints only when a mark was actually used, so a table of plain
+  // dollars does not carry an asterisk pointing at nothing.
+  const marks = new Set<string>([...cells.flatMap((c) => c.marks), ...totalCell.marks]);
+
   return (
     <div className="dag-timeline-section" data-testid="batch-economy">
       <h2 className="section-subtitle">
         📊 Per-batch cost &amp; latency{' '}
-        <span className="timeline-subtitle">— measured, not estimated</span>
+        <span className="timeline-subtitle">— every figure labelled with its evidence</span>
       </h2>
 
       {runs.length > 1 && (
@@ -93,7 +114,7 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
           {selected.batches} batch{selected.batches === 1 ? '' : 'es'}
         </span>
         <span className="dag-loop-turn-chip dag-loop-turn-chip-dim">
-          {formatTokens(selected.tokens)} tokens · {formatCost(selected.costUsd)}
+          {formatTokens(totalTokens)} tokens · {totalCell.text}
         </span>
         {selected.stopReason && (
           <span className="dag-loop-turn-chip dag-loop-turn-chip-dim">
@@ -114,12 +135,12 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
             </tr>
           </thead>
           <tbody>
-            {stats.map((s) => (
+            {stats.map((s, i) => (
               <tr key={s.index}>
                 <td>{s.index}</td>
                 <td>{`${Math.round(s.progress)}%`}</td>
-                <td>{formatTokens(s.tokens)}</td>
-                <td>{formatCost(s.costUsd)}</td>
+                <td>{formatTokens(s.spend?.tokens ?? s.tokens)}</td>
+                <td>{cells[i]!.text}</td>
                 <td>{formatMs(s.durationMs)}</td>
               </tr>
             ))}
@@ -142,10 +163,10 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
                 <strong>{`${selected.progress}%`}</strong>
               </td>
               <td>
-                <strong>{formatTokens(selected.tokens)}</strong>
+                <strong>{formatTokens(totalTokens)}</strong>
               </td>
               <td>
-                <strong>{formatCost(selected.costUsd)}</strong>
+                <strong>{totalCell.text}</strong>
               </td>
               <td>
                 <strong>{averageMs === undefined ? '—' : `~${formatMs(averageMs)} avg`}</strong>
@@ -154,6 +175,11 @@ export default function BatchEconomy({ jobs }: BatchEconomyProps) {
           </tbody>
         </table>
       </div>
+      {marks.size > 0 && (
+        <p className="timeline-subtitle" data-testid="batch-economy-spend-legend">
+          {SPEND_MARKS_LEGEND}
+        </p>
+      )}
     </div>
   );
 }

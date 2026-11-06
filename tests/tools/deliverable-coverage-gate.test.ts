@@ -131,6 +131,28 @@ const WRITE_WEB = {
 };
 const ANSWER = { content: 'The platform is complete and production ready.' };
 
+describe('missingSurfaceGaps — a negated mention is a constraint, not a demand', () => {
+  it('does not demand a database the ask explicitly forbade', () => {
+    const ask =
+      'Build a local RAG app. No external vector database service — use a local index. Write a README.';
+    const gaps = missingSurfaceGaps({ ask, cwd: root });
+    expect(gaps.map((g) => g.id)).not.toContain('database');
+  });
+
+  it('still demands a database the ask requires', () => {
+    const ask = 'Build a notes app with PostgreSQL storage and a README.';
+    const gaps = missingSurfaceGaps({ ask, cwd: root });
+    expect(gaps.map((g) => g.id)).toContain('database');
+  });
+
+  it('does not let a negation in one clause silence a demand in another', () => {
+    const ask =
+      'Build the API without a database for now, but ship a PostgreSQL schema and a README.';
+    const gaps = missingSurfaceGaps({ ask, cwd: root });
+    expect(gaps.map((g) => g.id)).toContain('database');
+  });
+});
+
 describe('missingSurfaceGaps — the ask names it, the tree lacks it', () => {
   it('reports a frontend when only an API exists', () => {
     put('apps/api/src/server.ts', 'export const app = 1;');
@@ -185,6 +207,33 @@ describe('missingSurfaceGaps — the ask names it, the tree lacks it', () => {
     const gaps = missingSurfaceGaps({ ask: 'Build a REST API with a postgres database.', cwd: root });
     expect(gaps.map((g) => g.id)).toContain('backend');
     expect(gaps.map((g) => g.id)).toContain('database');
+  });
+
+  it('demands no surface at all from an audit ask that merely describes the app', () => {
+    // The 2026-11-05 ask says "the app works end to end", "test assessment" and
+    // "documentation drift" while asking for a REPORT. None of those is a request
+    // to build a frontend, a backend, a database or a test suite.
+    const audit = [
+      'Assess this repository and write docs/ASSESSMENT_anuj.md.',
+      'It must cover:',
+      '1. **Architecture.** How the app works end to end: entry point to synthesis.',
+      '2. **Documentation drift.** Where the docs contradict the code.',
+      '3. **Defects.** Real defects you can defend.',
+      '4. **Test assessment.** What the suite covers well and what it does not.',
+      '5. **Evidence.** Every claim carries `path:line`.',
+    ].join('\n');
+    expect(missingSurfaceGaps({ ask: audit, cwd: root })).toHaveLength(0);
+  });
+
+  it('does not read a flow description as a demand for an e2e suite', () => {
+    // The 2026-11-05 audit ask said "How the app works end to end" while asking for
+    // an architecture section, not for playwright specs.
+    const assess = 'Assess the app end to end and write a report.';
+    expect(missingSurfaceGaps({ ask: assess, cwd: root }).map((g) => g.id)).not.toContain('e2e');
+    // "end-to-end tests" is still a demand.
+    expect(
+      missingSurfaceGaps({ ask: 'Build the app and add end-to-end tests.', cwd: root }).map((g) => g.id),
+    ).toContain('e2e');
   });
 
   it('never fires on a question or a narrow change request', () => {

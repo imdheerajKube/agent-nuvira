@@ -2,6 +2,10 @@
 name: docker-management
 description: Manage Docker containers, images, volumes, networks, and Compose stacks. Use when the goal is to run, stop, restart, inspect, or debug Docker containers; build, pull, push, or clean up images; manage Docker Compose services; work with volumes or networks; check disk usage; or debug container issues. Also use for Dockerfile optimization and container health monitoring.
 version: 2.0.0
+# P6 — binding: dependency/daemon checks are part of "used", not advice.
+obligations:
+  must_run:
+    - scripts/check_deps.sh
 ---
 
 # docker-management

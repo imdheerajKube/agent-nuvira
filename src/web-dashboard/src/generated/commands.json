@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 312,
-  "groupCount": 60,
+  "commandCount": 314,
+  "groupCount": 61,
   "groups": [
     {
       "name": "admin",
@@ -858,6 +858,7 @@
           "name": "skills list",
           "description": "List installed skills with provenance (origin: registry vs local)",
           "flags": [
+            "--lint",
             "--origin <origin>",
             "--project <project>"
           ]
@@ -2451,6 +2452,30 @@
           "flags": [
             "--recall",
             "--sessions"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "resume",
+      "description": "Continue a turn that crashed or ran out of budget — same ask, from its checkpoint",
+      "commands": [
+        {
+          "name": "resume list",
+          "description": "Show every unfinished (open) turn, newest first",
+          "flags": [
+            "--cwd <cwd>"
+          ]
+        },
+        {
+          "name": "resume run",
+          "description": "Continue an unfinished turn (default: the newest open turn in this directory)",
+          "flags": [
+            "--all",
+            "--cwd <cwd>",
+            "--deadline <deadline>",
+            "--detach",
+            "--until-done"
           ]
         }
       ]

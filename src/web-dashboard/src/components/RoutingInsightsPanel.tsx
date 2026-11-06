@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import RoutingWalkthroughSection from './RoutingWalkthrough';
 import type { BanditInsights, DashboardData, GovernanceInsights, MlInsights, PromotionInsights, QuotaInsights, RbacInsights, RetrievalInsights, RoutingHistoryEntry, RoutingInsights, RoutingUsage } from '../types';
-import { formatCount } from '../format';
+import { formatCost, formatCount } from '../format';
 import PageHeader from './PageHeader';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -31,9 +31,7 @@ function pct(value: number, digits = 1): string {
   return `${(value * 100).toFixed(digits)}%`;
 }
 
-function usd(value: number): string {
-  return `$${value.toFixed(6)}`;
-}
+
 
 // ─── Small Components ───────────────────────────────────────────────────────
 
@@ -377,7 +375,12 @@ function ProviderQualitySection({ routing }: { routing: RoutingInsights }) {
               <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Runs</th>
               <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Avg Quality</th>
               <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Pass Rate</th>
-              <th style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}>Total Cost</th>
+              <th
+                style={{ padding: '8px 12px', textAlign: 'left', fontWeight: 500 }}
+                title="Estimated from token counts × list price — not a provider-stated charge"
+              >
+                Total cost (est.)
+              </th>
             </tr>
           </thead>
           <tbody>
@@ -399,7 +402,7 @@ function ProviderQualitySection({ routing }: { routing: RoutingInsights }) {
                   {pct(p.passRate)}
                 </td>
                 <td style={{ padding: '10px 12px', fontFamily: "'SFMono-Regular', Consolas, monospace", color: 'var(--text-secondary)' }}>
-                  {usd(p.totalCostUsd)}
+                  {formatCost(p.totalCostUsd)}
                 </td>
               </tr>
             ))}

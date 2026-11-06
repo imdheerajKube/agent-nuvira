@@ -33,6 +33,7 @@
 import { assessmentProtocolBlock, isProjectAssessmentGoal } from './assessment-protocol.js';
 import { buildSelfCheckBlock, readProjectSelfChecks } from './self-check-discovery.js';
 import { buildPerfProbeBlock, detectPerfProbeInput } from './perf-probe.js';
+import { buildRiskLeadsBlock, scanRiskSurface } from './risk-surface.js';
 import type { MachineFacts } from './machine-facts.js';
 
 /** What an assessment turn contributes to the prompt, and how much of it. */
@@ -82,7 +83,20 @@ export function buildAssessmentTurnContext(
     // A probe section that cannot be detected is simply not offered.
   }
 
-  const section = [selfChecksBlock.trim(), perfBlock.trim()].filter(Boolean).join('\n\n');
+  // A static index of the sinks a defect hides in. Measured 2026-11-05: the
+  // protocol already named the right seams, and the turn still missed them because
+  // the advice never became a list of places to open. A lead is not a finding; it
+  // is where to look. Best-effort, like the other two discoveries.
+  let leadsBlock = '';
+  try {
+    leadsBlock = buildRiskLeadsBlock(scanRiskSurface(dir));
+  } catch {
+    // A scan that cannot run is simply not offered.
+  }
+
+  const section = [selfChecksBlock.trim(), perfBlock.trim(), leadsBlock.trim()]
+    .filter(Boolean)
+    .join('\n\n');
   const block = assessmentProtocolBlock(goal, { selfChecks: section });
   if (block === '') return { ...NOT_ASSESSMENT };
   return { isAssessment: true, block, selfChecks: selfCheckCount, perfProbes: perfBlock.trim() !== '' };

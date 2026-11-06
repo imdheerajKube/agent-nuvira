@@ -40,6 +40,16 @@ import { resolveNuviraHome } from '../config/paths.js';
 import { logger } from '../utils/logger.js';
 import { compareVersions } from '../workflow/registry.js';
 import { envBuff } from '../config/paths';
+import type { ConfigManager } from '../config/manager.js';
+// Type-only: skills-registry.ts imports this module at runtime, so a value
+// import back would close a cycle. Erased at compile time — no cycle.
+import type { RegistrySource } from './skills-registry.js';
+import {
+  copySkillPackage,
+  isSkillPackageDir,
+  skillPackageInfo,
+  SkillPackageError,
+} from './skill-package.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -68,7 +78,14 @@ interface HubIndex {
   skills: HubSkillEntry[];
 }
 
-/** Provenance record for an installed skill. */
+/**
+ * Provenance record for an installed skill.
+ *
+ * `sha256` is the SKILL.md content hash the trust model has always used;
+ * `treeHash` (P1) is the SAME idea widened to the whole package, so a modified
+ * `scripts/*.py` or `data/*.csv` is caught too — and `installKind` says which
+ * one the record describes, so a legacy single-file install stays verifiable.
+ */
 export interface SkillProvenance {
   name: string;
   source: string;
@@ -77,6 +94,16 @@ export interface SkillProvenance {
   /** SHA-256 of the installed SKILL.md (content-addressed trust). */
   sha256: string;
   origin: 'registry' | 'local';
+  /** P1 — 'package' (a directory) or 'single-file' (legacy SKILL.md only). */
+  installKind?: 'package' | 'single-file';
+  /** P1 — files installed (1 for a single-file install). */
+  fileCount?: number;
+  /** P1 — total bytes installed. */
+  bytes?: number;
+  /** P1 — sha256 over the WHOLE installed tree (see skill-package.ts). */
+  treeHash?: string;
+  /** P1 — the registry base this came from (a `git+` base is refresheable). */
+  registryBase?: string;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────
@@ -321,14 +348,25 @@ export async function fetchSkillFile(registry: string, path: string): Promise<st
  * @param entry       The registry entry to install.
  * @param projectRoot Project root for the `.agents/skills/` target.
  * @param force       Overwrite an existing skill whose content changed.
- * @param overrides   I7 P1 multi-source: an explicit fetch + registry label
- *                    (the source adapter). Absent → legacy env/base path.
+ * @param overrides   Multi-source adapter. `sourceDir` (P1) makes this a
+ *                    PACKAGE install: the whole skill directory is copied, so
+ *                    the references/scripts/data a real skill needs arrive
+ *                    with it. Without it the legacy single-file path runs
+ *                    unchanged. `version` lets the caller supply a derived
+ *                    version (a git commit sha) when the skill declares none.
  */
 export async function installHubSkill(
   entry: HubSkillEntry,
   projectRoot = process.cwd(),
   force = false,
-  overrides?: { fetchSkill?: (name: string) => Promise<string | null>; registry?: string },
+  overrides?: {
+    fetchSkill?: (name: string) => Promise<string | null>;
+    registry?: string;
+    /** P1 — absolute path to a source skill DIRECTORY (multi-file install). */
+    sourceDir?: string;
+    /** P1 — version override (e.g. the source repo's commit sha). */
+    version?: string;
+  },
 ): Promise<SkillInstallResult> {
   const { name } = entry;
 
@@ -338,6 +376,14 @@ export async function installHubSkill(
   }
 
   const registry = overrides?.registry ?? registryBase();
+
+  // ── P1 package install: a directory source means copy the whole thing. ──
+  if (overrides?.sourceDir) {
+    return installSkillPackage(entry, overrides.sourceDir, projectRoot, force, {
+      registry,
+      version: overrides.version,
+    });
+  }
   const skillMarkdown = overrides?.fetchSkill
     ? await overrides.fetchSkill(name)
     : await fetchSkillFile(registry, `${name}/SKILL.md`);
@@ -421,6 +467,130 @@ export async function installHubSkill(
   return { ok: true, name, version: entry.version, source: entry.source };
 }
 
+// ─── Package install (P1 — multi-file skills) ────────────────────────────────
+
+/**
+ * P1 — install a whole skill DIRECTORY into `<project>/.agents/skills/<name>/`.
+ *
+ * Why this exists: `installHubSkill`'s single-file path writes SKILL.md and
+ * stops. A real skill (ui-ux-pro-max: SKILL.md + search.py + data/*.csv;
+ * superpowers/brainstorming: SKILL.md + visual-companion.md + scripts/) then
+ * breaks on first use, because its body tells the model to read files that
+ * were never installed. This copies the package and fingerprints the tree.
+ *
+ * Pre-flight is atomic: the package is measured BEFORE the destination is
+ * touched, so an oversized (or entry-less) package is refused with the
+ * existing install still intact.
+ *
+ * Same trust model as the single-file path:
+ *   - the name is sandboxed (`^[a-z0-9-]+$`) and the target is always a child
+ *     of the skills root;
+ *   - a CHANGED tree is either quarantined (default) or overwritten only when
+ *     the caller passed `force` (the explicit `update` path);
+ *   - identical trees are a no-op.
+ */
+export function installSkillPackage(
+  entry: HubSkillEntry,
+  sourceDir: string,
+  projectRoot = process.cwd(),
+  force = false,
+  opts: { registry?: string; version?: string } = {},
+): SkillInstallResult {
+  const { name } = entry;
+  if (!SKILL_NAME_RE.test(name) || name === '.' || name === '..') {
+    return { ok: false, name, reason: `Refused: skill name '${name}' is not in [a-z0-9-]` };
+  }
+  if (!isSkillPackageDir(sourceDir)) {
+    return { ok: false, name, reason: `not a skill package: ${sourceDir} has no SKILL.md` };
+  }
+
+  // Frontmatter sanity — the same bar the single-file path enforces.
+  let markdown: string;
+  try {
+    markdown = readFileSync(join(sourceDir, 'SKILL.md'), 'utf-8');
+  } catch (err) {
+    return { ok: false, name, reason: `unreadable SKILL.md: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  const declaredName = markdown.match(/^name:\s*([^\s]+)\s*$/m)?.[1];
+  if (!/^---[ \t]*$/m.test(markdown) || !declaredName) {
+    return { ok: false, name, reason: `Invalid skill: '${name}' lacks frontmatter (--- + name:)` };
+  }
+  if (declaredName !== name) {
+    return { ok: false, name, reason: `Invalid skill: frontmatter declares name '${declaredName}' but registry entry is '${name}'` };
+  }
+
+  const info = skillPackageInfo(sourceDir);
+  const version = opts.version ?? entry.version;
+  const sha = sha256Of(markdown);
+  const target = skillDir(projectRoot, name);
+  const targetFile = join(target, 'SKILL.md');
+
+  const record = (): void => {
+    recordSkillProvenance({
+      name,
+      source: entry.source,
+      version,
+      installedAt: Date.now(),
+      sha256: sha,
+      origin: isLocalRegistry() ? 'local' : 'registry',
+      installKind: 'package',
+      fileCount: info.files.length,
+      bytes: info.bytes,
+      treeHash: info.treeHash,
+      ...(opts.registry ? { registryBase: opts.registry } : {}),
+    });
+  };
+
+  // ── Existing install: identical tree = no-op, changed tree = gate. ──────
+  if (existsSync(targetFile)) {
+    const existingTree = skillPackageInfo(target).treeHash;
+    if (existingTree === info.treeHash) {
+      return { ok: true, name, version, source: entry.source, reason: 'already up to date' };
+    }
+    if (force) {
+      try {
+        copySkillPackage(sourceDir, target);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, name, reason: `update failed: ${msg}` };
+      }
+      record();
+      logger.success(`Updated skill package: ${name} v${version} → ${target}`);
+      return { ok: true, name, version, source: entry.source, reason: 'updated' };
+    }
+    // Not forced: quarantine the incoming package, never silently overwrite.
+    try {
+      ensureDirs();
+      const quarantineDir = join(QUARANTINE_DIR, `${name}-${Date.now()}`);
+      copySkillPackage(sourceDir, quarantineDir);
+      return {
+        ok: false,
+        name,
+        quarantined: true,
+        reason: `package checksum mismatch — incoming copy quarantined at ${quarantineDir}; pass force (skills update) to replace the installed skill`,
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, name, reason: `quarantine failed: ${msg}` };
+    }
+  }
+
+  // ── Fresh install. ──────────────────────────────────────────────────────
+  try {
+    copySkillPackage(sourceDir, target);
+  } catch (err) {
+    if (err instanceof SkillPackageError) {
+      return { ok: false, name, reason: err.message };
+    }
+    return { ok: false, name, reason: `write failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+  record();
+  logger.success(
+    `Installed skill package: ${name} v${version} (${info.files.length} files, ${info.bytes} bytes) → ${target}`,
+  );
+  return { ok: true, name, version, source: entry.source };
+}
+
 // ─── Uninstall ───────────────────────────────────────────────────────────────
 
 /**
@@ -466,12 +636,33 @@ export function uninstallHubSkill(
 
 // ─── Update ─────────────────────────────────────────────────────────────────
 
+/** True for a plain `major.minor.patch` style version (what compareVersions understands). */
+function isSemverLike(v: string | undefined): boolean {
+  return typeof v === 'string' && /^\d+(\.\d+){1,3}/.test(v.trim());
+}
+
 /**
- * Check installed skills against the registry and reinstall any with a newer
- * version. Returns a summary of what was updated / already current.
+ * Check installed skills against EVERY configured source and reinstall the ones
+ * that moved. Returns a summary of what was updated / already current.
+ *
+ * P1 fixes two silent failures here:
+ *   1. The old body only consulted the DEFAULT hub index (`fetchHubIndex()`), so
+ *      a skill installed from a `git+https://…` source could never be updated —
+ *      it was not in that index at all and was reported as "no longer in
+ *      registry". Sources are now resolved in priority order, and a `git+`
+ *      source is re-fetched before it is read.
+ *   2. A git-repo skill that declares no `version:` got `0.0.0`, so the semver
+ *      gate compared equal forever. Such skills now use the source commit sha as
+ *      their version, which is exactly what changes when upstream changes.
+ *
+ * Single-file installs keep the semver gate (an update must never clobber a
+ * user's local SKILL.md edits on an unchanged version). Package installs ask
+ * the installer, which compares TREE hashes — a re-generated script with the
+ * same declared version is still an update.
  */
 export async function updateHubSkills(
   projectRoot = process.cwd(),
+  cm?: ConfigManager,
 ): Promise<{ updated: string[]; current: string[]; failed: string[] }> {
   const records = readProvenance();
   if (records.length === 0) {
@@ -481,28 +672,80 @@ export async function updateHubSkills(
   // "Update" means latest: bypass the 1h index TTL so a registry bump within
   // the last hour is seen (the search path keeps the cache + --refresh).
   clearSkillsIndexCache();
-  const index = await fetchHubIndex();
+
+  // Dynamic import: skills-registry statically imports this module, so a
+  // static import back would close the cycle.
+  const { allSources, fetchSourceIndex, fetchSourceSkill, fetchSourcePackage, sourceVersionFor } =
+    await import('./skills-registry.js');
+
+  // Resolve each installed name against the configured sources (priority order),
+  // re-fetching git sources first so "latest" really is latest.
+  const resolved = new Map<
+    string,
+    {
+      entry: HubSkillEntry;
+      source: RegistrySource;
+      packageDir: string | null;
+      version: string;
+    }
+  >();
+  for (const source of allSources(cm)) {
+    let index: HubSkillEntry[];
+    try {
+      index = await fetchSourceIndex(source, { refresh: true });
+    } catch {
+      continue;
+    }
+    for (const entry of index) {
+      if (resolved.has(entry.name)) continue; // first source wins, as in search
+      const packageDir = await fetchSourcePackage(source, entry.name);
+      resolved.set(entry.name, {
+        entry,
+        source,
+        packageDir: packageDir ? packageDir.dir : null,
+        version: sourceVersionFor(source, entry).version,
+      });
+    }
+  }
+
   const updated: string[] = [];
   const current: string[] = [];
   const failed: string[] = [];
 
   for (const rec of records) {
-    const entry = index.find((e) => e.name === rec.name);
-    if (!entry) {
+    const found = resolved.get(rec.name);
+    if (!found) {
       failed.push(`${rec.name} (no longer in registry)`);
       continue;
     }
-    // Version gate (reuse the workflow registry's semver comparator): only
-    // force-overwrite when the registry is actually NEWER. Equal/older keeps
-    // the installed copy (a registry revert never downgrades, and a user's
-    // local edits to an installed SKILL.md are never clobbered by `update`).
-    if (compareVersions(entry.version, rec.version) <= 0) {
+    const { entry, source, packageDir, version } = found;
+
+    // Version gate (unchanged semantics, now applied to packages too): only an
+    // actually NEWER source updates. Equal/older keeps the installed copy — a
+    // registry revert never downgrades, and a user's local edit to an installed
+    // SKILL.md is never clobbered by an unchanged version.
+    //
+    // A git-repo skill that declares no version is compared by COMMIT SHA
+    // instead (see sourceVersionFor), so an upstream change is still seen there;
+    // that is the case where a changed tree must count as an update.
+    if (isSemverLike(version) && isSemverLike(rec.version) && compareVersions(version, rec.version) <= 0) {
       current.push(rec.name);
       continue;
     }
+
     // force=true: an explicit update may overwrite changed content (the naive
     // reinstall path would quarantine the new copy instead of updating it).
-    const result = await installHubSkill(entry, projectRoot, true);
+    const result = packageDir
+      ? installSkillPackage({ ...entry, source: source.base }, packageDir, projectRoot, true, {
+          registry: source.base,
+          version,
+        })
+      : await installHubSkill(entry, projectRoot, true, {
+          registry: source.base,
+          version,
+          fetchSkill: (name) => fetchSourceSkill(source, name),
+        });
+
     if (result.ok) {
       if (result.reason === 'already up to date') current.push(rec.name);
       else updated.push(rec.name);
@@ -520,10 +763,28 @@ export async function updateHubSkills(
  * List installed skills with their provenance origin (registry vs local).
  * If `origin` is given, filter to that origin.
  */
+/** One installed skill as the CLI/dashboard sees it. */
+export interface InstalledSkillRow {
+  name: string;
+  source: string;
+  version: string;
+  installedAt: number;
+  origin: 'registry' | 'local';
+  installed: boolean;
+  /** P1 — 'package' (directory install) or 'single-file' (legacy). */
+  installKind?: 'package' | 'single-file';
+  /** P1 — files installed. */
+  fileCount?: number;
+  /** P1 — total bytes installed. */
+  bytes?: number;
+  /** P1 — whole-tree fingerprint recorded at install. */
+  treeHash?: string;
+}
+
 export function listHubSkills(
   origin?: 'registry' | 'local',
   projectRoot = process.cwd(),
-): Array<{ name: string; source: string; version: string; installedAt: number; origin: 'registry' | 'local'; installed: boolean }> {
+): InstalledSkillRow[] {
   const records = readProvenance();
   const dir = skillsDir(projectRoot);
   const onDisk: string[] = [];
@@ -531,7 +792,7 @@ export function listHubSkills(
     onDisk.push(...readdirSync(dir).filter((d) => SKILL_NAME_RE.test(d)));
   } catch { /* dir may not exist yet */ }
 
-  const merged = new Map<string, { name: string; source: string; version: string; installedAt: number; origin: 'registry' | 'local'; installed: boolean }>();
+  const merged = new Map<string, InstalledSkillRow>();
   for (const rec of records) {
     merged.set(rec.name, { ...rec, installed: onDisk.includes(rec.name) });
   }

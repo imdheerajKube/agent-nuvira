@@ -1,23 +1,12 @@
 import type { DashboardData } from '../types';
-import { formatCount } from '../format';
+// ONE formatter (`utils`/`format.ts` via the dashboard shim). This file used to
+// carry its own copy of `formatCost` and `formatNumber`, which is how a
+// dashboard-only rounding rule becomes a dashboard-only claim about money.
+import { formatCost, formatNumber, formatSpendCell, SPEND_MARKS_LEGEND } from '../format';
 import PageHeader from './PageHeader';
 
 interface CostDashboardProps {
   data: DashboardData | null;
-}
-
-function formatCost(usd: number | undefined): string {
-  if (usd === undefined || usd === null) return '$0.00';
-  if (usd < 0.00001) return '$0.00';
-  if (usd < 0.01) return '$' + usd.toFixed(6);
-  return '$' + usd.toFixed(4);
-}
-
-function formatNumber(n: number | undefined): string {
-  if (n === undefined || n === null) return '0';
-  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return formatCount(n);
 }
 
 function formatTime(ts: number): string {
@@ -69,6 +58,13 @@ export default function CostDashboard({ data }: CostDashboardProps) {
   const byProvider = Object.entries(cost.byProvider || {}).sort(([, a], [, b]) => b - a);
   const byModel = Object.entries(cost.byModel || {}).sort(([, a], [, b]) => b - a).slice(0, 10);
   const providerTotal = byProvider.reduce((s, [, v]) => s + v, 0);
+  // The recent list: each row's own cell, from its one-call spend breakdown. An
+  // older server sends none, so the row falls back to the reported badge alone.
+  const recentRows = (cost.recent ?? []).slice(0, 30).map((req) => ({
+    req,
+    cell: req.spend ? formatSpendCell(req.spend) : undefined,
+  }));
+  const recentMarks = new Set(recentRows.flatMap(({ cell }) => cell?.marks ?? []));
   const notes: string[] = [];
   if (cost.recomputedCalls) {
     notes.push(
@@ -294,18 +290,24 @@ export default function CostDashboard({ data }: CostDashboardProps) {
         {(!cost.recent || cost.recent.length === 0) ? (
           <div className="empty-state">No requests recorded yet.</div>
         ) : (
-          cost.recent.slice(0, 30).map((req, i) => (
+          recentRows.map(({ req, cell }, i) => (
             <div className="request-row" key={i}>
               <span className="request-time">{formatTime(req.timestamp)}</span>
               <span className="request-provider">{req.provider || '--'}</span>
               <span className="request-model">{req.model || '--'}</span>
-              {/* 🧾 marks a cost the PROVIDER reported, not one we priced. */}
-              <span className="request-cost">{req.reported ? '🧾 ' : ''}{formatCost(req.costUsd)}</span>
+              {/* `🧾` is a provider-stated figure; `~` is a list price (an estimate);
+                  `?` means this row also could not be priced. The cell comes from
+                  `formatSpendCell`, so it uses the same marks as the CLI. */}
+              <span className="request-cost">
+                {req.reported ? '🧾 ' : ''}
+                {cell ? cell.text : formatCost(req.costUsd)}
+              </span>
               <span className="request-tokens">{formatNumber(req.totalTokens)} tok</span>
             </div>
           ))
         )}
       </div>
+      {recentMarks.size > 0 && <p className="cost-note">{SPEND_MARKS_LEGEND}</p>}
     </>
   );
 }

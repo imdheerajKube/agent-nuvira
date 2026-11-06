@@ -9,7 +9,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ConfigManager } from '../../src/config/manager.js';
@@ -1015,5 +1015,83 @@ describe('loop executor — session rehydration (Phase 4b/4c)', () => {
     });
     expect(second.generationFailed).toBe(false);
     expect(seen.some((m) => m.content.includes('OFF-MARKER'))).toBe(false);
+  });
+});
+
+/**
+ * Pinned skills on the LOOP arm (`nuvira execute --skill`).
+ *
+ * The chat surfaces load a pin into their system message; `execute` runs on this
+ * executor, so a pin that only worked in chat would be a flag that lies on the
+ * engine most runs use. This drives the real executor with a scripted provider
+ * and asserts what the MODEL was sent.
+ */
+describe('loop executor — pinned skills', () => {
+  it('places a pinned skill methodology in the system prompt, and nothing when unpinned', { timeout: 60_000 }, async () => {
+    vi.resetModules();
+    const dir = mkdtempSync(join(tmpdir(), 'buff-loop-pin-'));
+    const previousCwd = process.cwd();
+    try {
+      mkdirSync(join(dir, '.agents', 'skills', 'loop-pin-skill'), { recursive: true });
+      writeFileSync(
+        join(dir, '.agents', 'skills', 'loop-pin-skill', 'SKILL.md'),
+        '---\nname: loop-pin-skill\ndescription: Loop pin\n---\n\n# Loop pin\n\nALWAYS run the pin check before finishing.\n',
+        'utf-8',
+      );
+      process.chdir(dir);
+
+      let seen: ToolMessage[] = [];
+      const provider = {
+        name: 'Scripted',
+        async generateTools(messages: ToolMessage[]): Promise<ToolCallResponse> {
+          seen = messages;
+          return { content: 'done', toolCalls: [] };
+        },
+        async generateStream(): Promise<string> {
+          return 'done';
+        },
+      } as unknown as InferenceProvider;
+      vi.doMock('../../src/cli/router.js', () => ({
+        resolveProvider: () => ({ type: 'scripted', provider }),
+      }));
+      const { runLoopExecutor } = await import('../../src/cli/loop-executor.js');
+
+      await runLoopExecutor('do the thing', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        quiet: true,
+        skills: ['loop-pin-skill'],
+      });
+      const system = seen.find((m) => m.role === 'system')?.content ?? '';
+      expect(system).toContain('PINNED by the user');
+      expect(system).toContain('ALWAYS run the pin check before finishing');
+
+      // A skill NAMED in the goal is honored without --skill, through the same
+      // resolver and the same load path as the flag.
+      seen = [];
+      await runLoopExecutor('use the loop-pin-skill skill to do the thing', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        quiet: true,
+      });
+      const namedSystem = seen.find((m) => m.role === 'system')?.content ?? '';
+      expect(namedSystem).toContain('PINNED by the user');
+      expect(namedSystem).toContain('ALWAYS run the pin check before finishing');
+
+      // No pin, no block: the flag or an explicit name is the only way this text appears.
+      seen = [];
+      await runLoopExecutor('do the thing', new ConfigManager(), {
+        provider: 'scripted',
+        skipProjectContext: true,
+        quiet: true,
+      });
+      const unpinned = seen.find((m) => m.role === 'system')?.content ?? '';
+      expect(unpinned).not.toContain('PINNED by the user');
+    } finally {
+      process.chdir(previousCwd);
+      rmSync(dir, { recursive: true, force: true });
+      vi.doUnmock('../../src/cli/router.js');
+      vi.resetModules();
+    }
   });
 });

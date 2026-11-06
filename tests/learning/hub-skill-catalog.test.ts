@@ -8,7 +8,7 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -195,6 +195,104 @@ describe('readHubCatalog', () => {
     writeFileSync(join(evil, 'SKILL.md'), skillMd('evil', 'should not be read'), 'utf-8');
 
     expect(readHubCatalog(projectDir, homeDir)).toEqual([]);
+  });
+
+  // ─── P3 — Claude Code roots (read-only) ──────────────────────────────────
+
+  it('P3 — reads `<project>/.claude/skills` and marks it external', () => {
+    const dir = join(projectDir, '.claude', 'skills', 'designer');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('designer', 'Use when designing a UI'), 'utf-8');
+
+    const skills = readHubCatalog(projectDir, homeDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({
+      id: 'designer',
+      root: 'project',
+      origin: 'external',
+      dir: join(projectDir, '.claude', 'skills', 'designer'),
+    });
+    // Read-only input: nothing was created in nuvira's own root.
+    expect(existsSync(join(projectDir, '.agents', 'skills', 'designer'))).toBe(false);
+  });
+
+  it('P3 — reads `~/.claude/skills` and marks it external', () => {
+    const dir = join(homeDir, '.claude', 'skills', 'reviewer');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('reviewer', 'Use when reviewing a PR'), 'utf-8');
+
+    const skills = readHubCatalog(projectDir, homeDir);
+    expect(skills).toHaveLength(1);
+    expect(skills[0]).toMatchObject({ id: 'reviewer', root: 'home', origin: 'external' });
+  });
+
+  it('P3 — precedence is project .agents > project .claude > home .nuvira > home .claude', () => {
+    const roots = [
+      { dir: join(projectDir, '.agents', 'skills', 'dupe'), description: 'from project agents' },
+      { dir: join(projectDir, '.claude', 'skills', 'dupe'), description: 'from project claude' },
+      { dir: join(homeDir, '.nuvira', 'skills', 'dupe'), description: 'from home nuvira' },
+      { dir: join(homeDir, '.claude', 'skills', 'dupe'), description: 'from home claude' },
+    ];
+    for (const r of roots) {
+      mkdirSync(r.dir, { recursive: true });
+      writeFileSync(join(r.dir, 'SKILL.md'), skillMd('dupe', r.description), 'utf-8');
+    }
+
+    // First wins, and removing it moves down the list in order — so the winner
+    // is pinned, never an accident of directory read order.
+    expect(readHubCatalog(projectDir, homeDir)[0].description).toBe('from project agents');
+    rmSync(roots[0].dir, { recursive: true, force: true });
+    expect(readHubCatalog(projectDir, homeDir)[0].description).toBe('from project claude');
+    rmSync(roots[1].dir, { recursive: true, force: true });
+    expect(readHubCatalog(projectDir, homeDir)[0].description).toBe('from home nuvira');
+    rmSync(roots[2].dir, { recursive: true, force: true });
+    expect(readHubCatalog(projectDir, homeDir)[0].description).toBe('from home claude');
+  });
+
+  // ─── P6 — obligations ride the catalog, so a load can bind them ──────────
+
+  it('P6 — carries `obligations:` from frontmatter (and omits it when absent)', () => {
+    const withObs = join(projectDir, '.agents', 'skills', 'db-migration');
+    mkdirSync(withObs, { recursive: true });
+    writeFileSync(
+      join(withObs, 'SKILL.md'),
+      [
+        '---',
+        'name: db-migration',
+        'description: Use when migrating a database.',
+        'obligations:',
+        '  must_run:',
+        '    - scripts/validate_migration.py',
+        '  must_verify: [test]',
+        '---',
+        '',
+        'Body.',
+      ].join('\n'),
+      'utf-8',
+    );
+    const plain = join(projectDir, '.agents', 'skills', 'plain');
+    mkdirSync(plain, { recursive: true });
+    writeFileSync(join(plain, 'SKILL.md'), skillMd('plain', 'Use when nothing binds.'), 'utf-8');
+
+    const skills = readHubCatalog(projectDir, homeDir);
+    const migration = skills.find((s) => s.id === 'db-migration')!;
+    expect(migration.obligations).toEqual({
+      mustRead: [],
+      mustRun: ['scripts/validate_migration.py'],
+      mustProduce: [],
+      mustVerify: ['test'],
+    });
+    // A skill with no obligations stays advisory — installing one obliges nothing.
+    expect(skills.find((s) => s.id === 'plain')!.obligations).toBeUndefined();
+  });
+
+  it('P3 — an external skill honors the same skills.disabled gate', () => {
+    const dir = join(projectDir, '.claude', 'skills', 'designer');
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, 'SKILL.md'), skillMd('designer', 'Use when designing a UI'), 'utf-8');
+
+    const cm = { getAll: () => ({ skills: { disabled: ['designer'] } }) } as unknown as ConfigManager;
+    expect(listMatchableHubSkills(cm, projectDir, homeDir).map((s) => s.id)).not.toContain('designer');
   });
 });
 

@@ -239,4 +239,3 @@ kubectl rollout status deployment/myapp -n production
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('kubernetes', 'references/k8s-patterns.md')`.

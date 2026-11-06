@@ -111,11 +111,16 @@ describe('dashboard bundle freshness — the input set', () => {
     // bundled, so flagging its dependencies would report a stale bundle every
     // time a root RBAC or paths file changed.
     const escaping = [...readBundledRepoSources(REPO_ROOT)].filter((f) => !f.startsWith('src/web-dashboard/'));
-    expect(escaping.sort()).toEqual(['src/utils/format.ts', 'src/utils/mask.ts']);
+    // `spend.ts` is here on purpose: the dashboard must print money with the SAME
+    // rules the CLI uses. It is pure (no fs, no config, no ledger), which is what
+    // makes it safe to bundle — a formatter copy in the dashboard is how a turn
+    // that was never priced started reading as a free one.
+    expect(escaping.sort()).toEqual(['src/utils/format.ts', 'src/utils/mask.ts', 'src/utils/spend.ts']);
 
     const inputs = bundleInputPaths(REPO_ROOT);
     expect(inputs).toContain('src/utils/format.ts');
     expect(inputs).toContain('src/utils/mask.ts');
+    expect(inputs).toContain('src/utils/spend.ts');
     expect(inputs).not.toContain('src/enterprise/rbac.ts');
     expect(inputs).not.toContain('src/config/paths.ts');
   });

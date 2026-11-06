@@ -12,19 +12,23 @@
  * case right made some real match wrong.
  *
  * THE REPLACEMENT. Selection is the MODEL's job now. The harness no longer
- * guesses; it hands the model the discovery path and gets out of the way:
+ * guesses; it hands the model enough to CHOOSE and gets out of the way:
  *
- *   - default (`pointer`) — a few lines saying skills exist and HOW to find one:
- *     the `skill` tool (list / load) and the capability search (`tool_search`,
- *     whose hits include `kind:"skill"` capabilities). Near-zero prompt cost,
- *     no false positives, no maintenance.
+ *   - default (`index`) — every skill by name plus its TRIGGER clause, bounded
+ *     (`buildSkillIndex`, src/learning/skill-index.ts). This is the surface that
+ *     answers "how does it know which skill to use": the model can read WHEN
+ *     each skill applies without a 24K catalog and without a scorer deciding.
+ *   - `pointer` — the previous default: skills exist, here is how to look. It
+ *     named no skill, so hop one of discovery was uninformed. Kept as an opt-out.
  *   - `catalog` / `names` (OPT-IN) — the full name+description catalog, or the
  *     names-only list, for a user who wants everything in-context.
  *   - `off` — inject nothing.
  *
  * The old default was the ~24.5K-char catalog, which buried the task on every
- * turn (3.3.11 regression, see tests/release/agent-contracts.test.ts); the
- * pointer keeps the small-prompt property while still being model-driven.
+ * turn (3.3.11 regression, see tests/release/agent-contracts.test.ts); the index
+ * keeps the bounded-prompt property while still being model-driven. Measured:
+ * 132/156 bundled descriptions exceed the 140-char catalog cap and 55 lose their
+ * trigger clause there, so the index derives the trigger explicitly.
  *
  * The pipeline arm consumes the SAME catalog builder (see the orchestrator's
  * `skillCatalog` injection): the planner is a model too, so it is handed the
@@ -35,6 +39,9 @@
  */
 
 import type { ConfigManager } from '../config/manager.js';
+import { buildSkillIndex } from '../learning/skill-index.js';
+import { readSkillPolicy, skillPolicyAllows } from '../learning/hub-skill-catalog.js';
+import { orderByOutcome } from '../learning/skill-outcomes.js';
 
 /** Cap on any single description line (chars). */
 const LINE_CAP = 400;
@@ -44,14 +51,19 @@ function cap(text: string, max: number = LINE_CAP): string {
   return t.length > max ? t.slice(0, max - 1) + '…' : t;
 }
 
-/** The skills.disabled[] gate: a disabled skill is never listed. */
-function isDisabled(id: string, cm?: ConfigManager): boolean {
+/**
+ * The gate: a skill excluded by the effective policy is never listed.
+ *
+ * Read through `readSkillPolicy`, not `skills.disabled[]` directly, so the
+ * project's own allow/deny list (`.nuviraconfig.json`) applies to the index too
+ * — otherwise the model is still told a skill exists in a repo that forbade it.
+ * Config failure must not block discovery (the hint is advisory).
+ */
+function isDisabled(id: string, cm?: ConfigManager, cwd?: string): boolean {
   try {
-    const cfg = cm?.getAll?.() as { skills?: { disabled?: string[] } } | undefined;
-    const disabled = cfg?.skills?.disabled;
-    return Array.isArray(disabled) && disabled.includes(id);
+    return !skillPolicyAllows(id, readSkillPolicy(cm, cwd));
   } catch {
-    return false; // config failure must not block discovery (the hint is advisory)
+    return false;
   }
 }
 
@@ -66,12 +78,16 @@ interface SkillEntry {
  * (SKILL.md) skills, deduped by name, with the disabled gate applied. Best-effort:
  * a store/catalog failure contributes nothing rather than throwing.
  */
-export async function collectSkillEntries(cm?: ConfigManager): Promise<SkillEntry[]> {
+export async function collectSkillEntries(
+  cm?: ConfigManager,
+  opts: { projectRoot?: string; home?: string } = {},
+): Promise<SkillEntry[]> {
+  const projectRoot = opts.projectRoot ?? process.cwd();
   const entries: SkillEntry[] = [];
   try {
     const { getSkillStore } = await import('../learning/skill-store.js');
     for (const skill of getSkillStore().getAll()) {
-      if (isDisabled(skill.id, cm)) continue;
+      if (isDisabled(skill.id, cm, projectRoot)) continue;
       entries.push({ name: skill.name, description: skill.description ?? '' });
     }
   } catch {
@@ -79,15 +95,21 @@ export async function collectSkillEntries(cm?: ConfigManager): Promise<SkillEntr
   }
   try {
     const { listMatchableHubSkills } = await import('../learning/hub-skill-catalog.js');
-    for (const skill of listMatchableHubSkills(cm)) {
-      if (isDisabled(skill.id, cm)) continue;
+    const hubSkills = opts.home
+      ? listMatchableHubSkills(cm, projectRoot, opts.home)
+      : listMatchableHubSkills(cm, projectRoot);
+    for (const skill of hubSkills) {
+      if (isDisabled(skill.id, cm, projectRoot)) continue;
       if (entries.some((e) => e.name === skill.name)) continue;
       entries.push({ name: skill.name, description: skill.description ?? '' });
     }
   } catch {
     // Best-effort — a catalog failure leaves the compiled half.
   }
-  return entries;
+  // Rank by what each skill has actually DELIVERED here, not by name order or
+  // keyword overlap. Unseen skills keep the neutral score, so this reorders
+  // experience without burying a new skill.
+  return orderByOutcome(entries);
 }
 
 /** Where the "load one" tail should point: the loop's skill tool, or the pipeline's skill_view. */
@@ -173,16 +195,53 @@ export async function buildSkillCatalogHint(
 
 /**
  * Which skill hint the system prompt carries. See {@link resolveSkillHintMode}.
+ *   - `index`   — every skill by name with its TRIGGER clause (bounded, ~12K
+ *                 chars, adaptive per line). The DEFAULT — this is the surface
+ *                 that makes routing possible without a 24K catalog.
  *   - `pointer` — the small discovery pointer (names the skill tool + capability
- *                 search). The DEFAULT.
- *   - `catalog` — the FULL name+description catalog (opt-in).
+ *                 search), with NO skill names. Kept as an explicit opt-out.
+ *   - `catalog` — the FULL name+description catalog (opt-in, ~24K chars).
  *   - `names`   — the catalog WITHOUT descriptions (names only; far smaller).
  *   - `off`     — never inject a skill hint.
  */
-export type SkillHintMode = 'pointer' | 'catalog' | 'names' | 'off';
+export type SkillHintMode = 'index' | 'pointer' | 'catalog' | 'names' | 'off';
 
-/** The default. The catalog is ~24K chars — it must never be the default. */
-export const DEFAULT_SKILL_HINT_MODE: SkillHintMode = 'pointer';
+/**
+ * The default. Previously `pointer`, which told the model that 156 skills
+ * existed without naming one of them — the measured failure this change fixes
+ * (55/156 descriptions also lost their trigger clause in `catalog` mode, so
+ * neither old surface could route reliably). `pointer` is still supported.
+ */
+export const DEFAULT_SKILL_HINT_MODE: SkillHintMode = 'index';
+
+/**
+ * The bounded, always-on skill INDEX: `name: when to use it` for every skill.
+ *
+ * Bounded by construction (see `buildSkillIndex`): the per-line width adapts to
+ * the budget, so adding a skill shortens lines rather than hiding the tail of
+ * the catalog. Falls back to names only when even a short trigger would not
+ * fit — an invisible skill is the one failure this surface must not have.
+ */
+export async function buildSkillIndexHint(
+  cm?: ConfigManager,
+  opts: { loadHint?: SkillLoadHint; budgetChars?: number } = {},
+): Promise<string> {
+  const loadHint = opts.loadHint ?? 'skill-tool';
+  const entries = await collectSkillEntries(cm);
+  if (entries.length === 0) return '';
+  const index = buildSkillIndex(entries, opts.budgetChars ? { budgetChars: opts.budgetChars } : {});
+  return [
+    '',
+    index.text,
+    index.nameOnly > 0
+      ? `${index.withTrigger} skill(s) carry a trigger line; ${index.nameOnly} are name-only (budget). Call the skill tool with no name for the full descriptions.`
+      : '',
+    'Each line says WHEN the skill applies. Load one ONLY when the current task genuinely matches (skill tool, {"skill":"<name>"}); otherwise ignore this block and proceed.',
+    loadTail(loadHint),
+  ]
+    .filter(Boolean)
+    .join('\n');
+}
 
 /** Env names, `NUVIRA_*` first with the legacy `BUFF_*` alias accepted. */
 const SKILL_HINT_ENV_NAMES = ['NUVIRA_SKILL_CATALOG', 'BUFF_SKILL_CATALOG'];
@@ -202,7 +261,8 @@ const SKILL_HINT_ENV_NAMES = ['NUVIRA_SKILL_CATALOG', 'BUFF_SKILL_CATALOG'];
 export function parseSkillHintMode(raw: string | undefined | null): SkillHintMode | null {
   const v = String(raw ?? '').trim().toLowerCase();
   if (!v) return null;
-  if (v === 'pointer' || v === 'match' || v === 'keyword' || v === 'auto' || v === 'small' || v === 'default') return 'pointer';
+  if (v === 'index' || v === 'trigger' || v === 'triggers' || v === 'compact' || v === 'default') return 'index';
+  if (v === 'pointer' || v === 'match' || v === 'keyword' || v === 'auto' || v === 'small') return 'pointer';
   if (v === 'catalog' || v === 'full' || v === 'all' || v === 'on' || v === 'true' || v === '1') return 'catalog';
   if (v === 'names' || v === 'names-only' || v === 'list' || v === 'bare' || v === 'titles') return 'names';
   if (v === 'off' || v === 'none' || v === 'never' || v === 'false' || v === '0') return 'off';
@@ -251,5 +311,6 @@ export async function buildConfiguredSkillHint(
   if (mode === 'off') return '';
   if (mode === 'catalog') return buildSkillCatalogHint(cm, { loadHint });
   if (mode === 'names') return buildSkillCatalogHint(cm, { namesOnly: true, loadHint });
-  return buildSkillPointerHint(cm, loadHint);
+  if (mode === 'pointer') return buildSkillPointerHint(cm, loadHint);
+  return buildSkillIndexHint(cm, { loadHint });
 }

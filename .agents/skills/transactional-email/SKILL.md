@@ -10,7 +10,7 @@ Set up transactional email sending: SMTP configuration, email templates, deliver
 
 ## Goal pattern
 
-transactional email SMTP SendGrid Postmark SES template delivery tracking bounce password reset notification
+transactional email SMTP SendGrid Postmark SES Resend provider template delivery tracking bounce password reset notification receipts contact form
 
 ## Parameters
 

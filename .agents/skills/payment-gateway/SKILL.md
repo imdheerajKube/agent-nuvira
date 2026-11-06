@@ -10,7 +10,7 @@ Integrate payment processing: Stripe, PayPal, or Square. Covers checkout flows, 
 
 ## Goal pattern
 
-payment gateway stripe paypal square checkout subscription refund webhook PCI compliance
+payment gateway stripe paypal square checkout subscription billing plan invoice one-time payment refund webhook PCI compliance
 
 ## Parameters
 

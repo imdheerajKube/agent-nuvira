@@ -101,7 +101,7 @@ Run a cron job NOW (invoke its tool immediately)
 
 Start an interactive chat session with AI
 
-   - flags: `--dev, --file <file>, --keep-worktree, --model <model>, --no-cache, --provider <provider>, --resume [resume], --worktree`
+   - flags: `--dev, --file <file>, --keep-worktree, --model <model>, --no-cache, --provider <provider>, --resume [resume], --skill <skill>, --worktree`
 ### `nuvira edit`
 
 Edit a file using AI assistance
@@ -352,7 +352,7 @@ Run the model-registry maintenance daemon: probe + spot-check on a schedule
 
 Run a multi-agent pipeline to accomplish a goal
 
-   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --keep-worktree, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-session-recall, --no-session-store, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --session-recall, --session-store, --skip-tests, --tool-calling, --verbose, --worktree, --writer-model <writer_model>`
+   - flags: `--auto-branch, --auto-route, --checkpoint, --checkpoint-list, --context-limit <context_limit>, --context-prune <context_prune>, --dry-run, --engine <engine>, --gatherer-model <gatherer_model>, --json-events, --keep-worktree, --max-repairs <max_repairs>, --memory, --memory-clear, --memory-stats, --model <model>, --no-session-recall, --no-session-store, --no-tool-calling, --plan-mode <plan_mode>, --planner-model <planner_model>, --provider <provider>, --repair-fallback-models <repair_fallback_models>, --repair-mode <repair_mode>, --resume [resume], --review, --reviewer-model <reviewer_model>, --sandbox, --session-recall, --session-store, --skill <skill>, --skip-tests, --tool-calling, --verbose, --worktree, --writer-model <writer_model>`
 ### `nuvira run`
 
 Execute a shell command and show output (lightweight alternative to the full pipeline)
@@ -624,7 +624,7 @@ P6b — skill bundles: group skills under one id and load them together (Hermes 
 
 List installed skills with provenance (origin: registry vs local)
 
-   - flags: `--origin <origin>, --project <project>`
+   - flags: `--lint, --origin <origin>, --project <project>`
 ### `nuvira gateway`
 
 Multi-channel gateway — talk to the agent from Telegram/Discord/Slack/WhatsApp/Email/Signal (J1)
@@ -1663,6 +1663,20 @@ Show the continuity switches, stored sessions, and the semantic recall index
 Forget stored continuity data (no flags = both sessions and recall)
 
    - flags: `--recall, --sessions`
+### `nuvira resume`
+
+Continue a turn that crashed or ran out of budget — same ask, from its checkpoint
+
+### `nuvira resume list`
+
+Show every unfinished (open) turn, newest first
+
+   - flags: `--cwd <cwd>`
+### `nuvira resume run`
+
+Continue an unfinished turn (default: the newest open turn in this directory)
+
+   - flags: `--all, --cwd <cwd>, --deadline <deadline>, --detach, --until-done`
 ### `nuvira website`
 
 Open the Agent-Nuvira website — capabilities, commands, docs, setup
@@ -1670,4 +1684,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*373 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*376 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

@@ -120,6 +120,12 @@ describe('costSince — measured, per-batch, process-independent', () => {
     const split = costSinceSplit(0);
     expect(split.billedUsd).toBe(0);
     expect(split.unverifiedListedUsd).toBeGreaterThan(0);
+    // The bucket is countable and attributable, so a surface can say WHAT is
+    // un-priced and name the command that fixes it — instead of printing the
+    // billed total and calling the turn free.
+    expect(split.unverifiedCalls).toBe(1);
+    expect(split.unverifiedProviders).toEqual(['groq']);
+    expect(split.billedReportedCalls).toBe(0);
     // …and the token accounting is unaffected either way.
     expect(split.attributed.tokens).toBe(2000);
   });

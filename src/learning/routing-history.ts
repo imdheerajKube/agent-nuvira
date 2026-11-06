@@ -22,6 +22,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import {envBuff, resolveNuviraHome} from '../config/paths';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+import { isPairPlausible } from './model-selection.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -216,6 +217,17 @@ function writeData(data: RoutingHistoryData): void {
  * keeping the most recent) and persists it.
  */
 export function recordRoutingDecision(entry: Omit<RoutingHistoryEntry, 'id' | 'timestamp'>): void {
+  // A pair that CANNOT exist is never recorded — the same predicate the router
+  // and the cost-ledger pruner use (`isPairPlausible`: test fixtures/stub ids,
+  // Ollama-tagged ids on a hosted provider). The store is append-only, so a row
+  // written here is permanent and every count derived from it inherits the
+  // error: the live file still carried 15 `local/wire-stub-model` rows and 24
+  // `groq/deepseek-flash` rows (a cross-provider mis-attribution) long after
+  // both were ruled out. Refusing them at the door is what stops the next
+  // contamination; see `isImplausibleEntry` for the rows already on disk.
+  // An EMPTY model is a provider-level decision, not an impossible pair — it is
+  // left alone (dropping it would silently lose real decisions).
+  if (entry.model && !isPairPlausible(entry.provider, entry.model)) return;
   const data = readData();
   data.entries.push({
     ...entry,
@@ -229,11 +241,33 @@ export function recordRoutingDecision(entry: Omit<RoutingHistoryEntry, 'id' | 't
 }
 
 /**
+ * A stored row whose pair cannot exist (a fixture id, or an Ollama-style tag on
+ * a hosted provider).
+ *
+ * WHY READ-SIDE TOO. `recordRoutingDecision` can only guard rows written from
+ * now on; the file is append-only and older rows stay. Filtering them here means
+ * every consumer — stats, the dashboard, `model explain`, the accuracy measure —
+ * reads the same clean set instead of each one re-implementing a guard.
+ *
+ * Deliberately narrow: ONLY impossible pairs. A real pair that failed is a true
+ * fact about routing and must stay in the audit trail.
+ */
+export function isImplausibleEntry(entry: Pick<RoutingHistoryEntry, 'provider' | 'model'>): boolean {
+  const model = entry?.model ?? '';
+  if (!model) return false; // provider-level decision — nothing to adjudicate
+  return !isPairPlausible(entry?.provider ?? '', model);
+}
+
+/**
  * Get recorded decisions, most recent first.
+ *
+ * Impossible pairs are filtered OUT of the returned set (see
+ * `isImplausibleEntry`) — the limit applies to returned rows, so a page of
+ * results is always full of real decisions.
  */
 export function getRoutingHistory(limit = 100): RoutingHistoryEntry[] {
   const data = readData();
-  return [...data.entries].reverse().slice(0, limit);
+  return [...data.entries].filter((e) => !isImplausibleEntry(e)).reverse().slice(0, limit);
 }
 
 /**
@@ -257,7 +291,12 @@ export function getRoutingUsageStats(): RoutingUsageStats {
   const dayAgo = Date.now() - 24 * 60 * 60 * 1000;
   let last24h = 0;
 
+  let counted = 0;
   for (const e of entries) {
+    // A pair that cannot exist did not really get routed — counting it inflates
+    // exactly the numbers users read as "what the router does".
+    if (isImplausibleEntry(e)) continue;
+    counted++;
     byProvider[e.provider] = (byProvider[e.provider] || 0) + 1;
     byModel[e.model] = (byModel[e.model] || 0) + 1;
     bySource[e.source] = (bySource[e.source] || 0) + 1;
@@ -266,7 +305,7 @@ export function getRoutingUsageStats(): RoutingUsageStats {
   }
 
   return {
-    total: entries.length,
+    total: counted,
     last24h,
     byProvider,
     byModel,

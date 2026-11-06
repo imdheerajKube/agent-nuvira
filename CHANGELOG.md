@@ -2,6 +2,62 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## Unreleased — an empty response is diagnosed, not punished
+
+`deepseek-v4-flash` / `deepseek-v4-pro` were returning steps with `content: ''`
+while a long `reasoning_content` and `finish_reason: 'length'` sat on the same
+wire. The tool loop read only the content, called it a provider failure, spent its
+one retry, and handed the turn to a weaker model — on a turn where Gemini was up
+and the deepseek pair was WORKING, just out of output room.
+
+- **Evidence before verdict** (`learning/empty-completion.ts`, new). One pure
+  classifier for an empty step, from `finish_reason`, `reasoning_content`,
+  `usage` and the request's own `max_tokens`: `reasoning-budget` / `output-budget`
+  (provably cut at the cap), `no-answer` (a clean stop with nothing), or
+  `no-evidence`. Rotation is now decided from that verdict, not from the empty
+  string alone. A shape without cap evidence is deliberately NOT called exhausted
+  — it is probed instead.
+- **A truncated step keeps its model** (`tools/tool-loop.ts`,
+  `cli/loop-executor.ts`). A cap-truncated step is re-asked on the SAME pair
+  (bounded at two in the tool loop, once per pair per step in `execute`), with a
+  visible line naming the budget as the cause instead of silently rotating.
+- **The budget is learned** (`inference/output-budget.ts`, new;
+  `openai-compat-adapter.ts`). `finish_reason: 'length'` records the floor that
+  pair needs (double what it consumed, min 8K, cap 32K, 30-minute TTL), and the
+  next request for that pair sends at least that much. Per provider × model — one
+  long reasoning step never inflates a sibling model.
+- **The wire now says what it knows** (`inference/interface.ts`,
+  `inference/tools.ts`). `ToolCallResponse.requestedMaxTokens` carries the cap the
+  request sent, so an empty step can be attributed instead of guessed at.
+- **An unexplained empty is probed first** (`tools/tool-loop.ts`,
+  `cli/chat.ts`, AUTO turns only). No cap evidence → one cheap one-line ping of
+  the served pair. It answered → re-ask the real step on the same model. It
+  refused (auth / credit / model access) → rotate immediately with that evidence,
+  skipping the patience window that would have been wasted. It timed out or
+  429'd → the existing blip patience policy, unchanged.
+- **A PINNED model is never substituted or judged faster than before.** The probe
+  is wired for auto turns only: on a pinned turn the loop's budget re-ask still
+  asks the SAME pair (which is the point of naming it), and the patience window,
+  failure booking and `requestModelSwitch` refusal are exactly what they were.
+  Nothing here changes candidate selection in any mode — the only routing call
+  made is the one the loop already made.
+
+Measured against the live DeepSeek account (2026-11-04), not a fixture: the same
+prompt at a 64-token cap returned `finish_reason: "length"`, `content: ''`, 268
+chars of reasoning and `64/64` completion tokens — diagnosed `reasoning-budget`;
+the next request to that pair sent `requestedMaxTokens: 8192` (learned) and
+answered normally. At a 256-token cap the same models answered with no empty at
+all, which is the point: the models were available, and the old code was
+rotating away from a working pair.
+
+Tests: the diagnosis table and budget escalation are pinned by
+`tests/learning/empty-completion.test.ts` and
+`tests/inference/output-budget.test.ts`; the loop behaviour (same-pair re-ask,
+probe-alive re-ask, probe-refused rotation without patience) by three new cases
+in `tests/tools/tool-loop.test.ts`; the adapter's learn-then-send-larger-cap by
+`tests/inference/openai-compat-adapter.test.ts`. `tsc` clean; the six affected
+suites (244 tests) pass.
+
 ## v3.5.14 — a surface is proven by its code, not by its filename
 
 The head-to-head on a greenfield API task (`docs/BENCH_GREENFIELD_2026-10-30.md`):
@@ -90,8 +146,67 @@ one call), forbids re-sending content already on disk, and sends changes to
   in both turns. Reproduced by creating and removing a directory in the project
   root across the pair. That surfaced a second, real defect: a forked child spawned
   into a directory outside this project could not resolve `--import tsx` and died
-  before its first model call — the loader is now an absolute specifier, so a
+  before its first model call —  the loader is now an absolute specifier, so a
   child's cwd no longer decides whether it can start.
+
+### Money says what it is
+
+A dollar figure was the one number this product printed without saying what it
+MEANT. The evidence-backed bill is 0 for every list-priced call whose account has
+no declared `providers.<id>.billingTier` — which is the DEFAULT install — so a turn
+that was simply never priced printed `cost: $0.000000`, the same defect as the old
+"Total Spent $7.21" with the sign flipped. And the shape behind it was a single
+`usd`, which made two opposite claims identical: `free` (provably no per-call
+charge) and `unknown` (no price evidence at all).
+
+- **One spend shape, one set of rules** (`utils/spend.ts`, new). A window is now
+  split by the EVIDENCE behind each figure: `reported`/`exactUsd` (the provider
+  stated the charge), `listed`/`estimatedUsd` (list price on an account declared
+  `paid` — an estimate of money owed), `unverified` (list price on an UNDECLARED
+  tier — not known to be spend at all), `free` (a local runtime, a `:free` model, a
+  declared free/subscription account), and `unpriced`. Tokens and call counts are
+  always present because they hold for every provider; money is optional and every
+  clause that shows it names its bucket. The module is pure (no fs, no config, no
+  ledger) so the browser bundle imports the same rules instead of a copy.
+- **Every surface prints it the same way** (`learning/turn-report.ts`,
+  `cli/chat.ts`, `learning/unattended-job.ts`, `cli/execute.ts`,
+  `gateway/registry.ts`). `costSinceSplit` carries all buckets, their call counts and
+  the providers whose tier is undeclared (one command is the remedy:
+  `declare providers.deepseek.billingTier`); `TurnReport.cost` is that breakdown and
+  is ABSENT when the ledger recorded nothing, because "not metered" is not "free";
+  an unattended run's job and batch rows store the breakdown rather than a billed
+  figure, so a paid batch can no longer read `$0.00000` because its account tier was
+  never declared. `costSince`'s `attributed` figure and `billedUsd` keep their old
+  meaning exactly — nothing here counts an estimate as a bill.
+- **The dashboard inherits the vocabulary, not a copy**
+  (`web-dashboard/src/format.ts`, `components/ChatPage.tsx`,
+  `components/BatchEconomy.tsx`, `components/RequestsPanel.tsx`). The turn card now
+  prints the whole breakdown (`$0.001000 exact + ~$0.003400 unverified · 12.3K tok ·
+  3 calls — declare …`) and nothing when the ledger recorded nothing. Per-batch cost
+  cells carry `~` (list price, an estimate) and `?` (priced, but not provably
+  charged), with a legend printed only when a mark was used; rows persisted before
+  the breakdown keep their figure and take the `?`, since the money was computed and
+  the evidence was not recorded. The Requests panel's "Measured cost" tile and
+  column are gone: rows are labelled from the server's `costBasis`, and the total
+  says it contains an estimate unless every priced row is provider-metered. The
+  Cost page's recent-request list gets the same treatment per CALL: `/api/cost`
+  now sends each row as a one-call spend breakdown, so a provider-stated `$0`
+  (`🧾`), a list price on an undeclared tier (`~…?`), a free call (`free`) and an
+  unpriced one no longer render as the same dollar — and one mapping
+  (`cost-classification.spendFromTotals`) is shared with the turn line and batch
+  table. The benchmark and eval pages call their figure `Cost (est.)` with a
+  tooltip saying it is priced from tokens, and print a dash rather than `$0.0000`
+  for a run that recorded no cost. The Overview chart now plots the classified
+  per-provider BILLED figure (and titles itself "recorded, not evidence-filtered"
+  on a server that predates the split), instead of putting the ledger as recorded
+  beside a tile that says "Billed".
+- **A catalog price is not allowed to age in silence**
+  (`inference/provider-catalog.ts`). Each entry's `pricing` now carries the `source`
+  to re-check and the `asOf` date it last changed (or was last read against that
+  source), and `tests/inference/provider-catalog-pricing.test.ts` fails once an
+  entry outlives its review window: an estimate may be wrong, but it may not be
+  silently ancient. The zero prices say why they are zero (a local runtime bills
+  nothing; a keyless gateway puts the bill on the upstream account).
 
 ## v3.5.13 — the loop stops charging for checks it cannot finish
 

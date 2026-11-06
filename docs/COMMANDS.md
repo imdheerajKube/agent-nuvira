@@ -522,6 +522,11 @@ would not start and closed with no README).
   nuvira config set turn.maxMinutes 45    # 45-minute turns (default is 60)
   nuvira config set turn.maxMinutes 0     # no wall clock: step budgets only (pre-3.5.12 behaviour)
   ```
+- **Step budget:** `nuvira config set turn.maxSteps <n>` sets the first slice (default 16; the
+  loop earns more while a requirement, plan step or named artifact is still open) and
+  `nuvira config set turn.maxTotalSteps <n>` sets the absolute guard (default 1000). Neither is
+  the finishing rule — a turn ends when the ask is satisfied, or when two granted rounds moved
+  nothing — so a multi-day build is `turn.maxMinutes 0` plus a raised `maxTotalSteps`.
 - **Behaviour at the bell:** with 20% of the budget left (at least a minute), the turn is told
   once to stop opening work, to record a tool that has already failed twice as a known
   limitation, and to spend the remaining steps on the handover documents and the answer. The
@@ -1004,6 +1009,37 @@ would not start and closed with no README).
   to read, never replayed. The switches themselves live in config (`memory.sessionStore` /
   `memory.sessionRecall`), the environment (`NUVIRA_SESSION_STORE` / `NUVIRA_SESSION_RECALL`), and
   the per-run `execute` flags; the dashboard's Memory page shows the same view with Forget buttons.
+
+### 7.0b Resume — continue a turn that crashed or ran out of budget
+
+- **Objective:** Pick up an unfinished turn from its last checkpoint: the **same ask**, the same
+  conversation, no retyping. A chat or loop turn is snapshotted at every step, so a closed laptop,
+  a killed terminal or a per-turn step ceiling no longer strands the work.
+- **Command:** `nuvira resume list [--cwd <dir>]` · `nuvira resume run [<id>] [--all] [--until-done] [--deadline <minutes>] [--detach]`
+- **Examples:**
+  ```bash
+  nuvira resume list                          # every OPEN (unfinished) turn, newest first
+  nuvira resume run                           # continue the newest open turn in this directory
+  nuvira resume run --all --until-done         # keep continuing until each session closes
+  nuvira resume run --all --until-done --detach  # survive closing the terminal
+  nuvira resume run --deadline 480             # stop after 8 hours even if work remains
+  ```
+- **What it continues, and what it refuses:** only a session that is still **OPEN** — a turn that hit
+  its step budget, failed generation, or lost its process. A turn that ran to a clean end is
+  **closed** and is history; it is never resumed. The stored goal is what runs, so a resume never
+  introduces a new prompt or a new plan.
+- **Which task:** `resume list` prints each turn's **id**, goal and directory. `resume run <id>`
+  continues exactly that turn; `resume run` with no id takes the newest OPEN turn in the **current
+  directory** (a turn in another directory is never picked implicitly); `--all` continues every OPEN
+  turn, oldest-stored first; `--cwd <dir>` scopes the list. The dashboard's Chat page shows the same
+  ids and sends the one you click, so no surface has to guess.
+- **Bounds (all reported, never silent):** `--until-done` stops when the session closes, after three
+  consecutive rounds that leave the turn open without advancing it, after three consecutive
+  generation failures, or at `--deadline` (default 1440 minutes). Each round is a normal turn with
+  the same step and wall-clock budgets as any other turn.
+- **`--detach`:** runs the continuation in its own process with a log under
+  `<memory>/resume/resume-*.log`, so closing the terminal does not stop it. It does **not** survive a
+  reboot: the snapshot does, and `nuvira resume run --all --until-done` continues it afterwards.
 
 ### 7.1 Self-improvement (learn)
 
@@ -1858,6 +1894,7 @@ nuvira phase         multi-goal phase scopes
 nuvira retrieval     vector retrieval (index/query/stats/clear)
 nuvira trace         reasoning-trace capture/replay
 nuvira continuity    session snapshots + semantic recall (list/clear)
+nuvira resume        continue an unfinished turn from its checkpoint (list/run)
 nuvira bedrock       AWS Bedrock onboarding (setup/status/test)
 nuvira credentials   release tokens (status/set/forget/verify)
 nuvira website       open the project site (capabilities/commands/docs/setup)

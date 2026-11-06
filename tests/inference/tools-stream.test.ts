@@ -59,9 +59,30 @@ describe('chatCompletionsWithToolsStream', () => {
     expect(result.content).toBe('Here is the answer.');
     expect(result.toolCalls).toEqual([]);
     // The request carried stream: true + include_usage.
-    const body = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body) as { stream?: boolean; stream_options?: { include_usage?: boolean } };
+    const body = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body) as { stream?: boolean; stream_options?: { include_usage?: boolean }; usage?: unknown };
     expect(body.stream).toBe(true);
     expect(body.stream_options).toEqual({ include_usage: true });
+    // ...and NOT the OpenRouter-only `usage` object: Groq rejects the whole
+    // request for it (`400 property 'usage' is unsupported`), which is what
+    // killed two pinned turns while a 436-model pool sat unused.
+    expect(body.usage).toBeUndefined();
+  });
+
+  it('sends the top-level `usage` object only when the caller opts in (OpenRouter)', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        sseResponse('data: {"choices":[{"delta":{"content":"ok"}}]}', 'data: [DONE]'),
+      ),
+    );
+
+    await chatCompletionsWithToolsStream(
+      { baseUrl: 'https://openrouter.test/v1', headers: {}, model: 'm', messages: MESSAGES, tools: TOOLS, usageInclude: true },
+      () => {},
+    );
+
+    const body = JSON.parse((fetch as ReturnType<typeof vi.fn>).mock.calls[0][1].body) as { usage?: unknown };
+    expect(body.usage).toEqual({ include: true });
   });
 
   it('accumulates tool_calls from per-index fragments and parses arguments JSON', async () => {

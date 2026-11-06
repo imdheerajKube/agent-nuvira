@@ -185,6 +185,7 @@ This table highlights core capabilities for quick machine parsing and comparison
 - **Native FAISS vector backend** — `agent-nuvira memory backend` shows the active backend (`faiss-native` / `faiss-ivf` / `json`) and why it was chosen; `--check` runs a native-FAISS availability probe with install guidance, and `@faiss-node/native` is used automatically whenever it builds
 - **Vector retrieval (token-efficient context)** — large gathered contexts are chunked, embedded locally (`bge-small-en-v1.5` via @huggingface/transformers, zero new deps) and reduced to the top-k semantically-relevant chunks before the LLM call — saving tokens so free quotas stretch further. Complements the quota ledger: **retrieval saves tokens, the ledger manages quotas**. Small contexts pass through untouched (zero overhead); any retrieval failure fails over to full context. `agent-nuvira retrieval index/query/stats/clear` + a dashboard Retrieval card show the savings
 - **Checkpoint / resume** — `agent-nuvira execute "<goal>" --checkpoint` saves a resume-able snapshot after every task batch; `--resume [id]` rehydrates the plan and continues from the first pending step (a crash / quota kill / token expiry mid-pipeline no longer restarts the whole plan); `--checkpoint-list` shows saved pipelines
+- **Continue unfinished work** — `agent-nuvira resume list` / `resume run [id]` continues a turn that crashed, hit a quota, or stopped at its step/deadline budget: same goal, from its checkpoint, no restart. `--all --until-done --deadline 480 --detach` finishes everything in the background, and the dashboard's **Chat → Unfinished work** card does the same visually
 - **Security scan CLI** — `agent-nuvira security scan` detects PII, prompt injections, and dangerous code patterns
 - **Feedback & rating system** — `agent-nuvira feedback record/list/stats/clear` drives self-improvement scoring
 - **Marketplace unified CLI** — `agent-nuvira marketplace browse/search/install/info` for workflow templates + plugins
@@ -906,6 +907,98 @@ If a gateway answer claims a send that never happened, the agent now **appends a
 **To be sure a message really went out:** look for the ✅ outcome badge on the trace, or a `✅ sent to …` line in the tool result — never trust the model's prose alone.
 
 ---
+
+## Resume Unfinished Work (CLI + Dashboard)
+
+Nuvira checkpoints a turn while it runs. If the process dies, a provider quota
+kills it, or a bounded run reaches its step or deadline budget, the turn stays
+**OPEN** on disk. `resume` continues it from that checkpoint — same goal, same
+history, no restart. A turn that ends cleanly is **CLOSED**, and `resume` will
+not touch it.
+
+### Which task does `resume` continue?
+
+Every OPEN turn has a deterministic id derived from its goal and working
+directory. `resume list` prints it, and `resume run <id>` matches it exactly.
+Nothing is guessed, and a turn in another directory is never picked implicitly:
+
+| You want | Command |
+|---|---|
+| See everything unfinished | `agent-nuvira resume list` |
+| Continue one specific turn | `agent-nuvira resume run 4f2a9c1e` |
+| Continue the newest turn **in this directory** | `agent-nuvira resume run` |
+| List only one directory's turns | `agent-nuvira resume list --cwd ~/code/api` |
+| Choose the directory for a bare `run` | `agent-nuvira resume run --cwd ~/code/api` |
+| Finish everything, oldest first | `agent-nuvira resume run --all --until-done` |
+
+### CLI
+
+```bash
+# 1. See what is unfinished (id, goal, directory, steps, age)
+agent-nuvira resume list
+
+# 2. Continue exactly one turn
+agent-nuvira resume run 4f2a9c1e
+
+# 3. Or continue the newest unfinished turn in the current folder
+agent-nuvira resume run
+
+# 4. Finish everything in the background, with an 8-hour cap
+agent-nuvira resume run --all --until-done --deadline 480 --detach
+
+# 5. Continue one turn in the background and keep the log
+agent-nuvira resume run 4f2a9c1e --detach
+```
+
+| Flag | What it does |
+|---|---|
+| `--all` | Continue every OPEN turn, oldest-stored first |
+| `--cwd <dir>` | List that directory only, or use it for a bare `run` |
+| `--until-done` | Keep continuing the turn until it closes or a bound stops it |
+| `--deadline <minutes>` | Wall-clock cap for `--until-done` (default `1440` = 24 h) |
+| `--detach` | Return immediately with a pid and a log path instead of holding the terminal |
+
+`--until-done` is deliberately bounded: it stops after three rounds without
+progress or three failed rounds (hard cap 200 rounds), and at the deadline.
+`--detach` writes to `~/.nuvira/memory/resume/resume-<timestamp>.log` and prints
+the exact path; the continuation process is independent of the terminal, so you
+can close it (it does not survive a machine reboot — the checkpoint does, so run
+`resume` again after boot).
+
+### Dashboard
+
+Start the dashboard and open the **Chat** page:
+
+```bash
+agent-nuvira dashboard
+```
+
+Above the project bar, the **Unfinished work (N)** card lists the same OPEN turns
+as `resume list`, with goal, directory, steps and age. It is the action surface
+for the same engine:
+
+- **Continue** on a row continues exactly that turn (the row's id is sent, so
+  clicking the second row never resumes the first).
+- **Continue all until done** runs every OPEN turn, oldest first.
+- **Stop after [24] hours** sets the deadline for that continuation.
+- Dashboard continuations always run **detached** — the browser request returns
+  immediately with a pid and the log path shown in the card, because a turn that
+  may run for hours must not be tied to an HTTP request or a tab staying open.
+
+The card is hidden when there is nothing unfinished (or when the dashboard server
+predates this feature), so normal chat is unchanged. Listing and starting are
+gated on the dashboard's `routing.operate` permission: an admin or operator
+account can use it, a viewer gets a 403. The panel talks to
+`GET /api/resume` and `POST /api/resume/run`, which you can also call from your
+own tooling with a dashboard bearer token.
+
+### What it does not do
+
+- It does not resume a turn that finished cleanly — that is closed history.
+- It does not infer a task from prose: pass the id from `resume list` (or use a
+  bare `run` for the newest turn in the current directory).
+- Detaching survives closing the terminal, not a reboot; after a reboot the OPEN
+  snapshot is still there, so `agent-nuvira resume run` picks it up again.
 
 ## CLI Commands
 
@@ -1734,22 +1827,22 @@ agent-nuvira skill run system-check --params "check=disk"
 | `perf-test` | Load testing and performance benchmarking |
 | `a11y-audit` | WCAG 2.1 accessibility auditing and fixes |
 | `search-setup` | Full-text search (Algolia, Meilisearch, Elasticsearch) |
-| `email-setup` | Transactional email templates and delivery |
-| `payment-setup` | Stripe checkout, subscriptions, webhooks |
+| `transactional-email` | Transactional email: provider, templates, delivery, bounces |
+| `payment-gateway` | Stripe checkout, subscriptions, billing, webhooks |
 | `auth-setup` | OAuth2, JWT, RBAC authentication |
-| `monitoring-setup` | Logging, metrics, alerting, health checks |
-| `backup-recovery` | Backup strategy, disaster recovery runbooks |
+| `prometheus` | Metrics, dashboards, alerting, structured logs, health checks |
+| `backup-strategy` | Backups, DR runbooks, point-in-time restore |
 | `schema-design` | Database schema design, ER diagrams, normalization |
 | `i18n-setup` | Internationalization and localization |
 | `graphql-api` | GraphQL API design, resolvers, subscriptions |
 | `git-release` | Changelog, semver, tagging, publishing |
 | `design-system` | Component library, tokens, Storybook |
 | `legal-compliance` | GDPR/CCPA, privacy policy, cookie consent |
-| `cron-setup` | Scheduled tasks and cron jobs |
+| `cron-job` | Scheduled tasks, cron jobs, periodic reports and cleanup |
 | `image-optimize` | Image compression, format conversion, responsive images |
 | `pdf-generate` | PDF generation from HTML/markdown with templates |
 | `cache-setup` | Redis/Memcached caching layers |
-| `queue-setup` | Message queue (RabbitMQ, SQS, Bull) setup |
+| `kafka-queue` | Event streaming (Kafka) and background job queues (BullMQ, SQS, RabbitMQ) |
 | `rate-limit` | API rate limiting and throttling |
 | `cors-setup` | CORS policy configuration |
 | `error-tracking` | Error monitoring (Sentry, Bugsnag) |

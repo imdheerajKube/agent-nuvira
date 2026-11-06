@@ -190,4 +190,3 @@ curl -I https://example.com/static/bundle.js | grep -E "Cache-Control|ETag|Vary"
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('cdn-setup', 'references/guide.md')`.

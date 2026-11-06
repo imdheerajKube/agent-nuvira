@@ -363,6 +363,10 @@ export class ConfigManager {
       config.turn = {
         ...(config.turn || {}),
         ...(userConfig.turn.maxMinutes !== undefined ? { maxMinutes: userConfig.turn.maxMinutes } : {}),
+        ...(userConfig.turn.maxSteps !== undefined ? { maxSteps: userConfig.turn.maxSteps } : {}),
+        ...(userConfig.turn.maxTotalSteps !== undefined
+          ? { maxTotalSteps: userConfig.turn.maxTotalSteps }
+          : {}),
       };
     }
 

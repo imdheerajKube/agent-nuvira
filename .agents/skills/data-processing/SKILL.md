@@ -218,4 +218,3 @@ print(f'Rows removed: {len(original) - len(processed)}')
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('data-processing', 'references/guide.md')`.

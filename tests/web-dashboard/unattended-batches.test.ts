@@ -68,13 +68,26 @@ describe('dashboard per-batch cost & latency (G27)', () => {
       surface: { platform: 'dashboard', channelId: 'test' },
     });
 
-    // Batch 1 — fully measured.
+    // Batch 1 — fully measured: the provider stated the charge, which is the
+    // only bucket that IS the amount owed (see `utils/spend.ts`).
     recordBatchOutcome(job.id, {
       progress: 12,
       progressLine: 'chapter 5/39',
       durationMs: 61_000,
-      costUsd: 0.00412,
-      tokens: 12_345,
+      spend: {
+        tokens: 12_345,
+        calls: 3,
+        reportedCalls: 3,
+        exactUsd: 0.00412,
+        listedCalls: 0,
+        estimatedUsd: 0,
+        unverifiedCalls: 0,
+        unverifiedUsd: 0,
+        unverifiedProviders: [],
+        freeCalls: 0,
+        freeValueUsd: 0,
+        unpricedCalls: 0,
+      },
     });
     // Batch 2 — FAILED and never metered. It must keep its row, and its
     // unmeasured cost must stay undefined rather than becoming 0.
@@ -93,9 +106,8 @@ describe('dashboard per-batch cost & latency (G27)', () => {
     expect(view.batchStats[0]).toMatchObject({
       index: 1,
       progress: 12,
-      costUsd: 0.00412,
-      tokens: 12_345,
       durationMs: 61_000,
+      spend: { exactUsd: 0.00412, tokens: 12_345, reportedCalls: 3 },
     });
 
     // The failed batch keeps its row and its reason…
@@ -103,14 +115,15 @@ describe('dashboard per-batch cost & latency (G27)', () => {
     expect(view.batchStats[1].error).toMatch(/429/);
 
     // …and its UNMEASURED economy is absent, not zero.
+    expect(view.batchStats[1].spend).toBeUndefined();
     expect(view.batchStats[1].costUsd).toBeUndefined();
     expect(view.batchStats[1].tokens).toBeUndefined();
     expect(view.batchStats[1].durationMs).toBeUndefined();
-    expect('costUsd' in view.batchStats[1]).toBe(false);
+    expect('spend' in view.batchStats[1]).toBe(false);
 
     // Totals are the MEASURED sums, not a count of batches.
-    expect(view.costUsd).toBeCloseTo(0.00412, 10);
-    expect(view.tokens).toBe(12_345);
+    expect(view.spend!.exactUsd).toBeCloseTo(0.00412, 10);
+    expect(view.spend!.tokens).toBe(12_345);
     expect(view.batches).toBe(2);
   });
 
@@ -126,6 +139,7 @@ describe('dashboard per-batch cost & latency (G27)', () => {
     const rows = body.jobs[0].batchStats;
     expect(rows).toHaveLength(2);
     // JSON round-trip must not invent a 0 for the unmetered batch.
+    expect(rows[1].spend).toBeUndefined();
     expect(rows[1].costUsd).toBeUndefined();
   });
 

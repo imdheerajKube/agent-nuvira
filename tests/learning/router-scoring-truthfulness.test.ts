@@ -261,4 +261,21 @@ describe('P5/P6 — the pool count is CREDENTIALED, so a shortage claim is check
     expect(typeof countEligibleModels().models).toBe('number');
     expect(countEligibleModels().models).toBeGreaterThan(0);
   });
+
+  it('splits the pool by what each pair can ACTUALLY do right now', () => {
+    // The bug this pins: 436 "eligible" beside 18 verified. One number cannot
+    // answer "is a model available?", so the count now says which basket each
+    // pair is in — and a never-tried row must never be reported as routable.
+    const registry = getModelRegistry();
+    registry.markListed('gemini', ['listed-never-tried']);
+    registry.markListed('groq', ['proven-good']);
+    registry.markVerified('groq', 'proven-good', 'telemetry');
+
+    const count = countEligibleModels();
+    // Baskets are exclusive and cover the whole considered pool.
+    expect(count.routable + count.parked + count.neverTried + count.unavailable).toBe(count.models);
+    expect(count.neverTried).toBeGreaterThan(0);
+    expect(count.routable).toBeGreaterThan(0);
+    expect(count.routable).toBeLessThan(count.models);
+  });
 });

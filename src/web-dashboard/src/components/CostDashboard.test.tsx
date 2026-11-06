@@ -144,6 +144,74 @@ describe('CostDashboard', () => {
     });
   });
 
+  // ── Recent requests: one call, one claim ─────────────────────────────────
+  // The list used to print `req.costUsd` with at most a 🧾 badge for a
+  // provider-reported figure, so a list-priced call on an undeclared tier and a
+  // billed one looked the same. Each row now carries its own one-call spend, and
+  // renders with the marks the CLI and the batch table use.
+  describe('recent requests say which dollar they are', () => {
+    const oneCall = (over: Partial<NonNullable<CostData['recent']>[number]['spend']> = {}) => ({
+      tokens: 1000,
+      calls: 1,
+      reportedCalls: 0,
+      exactUsd: 0,
+      listedCalls: 0,
+      estimatedUsd: 0,
+      unverifiedCalls: 0,
+      unverifiedUsd: 0,
+      unverifiedProviders: [],
+      freeCalls: 0,
+      freeValueUsd: 0,
+      unpricedCalls: 0,
+      ...over,
+    });
+
+    it('prints an exact figure, an undeclared-tier estimate and a free call differently', () => {
+      render(
+        <CostDashboard
+          data={data(
+            cost({
+              recent: [
+                {
+                  provider: 'groq', model: 'llama-3.3-70b', costUsd: 0.002, totalTokens: 1000,
+                  timestamp: Date.now(), measured: true, reported: true,
+                  spend: oneCall({ reportedCalls: 1, exactUsd: 0.002 }),
+                },
+                {
+                  provider: 'nim', model: 'llama-3.1-8b', costUsd: 0, totalTokens: 800,
+                  timestamp: Date.now(), measured: true, reported: false,
+                  spend: oneCall({ unverifiedCalls: 1, unverifiedUsd: 0.0012, unverifiedProviders: ['nim'] }),
+                },
+                {
+                  provider: 'local', model: 'qwen2.5:0.5b', costUsd: 0, totalTokens: 400,
+                  timestamp: Date.now(), measured: true, reported: false,
+                  spend: oneCall({ tokens: 400, freeCalls: 1, freeValueUsd: 0.0004 }),
+                },
+              ],
+            }),
+          )}
+        />,
+      );
+
+      // Provider-stated: the 🧾 badge, and no estimate mark.
+      expect(screen.getByText('🧾 $0.002000')).toBeTruthy();
+      // List price on an undeclared tier: an estimate that may not be spend.
+      expect(screen.getByText('~$0.001200?')).toBeTruthy();
+      // A local runtime is provably free — said as a word, not as a dollar.
+      expect(screen.getByText('free')).toBeTruthy();
+      // The marks are explained, with the one command that makes them exact.
+      expect(screen.getByText(/declare providers\.<id>\.billingTier/)).toBeTruthy();
+    });
+
+    it('falls back to the reported badge alone for a server that sends no per-row spend', () => {
+      render(<CostDashboard data={data(cost())} />);
+      // The legacy rows are unchanged: a reported $0 keeps its badge, a locally
+      // priced row prints its figure with no invented marks.
+      expect(screen.getAllByText(/🧾 \$0\.00/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByTestId(/spend-legend/)).toBeNull();
+    });
+  });
+
   // ── Invoice checks (2026-10-15) ──────────────────────────────────────────
   // Every figure on the page above is an ESTIMATE of money owed. The only way to
   // earn the word "actual" is the provider's own number, entered with

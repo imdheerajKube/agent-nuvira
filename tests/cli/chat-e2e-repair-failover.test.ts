@@ -338,14 +338,21 @@ describe('ChatCommand E2E — stale pin → silent repair → gemini failure →
     const attemptsPerMessage = DIALED_RETRY_DELAYS_MS.length + 1;
     expect(geminiGenerate).toHaveBeenCalledTimes(attemptsPerMessage * 2);
     expect(localGenerate).toHaveBeenCalledTimes(2);
-    // One per message, on the debug channel — the walk still reports every
-    // failure, the default console just no longer narrates it.
-    expect(debugLines('trying the next auto candidate')).toHaveLength(2);
+    // One per message, on the INFO channel: a failover walk that takes minutes
+    // must be visible by default (see `ui/wait-progress`). What must NOT change
+    // is the count — one line per MESSAGE, not one per retry attempt — so the
+    // retry schedule cannot turn into a re-warned loop.
+    const failoverLines = (logger.info as any).mock.calls
+      .map((c: unknown[]) => String(c[0]))
+      .filter((line: string) => line.includes('trying the next auto candidate'));
+    expect(failoverLines).toHaveLength(2);
     expect(
       (logger.warn as any).mock.calls
         .map((c: unknown[]) => String(c[0]))
         .filter((w: string) => w.includes('trying the next auto candidate')),
     ).toHaveLength(0);
+    // Still not narrated on the debug channel as well — one line, one channel.
+    expect(debugLines('trying the next auto candidate')).toHaveLength(0);
 
     // The silent repair in message 2 still used the verified models.
     // Message 2's FIRST gemini attempt is the call right after message 1's

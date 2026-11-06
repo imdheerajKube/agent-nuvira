@@ -45,6 +45,13 @@
  */
 
 import { envBuff, resolveNuviraHome } from '../config/paths.js';
+import {
+  addSpend,
+  formatSpendCell,
+  zeroSpend,
+  SPEND_MARKS_LEGEND,
+  type SpendBreakdown,
+} from '../utils/spend.js';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -151,12 +158,21 @@ export interface UnattendedJob {
   /** Report progress to the user as the job runs (off for silent builds). */
   notify: boolean;
   /**
-   * Total spend across the job's batches (USD), summed from MEASURED windows.
-   * Undefined until a surface reports economy data — never defaulted to 0, so
-   * "free" and "not measured" stay distinguishable in a report.
+   * Total spend across the job's batches, WITH its evidence (see `utils/spend.ts`).
+   * Undefined until a surface reports economy data — never defaulted to a zero
+   * breakdown, so "not measured" and "measured, and it really was free" stay
+   * distinguishable in a report.
+   */
+  spend?: SpendBreakdown;
+  /**
+   * LEGACY (jobs written before `spend`): the evidence-backed bill only.
+   *
+   * Kept for stored history and read by `legacySpend`, never written again. It
+   * cannot say whether any of the calls were un-priced or free, which is exactly
+   * why it was replaced — a run that looked `$0.00000` here may have cost money.
    */
   costUsd?: number;
-  /** Total tokens across the job's batches (measured windows). */
+  /** LEGACY: tokens for the job before `spend` existed. */
   tokens?: number;
   /** Per-batch economy and duration, oldest first (bounded to MAX_BATCH_STATS). */
   batchStats?: BatchStat[];
@@ -185,9 +201,11 @@ export interface BatchStat {
   progress: number;
   /** Human-readable progress line after the batch. */
   progressLine?: string;
-  /** Measured spend for this batch's window (USD). */
+  /** Measured spend for this batch's window, with its evidence. */
+  spend?: SpendBreakdown;
+  /** LEGACY: evidence-backed bill for a batch recorded before `spend` existed. */
   costUsd?: number;
-  /** Measured tokens for this batch's window. */
+  /** LEGACY: tokens for a batch recorded before `spend` existed. */
   tokens?: number;
   /** Wall-clock duration of the batch. */
   durationMs?: number;
@@ -214,10 +232,14 @@ export interface BatchOutcome {
   error?: string;
   /** Wall-clock duration of the batch in ms (measured by the surface). */
   durationMs?: number;
-  /** Spend during the batch window (USD), measured from the cost ledger. */
-  costUsd?: number;
-  /** Tokens during the batch window, measured from the cost ledger. */
-  tokens?: number;
+  /**
+   * Spend during the batch window, measured from the cost ledger WITH its evidence.
+   *
+   * An unqualified `costUsd` field used to sit here, and a batch whose account had
+   * no declared billing tier contributed 0 to it — so a paid run displayed as
+   * `$0.00000` per batch, the same defect as the turn line's `$0.000000`.
+   */
+  spend?: SpendBreakdown;
 }
 
 /** Everything needed to schedule ongoing work. */
@@ -534,16 +556,17 @@ export function recordBatchOutcome(
   // counted only the batches that reached the success path would understate
   // the bill of exactly the runs most likely to be expensive. `progress` here
   // is the batch's MEASURED completion (a finished batch measures 100).
-  if (outcome.costUsd !== undefined) job.costUsd = round6((job.costUsd ?? 0) + outcome.costUsd);
-  if (outcome.tokens !== undefined) job.tokens = (job.tokens ?? 0) + outcome.tokens;
+  // Accumulated as BUCKETS, not as one number: `exactUsd + estimatedUsd` is the
+  // bill, but a run whose account tier is undeclared spent real money that lands in
+  // `unverifiedUsd`, and only the breakdown can keep that visible through the sum.
+  if (outcome.spend) job.spend = addSpend(job.spend ?? zeroSpend(), outcome.spend);
   job.batchStats = [
     ...(job.batchStats ?? []),
     {
       index: job.batches,
       progress: typeof outcome.progress === 'number' ? outcome.progress : job.progress,
       ...(outcome.progressLine ? { progressLine: outcome.progressLine } : {}),
-      ...(outcome.costUsd !== undefined ? { costUsd: outcome.costUsd } : {}),
-      ...(outcome.tokens !== undefined ? { tokens: outcome.tokens } : {}),
+      ...(outcome.spend ? { spend: outcome.spend } : {}),
       ...(outcome.durationMs !== undefined ? { durationMs: outcome.durationMs } : {}),
       ...(outcome.error ? { error: outcome.error.slice(0, 200) } : {}),
     },
@@ -642,9 +665,28 @@ export function jobPercent(job: UnattendedJob): number {
   return Math.max(0, Math.min(100, Math.round(job.progress)));
 }
 
-/** USD at micro-cent precision — the same rounding the cost ledger uses. */
-function round6(value: number): number {
-  return Math.round(value * 100000) / 100000;
+/**
+ * A CONSERVATIVE breakdown for a batch recorded BEFORE `spend` existed.
+ *
+ * The only surviving fact is one billed figure, and it cannot say whether that was
+ * provider-reported or list-priced — so it is labelled an ESTIMATE (`~`), which
+ * under-claims rather than over-claims. A legacy zero is left out entirely: an old
+ * `$0.00000` may mean "free" or "never priced", and `—` is the honest answer when
+ * the two cannot be told apart.
+ */
+function legacySpend(
+  costUsd: number | undefined,
+  tokens: number | undefined,
+): SpendBreakdown | undefined {
+  if (costUsd === undefined && tokens === undefined) return undefined;
+  const spend = zeroSpend();
+  spend.tokens = tokens ?? 0;
+  spend.calls = 1;
+  if (costUsd !== undefined && costUsd > 0) {
+    spend.listedCalls = 1;
+    spend.estimatedUsd = costUsd;
+  }
+  return spend;
 }
 
 /** A compact human duration (`850ms`, `12.4s`, `3m 07s`, `1h 12m`). */
@@ -678,20 +720,27 @@ export function formatBatchReport(job: UnattendedJob): string {
   const stats = job.batchStats ?? [];
   if (stats.length === 0) return '';
 
+  // The marks used by any cell (or the total) drive the legend: a reader sees
+  // `~`/`?` explained only when one actually appears.
+  const marks = new Set<string>();
   const rows: string[] = [];
   for (const s of stats) {
-    const tokens = s.tokens === undefined ? '—' : s.tokens.toLocaleString('en-US');
-    const cost = s.costUsd === undefined ? '—' : `$${s.costUsd.toFixed(5)}`;
+    const spend = s.spend ?? legacySpend(s.costUsd, s.tokens);
+    const tokens = spend === undefined ? '—' : spend.tokens.toLocaleString('en-US');
+    const cell = formatSpendCell(spend);
+    cell.marks.forEach((m) => marks.add(m));
     const time = s.durationMs === undefined ? '—' : formatDuration(s.durationMs);
     const note = s.error ? `  ✗ ${s.error.replace(/\s+/g, ' ').slice(0, 60)}` : '';
     rows.push(
       `   ${String(s.index).padStart(5)}  ${`${Math.round(s.progress)}%`.padStart(6)}  ` +
-        `${tokens.padStart(11)}  ${cost.padStart(10)}  ${time.padStart(8)}${note}`,
+        `${tokens.padStart(11)}  ${cell.text.padStart(10)}  ${time.padStart(8)}${note}`,
     );
   }
 
-  const totalTokens = job.tokens;
-  const totalCost = job.costUsd;
+  const totalSpend = job.spend ?? legacySpend(job.costUsd, job.tokens);
+  const totalCell = formatSpendCell(totalSpend);
+  totalCell.marks.forEach((m) => marks.add(m));
+  const totalTokens = totalSpend?.tokens;
   const timedRows = stats.filter((s) => s.durationMs !== undefined);
   const totalMs = timedRows.reduce((sum, s) => sum + (s.durationMs ?? 0), 0);
   const averageMs = timedRows.length > 0 ? totalMs / timedRows.length : undefined;
@@ -699,7 +748,7 @@ export function formatBatchReport(job: UnattendedJob): string {
   const totals =
     `   ${'total'.padStart(5)}  ${`${jobPercent(job)}%`.padStart(6)}  ` +
     `${(totalTokens === undefined ? '—' : totalTokens.toLocaleString('en-US')).padStart(11)}  ` +
-    `${(totalCost === undefined ? '—' : `$${totalCost.toFixed(5)}`).padStart(10)}  ` +
+    `${totalCell.text.padStart(10)}  ` +
     `${(averageMs === undefined ? '—' : `~${formatDuration(averageMs)} avg`).padStart(8)}`;
 
   return [
@@ -708,6 +757,7 @@ export function formatBatchReport(job: UnattendedJob): string {
     `   ${'batch'.padStart(5)}  ${'done'.padStart(6)}  ${'tokens'.padStart(11)}  ${'cost'.padStart(10)}  ${'time'.padStart(8)}`,
     ...rows,
     totals,
+    ...(marks.size > 0 ? [`   ${SPEND_MARKS_LEGEND}`] : []),
   ].join('\n');
 }
 

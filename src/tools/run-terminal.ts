@@ -183,6 +183,41 @@ export function resolveWaitMs(
   const base = interactive ? INTERACTIVE_DEFAULT_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
   return Math.min(MAX_WAIT_MS, Math.max(1000, Math.floor(explicitMs ?? assessed?.budgetMs ?? base)));
 }
+
+/** Shear left for the deliverable when the wait is clamped, as a share of the turn. */
+const BUDGET_RESERVE_RATIO = 0.2;
+/** ...but never less than a minute, so a short turn still has time to write. */
+const BUDGET_MIN_RESERVE_MS = 60_000;
+/** A clamped wait below this is not a wait, it is a hand-off — say so immediately. */
+const BUDGET_MIN_WAIT_MS = 5_000;
+
+/**
+ * Clamp a tool wait to what the TURN has left, reserving time to close.
+ *
+ * Measured 2026-11-05 (audit cell of the head-to-head): a turn with a 7-minute
+ * wall clock called `pytest` on a 13.5-minute suite with
+ * `timeout_ms: 900000`, blocked inside that one call for the whole budget, and
+ * was killed holding a skeleton file and zero findings. The suite was not wrong
+ * to run — waiting for it to the exclusion of the deliverable was.
+ *
+ * So the WAIT is capped, never the work: `execCommand` hands a run that outlives
+ * its wait to monitoring and leaves it running, which means the clamp costs a
+ * `poll`, not the command. The reserve is the same 20 % the loop's closing
+ * window uses, so the model gets control back with time to write — which is the
+ * whole point: a finished assessment with one open check beats an unfinished one
+ * with a completed check.
+ *
+ * No wall clock (`undefined`/`Infinity`) leaves the caller's choice untouched.
+ */
+export function clampWaitToBudget(waitMs: number, remainingMs: number | undefined): number {
+  if (remainingMs === undefined || !Number.isFinite(remainingMs)) return waitMs;
+  const reserve = Math.min(
+    remainingMs / 2,
+    Math.max(BUDGET_MIN_RESERVE_MS, Math.round(remainingMs * BUDGET_RESERVE_RATIO)),
+  );
+  const allowed = Math.max(BUDGET_MIN_WAIT_MS, Math.floor(remainingMs - reserve));
+  return Math.min(waitMs, allowed);
+}
 /**
  * P7 — how many times the SAME command (at the SAME timeout) may fail before the
  * next call is refused.
@@ -1552,7 +1587,17 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
   // Reaching the budget now hands the command to monitoring rather than killing
   // it, so an under-estimate costs a poll, not the work.
   const assessed = assessCommandTime(command);
-  const waitMs = resolveWaitMs(command, args.timeout_ms, ctx.interactive);
+  const requestedWaitMs = resolveWaitMs(command, args.timeout_ms, ctx.interactive);
+  // The turn's clock outranks the command's class: a 900s suite wait inside a
+  // 420s budget is not patience, it is the deliverable never being written.
+  const waitMs = clampWaitToBudget(requestedWaitMs, ctx.remainingBudgetMs?.());
+  const budgetNote =
+    waitMs < requestedWaitMs
+      ? `\n⏳ The wait was clamped from ${Math.round(requestedWaitMs / 1000)}s to ` +
+        `${Math.round(waitMs / 1000)}s to leave time in this turn for the deliverable. ` +
+        `The command is NOT killed — follow it with action:'poll' and write up what you ` +
+        `already know while it runs.`
+      : '';
   // Reported so the model knows the hand-off is WATCHED: a run that goes silent
   // and idle will be identified as hung and stopped, not left forever.
   const reapAfterMs = hangReapMs();
@@ -1617,6 +1662,7 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
       `${RUN_TERMINAL_INCOMPLETE_PREFIX}` +
       waitBudgetGuidance(command, outcome.id, waitMs, assessed, outcome.bytes, outcome.quietMs, reapAfterMs) +
       `\nMonitored as run_terminal[${outcome.id}].\n` +
+      budgetNote +
       longRunDiagnosis(outcome.bytes, outcome.quietMs) +
       guiGuard.note
     );

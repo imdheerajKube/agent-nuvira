@@ -157,11 +157,15 @@ describe('buildSkillCatalogHint — the full list, when chosen', () => {
 
 // ─── mode resolution ────────────────────────────────────────────────────────
 
-describe('skill-hint mode — pointer by default, catalog is OPT-IN', () => {
-  it('resolves to `pointer` by default, `catalog` from env/config, `off` on request', async () => {
+describe('skill-hint mode — bounded index by default, catalog is OPT-IN', () => {
+  it('resolves to `index` by default, `catalog` from env/config, `off` on request', async () => {
     const { resolveSkillHintMode, parseSkillHintMode, DEFAULT_SKILL_HINT_MODE } = await loadHint();
-    expect(DEFAULT_SKILL_HINT_MODE).toBe('pointer');
-    expect(resolveSkillHintMode()).toBe('pointer');
+    expect(DEFAULT_SKILL_HINT_MODE).toBe('index');
+    expect(resolveSkillHintMode()).toBe('index');
+    // The old pointer is still reachable (opt-out), and `index` parses.  
+    expect(parseSkillHintMode('pointer')).toBe('pointer');
+    expect(parseSkillHintMode('index')).toBe('index');
+    expect(parseSkillHintMode('triggers')).toBe('index');
 
     process.env.NUVIRA_SKILL_CATALOG = 'catalog';
     expect(resolveSkillHintMode()).toBe('catalog');
@@ -185,16 +189,22 @@ describe('skill-hint mode — pointer by default, catalog is OPT-IN', () => {
 // ─── buildConfiguredSkillHint — the one entry point ─────────────────────────
 
 describe('buildConfiguredSkillHint — the full catalog is OPT-IN, never the default', () => {
-  it('in the DEFAULT (pointer) mode the hint stays small and is not the catalog', async () => {
+  it('in the DEFAULT (index) mode the hint is a bounded name+trigger index, not the catalog', async () => {
     // The regression this whole gate exists for: 3.3.11 appended the catalog
     // (24,543 chars) to EVERY turn, taking the chat system prompt from
-    // 7,653 → 32,809 chars. The default must stay small.
+    // 7,653 → 32,809 chars. The index must stay far below that while still
+    // naming every skill, which the old pointer did not.
     installHubSkill('zorbafier', 'Zorbafies the widget frobnicator');
     const { buildConfiguredSkillHint } = await loadHint();
     const hint = await buildConfiguredSkillHint();
     expect(hint).not.toContain('## Available skills');
     expect(hint).toContain('## Skills');
-    expect(hint.length).toBeLessThan(2000);
+    // The skill is PRESENT and carries its routing text. With a hermetic HOME but
+    // the repo cwd, the bundled catalog is in scope too — hence the 13K ceiling
+    // (measured ~10.9K) rather than the old pointer's 2K.
+    expect(hint).toContain('zorbafier');
+    expect(hint).toContain('Zorbafies the widget frobnicator');
+    expect(hint.length).toBeLessThan(13_000);
   });
 
   it('in `catalog` mode injects the full list (and `off` injects nothing)', async () => {

@@ -38,6 +38,14 @@ import { getCliName } from '../cli/commands.js';
 // `process.env` alone therefore meant "I saved the key in the dashboard, ran
 // the skill, and it still says the var is missing" until the agent restarted.
 import { isEnvVarPersisted, getEnvVarValue } from '../skills/secret-capture.js';
+import { rewriteSkillRootPlaceholders } from '../learning/skill-package.js';
+import {
+  describeObligations,
+  obligationsEnforced,
+  recordSkillLoad,
+} from '../learning/skill-obligations.js';
+import { recordSkillUse } from '../learning/skill-outcomes.js';
+import { readSkillPolicy, skillPolicyAllows } from '../learning/hub-skill-catalog.js';
 
 /** The tool's args (zod-validated in the registry). */
 export interface SkillToolArgs {
@@ -99,6 +107,14 @@ interface ResolvedSkill {
   skill?: Skill;
   /** Hub SKILL.md body (kind === 'hub'). */
   body?: string;
+  /** P1/P3 — absolute skill directory (hub skills only). */
+  dir?: string;
+  /** P1 — files that shipped with the skill, relative to `dir`. */
+  files?: string[];
+  /** P3 — 'nuvira' for our roots, 'external' for a read-only `.claude` root. */
+  origin?: string;
+  /** P6 — declared obligations (binding once loaded). */
+  obligations?: import('../learning/skill-obligations.js').SkillObligations;
   /** P6c — hub frontmatter depth (surfaced as setup hints, values never read). */
   platforms?: string[];
   requiresToolsets?: string[];
@@ -108,11 +124,73 @@ interface ResolvedSkill {
 }
 
 /**
- * Resolve a skill by name/id from both sources. Compiled store first (its id
- * is the deterministic seed id), then hub catalog by id or name. Returns null
- * when nothing matches.
+ * How much SUBSTANCE a record carries. It decides exactly one thing: when the
+ * same skill exists twice — a compiled plan in the store and a SKILL.md on disk
+ * — which record the model is given.
+ *
+ * MEASURED (2026-11-03): the store record ALWAYS won, so loading `prometheus`
+ * returned a 4-line plan while `.agents/skills/prometheus/SKILL.md` (226 lines
+ * of PromQL alert rules, scrape configs and SLO recording rules) was never
+ * read, and `api-design`'s `scripts/validate_openapi.py` was unreachable. A
+ * deeper document that nobody loads is not a skill, it is a file.
  */
-export async function resolveSkill(name: string): Promise<ResolvedSkill | null> {
+function recordDepth(s: ResolvedSkill): number {
+  if (s.kind === 'hub') return (s.body?.length ?? 0) + (s.files?.length ?? 0) * 400;
+  const plan = s.skill;
+  if (!plan) return 0;
+  return plan.steps.reduce((n, st) => n + st.description.length, 0) + plan.parameters.length * 60 + 200;
+}
+
+/** The hub SKILL.md record for a name — exact id/name first, then a substring match. */
+async function findHubSkill(
+  name: string,
+  fuzzy: boolean,
+  roots: { projectRoot?: string; home?: string } = {},
+): Promise<ResolvedSkill | null> {
+  try {
+    const { listMatchableHubSkills } = await import('../learning/hub-skill-catalog.js');
+    // The roots are a caller's, not the process's, when one is supplied: the
+    // pinned-skill path resolves against the TURN's workspace (which on the
+    // dashboard is the attached project, not the server's cwd).
+    const catalog = listMatchableHubSkills(undefined, roots.projectRoot, roots.home);
+    const match =
+      catalog.find((s) => s.id === name || s.name === name) ??
+      (fuzzy ? catalog.find((s) => s.name.toLowerCase().includes(name.toLowerCase())) : undefined);
+    if (!match) return null;
+    const { listSkillFiles } = await import('../learning/skill-package.js');
+    return {
+      kind: 'hub',
+      name: match.name,
+      description: match.description,
+      id: match.id,
+      body: match.body,
+      dir: match.dir,
+      files: listSkillFiles(match.dir),
+      origin: match.origin,
+      obligations: match.obligations,
+      platforms: match.platforms,
+      requiresToolsets: match.requiresToolsets,
+      fallbackForToolsets: match.fallbackForToolsets,
+      config: match.config,
+      requiredEnvVars: match.requiredEnvVars,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolve a skill by name/id from both sources. The compiled store is consulted
+ * for the deterministic seed id; the hub catalog for the on-disk SKILL.md. When
+ * BOTH carry the name, the DEEPER record wins (see {@link recordDepth}) — but
+ * the hub copy always supplies the skill directory, its files and its declared
+ * obligations, because a compiled record has no concept of any of those.
+ * Returns null when nothing matches.
+ */
+export async function resolveSkill(
+  name: string,
+  roots: { projectRoot?: string; home?: string } = {},
+): Promise<ResolvedSkill | null> {
   const { getSkillStore } = await import('../learning/skill-store.js');
 
   // 1. Compiled store: exact id, then name search.
@@ -132,72 +210,75 @@ export async function resolveSkill(name: string): Promise<ResolvedSkill | null> 
   } catch {
     compiled = null;
   }
-  if (compiled) {
-    return {
-      kind: 'compiled',
-      name: compiled.name,
-      description: compiled.description,
-      id: compiled.id,
-      skill: compiled,
-    };
-  }
+  const compiledResolved: ResolvedSkill | null = compiled
+    ? {
+        kind: 'compiled',
+        name: compiled.name,
+        description: compiled.description,
+        id: compiled.id,
+        skill: compiled,
+      }
+    : null;
 
-  // 2. Hub catalog: SKILL.md under <project>/.agents/skills/ or ~/.nuvira/skills/.
-  //    P6c — the MATCHABLE catalog applies the platform + toolset gates, so a
-  //    skill for another OS (or one whose required toolset is off) is never
-  //    injected. The env-var/config declarations ride along for setup hints.
-  try {
-    const { listMatchableHubSkills } = await import('../learning/hub-skill-catalog.js');
-    const catalog = listMatchableHubSkills();
-    const match =
-      catalog.find((s) => s.id === name || s.name === name) ??
-      catalog.find((s) => s.name.toLowerCase().includes(name.toLowerCase()));
-    if (match) {
-      return {
-        kind: 'hub',
-        name: match.name,
-        description: match.description,
-        id: match.id,
-        body: match.body,
-        platforms: match.platforms,
-        requiresToolsets: match.requiresToolsets,
-        fallbackForToolsets: match.fallbackForToolsets,
-        config: match.config,
-        requiredEnvVars: match.requiredEnvVars,
-      };
-    }
-  } catch {
-    // best-effort — fall through to the listing path
-  }
+  // 2. Hub catalog: SKILL.md under <project>/.agents/skills/, ~/.nuvira/skills/,
+  //    or a read-only `.claude/skills`. Exact match by id/name; the fuzzy
+  //    fallback only applies when no compiled record answered.
+  const hubResolved = await findHubSkill(compiled?.name ?? name, compiledResolved === null, roots);
 
-  return null;
+  if (!compiledResolved && !hubResolved) return null;
+  if (!compiledResolved) return hubResolved;
+  if (!hubResolved) return compiledResolved;
+
+  // Both carry this skill. The deeper one is the skill; the hub copy also owns
+  // the DIRECTORY (references, scripts, obligations) — always take those from
+  // disk, whichever record wins.
+  const winner = recordDepth(hubResolved) > recordDepth(compiledResolved) ? hubResolved : compiledResolved;
+  return {
+    ...winner,
+    ...(hubResolved.dir ? { dir: hubResolved.dir } : {}),
+    ...(hubResolved.files && hubResolved.files.length > 0 ? { files: hubResolved.files } : {}),
+    ...(hubResolved.obligations ? { obligations: hubResolved.obligations } : {}),
+  };
 }
 
-/** Every known skill, both sources (deduped by id — compiled wins the name). */
+/**
+ * Every known skill — ONE entry per name.
+ *
+ * Deduping by id was not enough. A bundled skill carries two ids (`skill-prometheus`
+ * in the store, `prometheus` in `.agents/skills`), so the model was offered 309
+ * entries for 156 concepts: every bundled skill twice, with two different
+ * descriptions competing for the same trigger. Depth picks which entry
+ * represents the concept — the same rule {@link resolveSkill} loads by, so the
+ * list and the load can never disagree about what a skill IS.
+ */
 export async function listAllSkills(): Promise<ResolvedSkill[]> {
-  const out: ResolvedSkill[] = [];
-  const seen = new Set<string>();
+  const byName = new Map<string, ResolvedSkill>();
+  const consider = (candidate: ResolvedSkill) => {
+    const prev = byName.get(candidate.name);
+    if (!prev || recordDepth(candidate) > recordDepth(prev)) byName.set(candidate.name, candidate);
+  };
   try {
     const { getSkillStore } = await import('../learning/skill-store.js');
-    const compiled = getSkillStore().getAll();
-    for (const s of compiled) {
-      seen.add(s.id);
-      out.push({ kind: 'compiled', name: s.name, description: s.description, id: s.id, skill: s });
+    for (const s of getSkillStore().getAll()) {
+      consider({ kind: 'compiled', name: s.name, description: s.description, id: s.id, skill: s });
     }
   } catch {
     /* best-effort */
   }
   try {
     const { listMatchableHubSkills } = await import('../learning/hub-skill-catalog.js');
+    const { listSkillFiles } = await import('../learning/skill-package.js');
     for (const s of listMatchableHubSkills()) {
-      if (seen.has(s.id)) continue;
-      seen.add(s.id);
-      out.push({
+      consider({
         kind: 'hub',
         name: s.name,
         description: s.description,
         id: s.id,
         body: s.body,
+        dir: s.dir,
+        files: listSkillFiles(s.dir),
+        origin: s.origin,
+        obligations: s.obligations,
         platforms: s.platforms,
         requiresToolsets: s.requiresToolsets,
         fallbackForToolsets: s.fallbackForToolsets,
@@ -208,17 +289,20 @@ export async function listAllSkills(): Promise<ResolvedSkill[]> {
   } catch {
     /* best-effort */
   }
-  return out;
+  return [...byName.values()];
 }
 
-/** Is the skill disabled via config `skills.disabled[]`? (match-gate parity). */
+/**
+ * Is the skill excluded by the effective policy? (match-gate parity.)
+ *
+ * `readSkillPolicy` merges the machine-wide `skills.disabled[]` with the
+ * PROJECT's own disabled/allowed lists, so a repo that says "we use api-design"
+ * (or "we must not") is honoured by the load path, not only by the index.
+ */
 function isSkillDisabled(id: string, name: string, ctx: ToolContext): boolean {
   try {
-    const cm = ctx.configManager;
-    const cfg = cm?.getAll?.();
-    const disabled = cfg?.skills?.disabled;
-    if (!Array.isArray(disabled)) return false;
-    return disabled.includes(id) || disabled.includes(name);
+    const policy = readSkillPolicy(ctx.configManager, ctx.cwd || process.cwd());
+    return !skillPolicyAllows(id, policy) || !skillPolicyAllows(name, policy);
   } catch {
     return false;
   }
@@ -269,6 +353,23 @@ function compiledMethodology(skill: Skill, params: Record<string, string>): stri
  */
 function hubMethodology(resolved: ResolvedSkill): string {
   const hints: string[] = [];
+  // P1 — a multi-file skill is only usable if the model knows its files exist
+  // and how to reach them. The old output was the SKILL.md body alone, so a
+  // body saying "read visual-companion.md in this directory" was unfollowable.
+  const files = resolved.files ?? [];
+  const fileNote =
+    resolved.dir && files.length > 1
+      ? [
+          `   Skill root: ${resolved.dir}`,
+          `   Files (${files.length}): ${files.slice(0, 12).join(', ')}${files.length > 12 ? ', …' : ''}`,
+          '   Read any of them with read_file (path = skill root + file) — they are part of this skill.',
+        ]
+      : resolved.dir
+        ? [`   Skill root: ${resolved.dir}`]
+        : [];
+  if (resolved.origin === 'external') {
+    hints.push('   Source: an external `.claude/skills` root (read-only — nuvira never writes there)');
+  }
   if (resolved.requiredEnvVars && resolved.requiredEnvVars.length > 0) {
     hints.push(`   Requires env vars (set before running): ${resolved.requiredEnvVars.join(', ')}`);
   }
@@ -281,14 +382,26 @@ function hubMethodology(resolved: ResolvedSkill): string {
   if (resolved.fallbackForToolsets && resolved.fallbackForToolsets.length > 0) {
     hints.push(`   Fallback for (active when absent): ${resolved.fallbackForToolsets.join(', ')}`);
   }
+  // P6 — obligations are printed as REQUIREMENTS, not advice: the finish gate
+  // refuses an unqualified claim while one is unmet, so the model must know now.
+  const suffix = obligationsEnforced() ? '(enforced before finish)' : '(declared — report any gap)';
+  for (const line of describeObligations(resolved.obligations)) {
+    hints.push(`   ⛓️  ${line} ${suffix}`);
+  }
+  // P1 — resolve `${CLAUDE_PLUGIN_ROOT}` / `${SKILL_ROOT}` to the INSTALLED
+  // directory at load time. Substituting on read (not at install) keeps the
+  // installed tree byte-identical to the source, so the tree hash still means
+  // something.
+  const body = resolved.body ?? '(no body)';
   return [
     `🧠 ${resolved.name} — ${resolved.description}`,
     `   (hub skill — SKILL.md methodology)`,
+    ...fileNote,
     ...hints,
     '',
     `   ${SKILL_PRECEDENCE_NOTE}`,
     '',
-    resolved.body ?? '(no body)',
+    resolved.dir ? rewriteSkillRootPlaceholders(body, resolved.dir) : body,
   ].join('\n');
 }
 
@@ -713,7 +826,12 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
         return `No skills found. Install one with \`${getCliName()} skills install <name>\` — or ask the agent to run tasks with memory to compile one.`;
       }
       const list = available
-        .map((s) => `  • ${s.name} (${s.id}) — ${s.description}`)
+        .map((s) => {
+          // P1 — say how many files shipped, so a single-file install of a
+          // multi-file skill is visible instead of failing later.
+          const pkg = s.files && s.files.length > 1 ? ` [${s.files.length} files]` : '';
+          return `  • ${s.name} (${s.id})${pkg} — ${s.description}`;
+        })
         .join('\n');
       return `Skill not found: '${name}'. Available skills:\n${list}`;
     }
@@ -731,8 +849,37 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
       } catch {
         /* best-effort */
       }
-      return compiledMethodology(resolved.skill, params);
+      const text = compiledMethodology(resolved.skill, params);
+      // Every load is recorded — the obligations store is also how the finish
+      // gate learns WHICH skills this turn used, and the outcome ledger ranks
+      // by that record. Binding only happens when obligations were declared.
+      recordSkillLoad({
+        id: resolved.id,
+        name: resolved.name,
+        ...(resolved.dir ? { dir: resolved.dir } : {}),
+        ...(resolved.obligations ? { obligations: resolved.obligations } : {}),
+      });
+      recordSkillUse(resolved.name);
+      if (resolved.obligations) {
+        return [
+          obligationsEnforced()
+            ? '⛓️ This skill\'s obligations are ENFORCED before finish:'
+            : '⛓️ This skill declares what "used" means — close these and report any gap (enforcement is off):',
+          ...describeObligations(resolved.obligations).map((l) => `  - ${l}`),
+          '',
+          text,
+        ].join('\n');
+      }
+      return text;
     }
+    // P6 — a LOADED skill's obligations become binding for this session.
+    recordSkillLoad({
+      id: resolved.id,
+      name: resolved.name,
+      ...(resolved.dir ? { dir: resolved.dir } : {}),
+      ...(resolved.obligations ? { obligations: resolved.obligations } : {}),
+    });
+    recordSkillUse(resolved.name);
     return hubMethodology(resolved);
   }
 
@@ -742,7 +889,11 @@ export async function runSkillTool(args: SkillToolArgs, ctx: ToolContext): Promi
     return `No skills available. Install one with \`${getCliName()} skills install <name>\` (hub), or run tasks with memory to compile one.`;
   }
   const list = available
-    .map((s) => `  • ${s.name} (${s.id}) — ${s.description}`)
+    .map((s) => {
+      const pkg = s.files && s.files.length > 1 ? ` [${s.files.length} files]` : '';
+      const ext = s.origin === 'external' ? ' <external>' : '';
+      return `  • ${s.name} (${s.id})${pkg}${ext} — ${s.description}`;
+    })
     .join('\n');
   return `Available skills (${available.length}):\n${list}\n\nLoad one with the skill tool (skill: "<name>").`;
 }

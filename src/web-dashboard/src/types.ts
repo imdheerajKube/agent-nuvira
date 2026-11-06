@@ -1,3 +1,8 @@
+import type { SpendBreakdown } from '../../utils/spend.js';
+
+/** One window's spend, split by evidence — shape owned by `utils/spend.ts`. */
+export type { SpendBreakdown };
+
 // ─── Model Health Types ─────────────────────────────────────────────────────
 
 export type ModelStatus = 'available' | 'limited' | 'unavailable';
@@ -352,6 +357,11 @@ export interface CostData {
     measured: boolean;
     /** True when the provider reported the exact cost for this call. */
     reported: boolean;
+    /**
+     * This call as a one-call window, so the row can say WHICH dollar it is.
+     * Absent on an older server — `reported` is then the only provenance there is.
+     */
+    spend?: SpendBreakdown;
   }>;
 }
 
@@ -457,6 +467,25 @@ export interface HistoryData {
   recent: HistorySession[];
 }
 
+/** One unfinished (OPEN) turn the Resume panel can continue. */
+export interface ResumableRun {
+  id: string;
+  goal: string;
+  cwd: string;
+  savedAt: number;
+  steps: number;
+  mutatedPaths: number;
+  preview: string;
+}
+
+/** The result of starting a continuation process. */
+export interface ResumeStartResult {
+  ok: boolean;
+  pid?: number;
+  log?: string;
+  error?: string;
+}
+
 export interface BenchmarkRun {
   id: string;
   provider: string;
@@ -498,7 +527,8 @@ export interface EvalRun {
     dependencyInstallRate: number;
     recoveryRate: number;
     avgCompositeScore: number;
-    totalCostUsd: number;
+    /** Optional: an older run recorded no cost. Absence is NOT a free run. */
+    totalCostUsd?: number;
   };
 }
 
@@ -899,8 +929,15 @@ export interface RequestsInsights {
       p95?: number;
       p99?: number;
     };
-    /** Sum of recorded call costs (USD) — present only when callers logged it. */
+    /**
+     * Sum of recorded call costs (USD) — present only when callers logged it.
+     * What this number IS depends on `costBasis`: real wire tokens charged at a
+     * list price (`measured`) or a length-based ESTIMATE (`estimated`). The panel
+     * must never print the second as if it were the first.
+     */
     costUsd?: number;
+    /** Evidence behind `costUsd`, server-derived. Absent = no cost evidence. */
+    costBasis?: 'measured' | 'estimated';
     costCalls: number;
     /** Recent correlation ids for traceability (max 5). */
     callIds: string[];
@@ -1052,6 +1089,11 @@ export interface TurnReport {
   verifiedPaths?: string[];
   /** Changed paths NO check exercised this turn — the outstanding debt by path. */
   unverifiedPaths?: string[];
+  /**
+   * The turn's spend, bucket by bucket (see `utils/spend.ts`). ABSENT when the
+   * ledger recorded nothing — absence is "not metered", never "free".
+   */
+  cost?: SpendBreakdown;
   verification: TurnVerification;
   /** The run's honesty flags, carried so the report can never hide one. */
   flags: {
@@ -1580,7 +1622,9 @@ export interface UnattendedBatchView {
   index: number;
   progress: number;
   progressLine?: string;
-  /** Measured spend for this batch's window (USD). Undefined = not metered. */
+  /** The batch's spend with its evidence; undefined when nothing was metered. */
+  spend?: SpendBreakdown;
+  /** LEGACY: rows written before `spend` existed (billed figure, no provenance). */
   costUsd?: number;
   tokens?: number;
   durationMs?: number;
@@ -1596,6 +1640,8 @@ export interface UnattendedJobView {
   progress: number;
   progressLine?: string;
   batches: number;
+  spend?: SpendBreakdown;
+  /** LEGACY: jobs written before `spend` existed. */
   costUsd?: number;
   tokens?: number;
   stopReason?: string;
@@ -1836,6 +1882,22 @@ export interface HubSkill {
   enabled: boolean;
   /** P6e — provenance: true for first-party bundled skills (🧠 badge). */
   bundled?: boolean;
+  /** P4 — absolute skill directory (hub skills only). */
+  dir?: string;
+  /** P4 — files that shipped with the skill (SKILL.md + references/scripts/data). */
+  fileCount?: number;
+  /** P4 — total bytes installed. */
+  bytes?: number;
+  /** P4 — who owns the root: our own dirs, or a read-only `.claude/skills` root. */
+  owner?: 'nuvira' | 'external';
+  /** P4 — 'project' or 'home' scope. */
+  rootScope?: 'project' | 'home';
+  /** P4 — the derived index line the model actually reads. */
+  trigger?: string;
+  /** P4 — description-lint findings (empty = routable). */
+  lint?: string[];
+  /** P4 — 'package' (multi-file) or 'single-file' (SKILL.md only). */
+  installKind?: 'package' | 'single-file';
 }
 
 /**

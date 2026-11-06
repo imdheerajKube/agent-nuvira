@@ -85,6 +85,21 @@ const ROWS: ProcessEnvVarRow[] = [
     warning: 'Export is on but no OTLP endpoint is set, so spans are built and then dropped.',
   },
   {
+    name: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
+    label: 'Enforce skill obligations',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'asks',
+    description: 'Refuse a `verified: true` finish while a loaded skill declares work that is not done.',
+    unsetMeans:
+      'Obligations are advisory: the gaps are shown to the model and carried into the answer, but an ending is never refused.',
+    cliEquivalent: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS=1 (no CLI flag yet)',
+    fileValue: null,
+    processValue: null,
+    state: 'unset',
+    shadowed: false,
+  },
+  {
     name: 'NUVIRA_TOOL_HOOK_BEFORE',
     label: 'Before a tool call',
     group: 'hooks',
@@ -152,6 +167,24 @@ describe('ProcessEnvPage', () => {
     await waitFor(() => expect(dashboardAPI.saveProcessEnvVar).toHaveBeenCalledWith('NUVIRA_ISOLATE', '1'));
     // The row the server sent back is adopted, so the page shows what was stored.
     expect(await screen.findByText('✅ On')).toBeTruthy();
+  });
+
+  it('offers the skill-obligation gate, and says it is advisory while unset', async () => {
+    mockApi();
+    render(<ProcessEnvPage />);
+
+    // The one switch on this page that can REFUSE an ending mid-turn. It must be
+    // reachable from the dashboard, and its unset state must read as "reported,
+    // not enforced" — writing `1` is the opt-in.
+    const gate = within(await screen.findByTestId('process-env-row-NUVIRA_ENFORCE_SKILL_OBLIGATIONS'));
+    expect(gate.getByText('Enforce skill obligations')).toBeTruthy();
+    expect(gate.getByText('➖ Unset')).toBeTruthy();
+    expect(gate.getByText(/Obligations are advisory/)).toBeTruthy();
+
+    fireEvent.click(gate.getByRole('button', { name: 'On' }));
+    await waitFor(() =>
+      expect(dashboardAPI.saveProcessEnvVar).toHaveBeenCalledWith('NUVIRA_ENFORCE_SKILL_OBLIGATIONS', '1'),
+    );
   });
 
   it('sends `0` for off and unsets by deleting the line', async () => {

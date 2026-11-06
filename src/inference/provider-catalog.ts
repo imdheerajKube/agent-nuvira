@@ -79,8 +79,34 @@ export interface CatalogProviderEntry {
   azureDeployments?: boolean;
   /** Static capability baseline (0–1, higher is better per dimension). */
   capabilities: CatalogCapabilities;
-  /** Approximate USD per 1K tokens (input/output). */
-  pricing: { inputPer1K: number; outputPer1K: number };
+  /**
+   * Approximate USD per 1K tokens (input/output), WITH its provenance.
+   *
+   * A price without a date is the thing this field was added to stop. The catalog
+   * used to carry four bare numbers per provider and nothing said how old they
+   * were, so a provider that re-priced in June billed at the January rate forever
+   * and no surface could tell. Every entry now states where the number came from
+   * and when it was last changed, and `assertCatalogPricing` (see
+   * `tests/inference/provider-catalog-pricing.test.ts`) fails when one ages out:
+   * an estimate may be wrong, but it may not be silently ancient.
+   */
+  pricing: {
+    inputPer1K: number;
+    outputPer1K: number;
+    /**
+     * Where to re-check the number: the provider's own price page, or — for a
+     * runtime that bills nothing at all (local, a keyless gateway) — the fact that
+     * makes the zero true. Never empty: "no source" is how a guess hides.
+     */
+    source: string;
+    /**
+     * ISO date this entry's numbers last CHANGED or were last checked against
+     * `source` — whichever came later. Not a claim that anybody re-verified them
+     * on this date; a number nobody has revisited keeps its old date so the age is
+     * visible. Conservative on purpose: too old prompts a review, too new hides one.
+     */
+    asOf: string;
+  };
   /** Nominal input context window (tokens), provider-level estimate. */
   contextWindow: number;
   /**
@@ -117,7 +143,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
       'Override the endpoint with providers.local.baseUrl if it is not on the default port.',
     keyless: true,
     capabilities: { reasoning: 0.30, speed: 0.55, cost: 1.00, privacy: 1.00, reliability: 0.60 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'local runtime (Ollama) — bills nothing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 8_192,
   },
   groq: {
@@ -130,7 +161,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     envVar: 'GROQ_API_KEY',
     openAICompat: true,
     capabilities: { reasoning: 0.55, speed: 1.00, cost: 0.85, privacy: 0.15, reliability: 0.85 },
-    pricing: { inputPer1K: 0.00059, outputPer1K: 0.00079 },
+    pricing: {
+      inputPer1K: 0.00059,
+      outputPer1K: 0.00079,
+      source: 'https://groq.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 131_072,
   },
   nim: {
@@ -144,7 +180,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://integrate.api.nvidia.com/v1',
     capabilities: { reasoning: 0.72, speed: 0.70, cost: 0.55, privacy: 0.15, reliability: 0.82 },
-    pricing: { inputPer1K: 0.00010, outputPer1K: 0.00050 },
+    pricing: {
+      inputPer1K: 0.00010,
+      outputPer1K: 0.00050,
+      source: 'https://build.nvidia.com',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   gemini: {
@@ -156,7 +197,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     setup: 'Create a key at aistudio.google.com/apikey, then paste it (or set GEMINI_API_KEY).',
     envVar: 'GEMINI_API_KEY',
     capabilities: { reasoning: 0.85, speed: 0.80, cost: 0.40, privacy: 0.10, reliability: 0.88 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'https://ai.google.dev/gemini-api/docs/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 1_048_576,
   },
   openrouter: {
@@ -170,7 +216,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://openrouter.ai/api/v1',
     capabilities: { reasoning: 0.95, speed: 0.55, cost: 0.15, privacy: 0.10, reliability: 0.78 },
-    pricing: { inputPer1K: 0.00250, outputPer1K: 0.01000 },
+    pricing: {
+      inputPer1K: 0.00250,
+      outputPer1K: 0.01000,
+      source: 'https://openrouter.ai/models',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   nuvira: {
@@ -184,7 +235,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'http://127.0.0.1:20128/v1',
     capabilities: { reasoning: 0.50, speed: 0.50, cost: 0.50, privacy: 0.50, reliability: 0.70 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'keyless gateway — the upstream account holds the bill',
+      asOf: '2026-08-08',
+    },
     contextWindow: 131_072,
   },
   /**
@@ -207,7 +263,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'http://127.0.0.1:20128/v1',
     capabilities: { reasoning: 0.72, speed: 0.68, cost: 0.92, privacy: 0.50, reliability: 0.80 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'keyless gateway — the upstream account holds the bill',
+      asOf: '2026-10-05',
+    },
     contextWindow: 131_072,
     description:
       'A local AI gateway that multiplexes many upstream providers behind one OpenAI-compatible endpoint. ' +
@@ -236,7 +297,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.openai.com/v1',
     capabilities: { reasoning: 0.92, speed: 0.78, cost: 0.35, privacy: 0.10, reliability: 0.90 },
-    pricing: { inputPer1K: 0.00125, outputPer1K: 0.00500 },
+    pricing: {
+      inputPer1K: 0.00125,
+      outputPer1K: 0.00500,
+      source: 'https://openai.com/api/pricing/',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   anthropic: {
@@ -249,7 +315,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     envVar: 'ANTHROPIC_API_KEY',
     nativeAdapter: 'anthropic',
     capabilities: { reasoning: 0.95, speed: 0.65, cost: 0.30, privacy: 0.10, reliability: 0.92 },
-    pricing: { inputPer1K: 0.00300, outputPer1K: 0.01500 },
+    pricing: {
+      inputPer1K: 0.00300,
+      outputPer1K: 0.01500,
+      source: 'https://www.anthropic.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 200_000,
   },
   mistral: {
@@ -263,7 +334,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.mistral.ai/v1',
     capabilities: { reasoning: 0.72, speed: 0.82, cost: 0.60, privacy: 0.10, reliability: 0.85 },
-    pricing: { inputPer1K: 0.00090, outputPer1K: 0.00270 },
+    pricing: {
+      inputPer1K: 0.00090,
+      outputPer1K: 0.00270,
+      source: 'https://mistral.ai/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   cohere: {
@@ -277,7 +353,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.cohere.com/v1',
     capabilities: { reasoning: 0.65, speed: 0.75, cost: 0.70, privacy: 0.10, reliability: 0.82 },
-    pricing: { inputPer1K: 0.00015, outputPer1K: 0.00060 },
+    pricing: {
+      inputPer1K: 0.00015,
+      outputPer1K: 0.00060,
+      source: 'https://cohere.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   together: {
@@ -291,7 +372,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.together.ai/v1',
     capabilities: { reasoning: 0.68, speed: 0.85, cost: 0.65, privacy: 0.10, reliability: 0.84 },
-    pricing: { inputPer1K: 0.00020, outputPer1K: 0.00060 },
+    pricing: {
+      inputPer1K: 0.00020,
+      outputPer1K: 0.00060,
+      source: 'https://www.together.ai/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 32_768,
   },
   deepinfra: {
@@ -305,7 +391,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.deepinfra.com/v1/openai',
     capabilities: { reasoning: 0.65, speed: 0.88, cost: 0.75, privacy: 0.10, reliability: 0.84 },
-    pricing: { inputPer1K: 0.00010, outputPer1K: 0.00020 },
+    pricing: {
+      inputPer1K: 0.00010,
+      outputPer1K: 0.00020,
+      source: 'https://deepinfra.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 32_768,
   },
   fireworks: {
@@ -319,7 +410,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.fireworks.ai/inference/v1',
     capabilities: { reasoning: 0.70, speed: 0.90, cost: 0.70, privacy: 0.10, reliability: 0.85 },
-    pricing: { inputPer1K: 0.00020, outputPer1K: 0.00060 },
+    pricing: {
+      inputPer1K: 0.00020,
+      outputPer1K: 0.00060,
+      source: 'https://fireworks.ai/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 32_768,
   },
   perplexity: {
@@ -333,7 +429,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.perplexity.ai',
     capabilities: { reasoning: 0.75, speed: 0.72, cost: 0.55, privacy: 0.10, reliability: 0.84 },
-    pricing: { inputPer1K: 0.00020, outputPer1K: 0.00100 },
+    pricing: {
+      inputPer1K: 0.00020,
+      outputPer1K: 0.00100,
+      source: 'https://docs.perplexity.ai/guides/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   azure: {
@@ -352,7 +453,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     apiKeyHeader: 'api-key',
     apiVersionQuery: 'api-version=2024-10-21',
     capabilities: { reasoning: 0.90, speed: 0.78, cost: 0.35, privacy: 0.35, reliability: 0.92 },
-    pricing: { inputPer1K: 0.00250, outputPer1K: 0.01000 },
+    pricing: {
+      inputPer1K: 0.00250,
+      outputPer1K: 0.01000,
+      source: 'https://azure.microsoft.com/en-us/pricing/details/cognitive-services/openai-service/',
+      asOf: '2026-08-08',
+    },
     contextWindow: 128_000,
   },
   lmstudio: {
@@ -366,7 +472,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'http://localhost:1234/v1',
     capabilities: { reasoning: 0.40, speed: 0.60, cost: 1.00, privacy: 1.00, reliability: 0.70 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'local runtime (LM Studio) — bills nothing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 32_768,
   },
   anyscale: {
@@ -380,7 +491,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.endpoints.anyscale.com/v1',
     capabilities: { reasoning: 0.72, speed: 0.80, cost: 0.60, privacy: 0.10, reliability: 0.85 },
-    pricing: { inputPer1K: 0.00060, outputPer1K: 0.00200 },
+    pricing: {
+      inputPer1K: 0.00060,
+      outputPer1K: 0.00200,
+      source: 'https://www.anyscale.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 65_536,
   },
   vllm: {
@@ -394,7 +510,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'http://localhost:8000/v1',
     capabilities: { reasoning: 0.50, speed: 0.65, cost: 1.00, privacy: 0.85, reliability: 0.72 },
-    pricing: { inputPer1K: 0, outputPer1K: 0 },
+    pricing: {
+      inputPer1K: 0,
+      outputPer1K: 0,
+      source: 'local runtime (vLLM) — bills nothing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 32_768,
   },
   deepseek: {
@@ -408,7 +529,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.deepseek.com/v1',
     capabilities: { reasoning: 0.80, speed: 0.75, cost: 0.80, privacy: 0.10, reliability: 0.86 },
-    pricing: { inputPer1K: 0.00027, outputPer1K: 0.00110 },
+    pricing: {
+      inputPer1K: 0.00027,
+      outputPer1K: 0.00110,
+      source: 'https://api-docs.deepseek.com/quick_start/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 64_000,
   },
   xai: {
@@ -422,7 +548,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.x.ai/v1',
     capabilities: { reasoning: 0.88, speed: 0.70, cost: 0.30, privacy: 0.10, reliability: 0.88 },
-    pricing: { inputPer1K: 0.00300, outputPer1K: 0.01500 },
+    pricing: {
+      inputPer1K: 0.00300,
+      outputPer1K: 0.01500,
+      source: 'https://docs.x.ai/docs/models',
+      asOf: '2026-08-08',
+    },
     contextWindow: 131_072,
   },
   replicate: {
@@ -436,7 +567,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://api.replicate.com/v1',
     capabilities: { reasoning: 0.70, speed: 0.72, cost: 0.55, privacy: 0.10, reliability: 0.80 },
-    pricing: { inputPer1K: 0.00040, outputPer1K: 0.00160 },
+    pricing: {
+      inputPer1K: 0.00040,
+      outputPer1K: 0.00160,
+      source: 'https://replicate.com/pricing',
+      asOf: '2026-08-08',
+    },
     contextWindow: 8_192,
   },
   bedrock: {
@@ -450,7 +586,12 @@ export const PROVIDER_CATALOG: Record<string, CatalogProviderEntry> = {
     openAICompat: true,
     baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1',
     capabilities: { reasoning: 0.88, speed: 0.70, cost: 0.45, privacy: 0.40, reliability: 0.90 },
-    pricing: { inputPer1K: 0.00080, outputPer1K: 0.00320 },
+    pricing: {
+      inputPer1K: 0.00080,
+      outputPer1K: 0.00320,
+      source: 'https://aws.amazon.com/bedrock/pricing/',
+      asOf: '2026-08-19',
+    },
     contextWindow: 200_000,
   },
 };
@@ -506,9 +647,38 @@ export function catalogCapabilities(id: string): CatalogCapabilities | undefined
   return PROVIDER_CATALOG[id]?.capabilities;
 }
 
-/** Pricing table entry for a provider (approximate USD per 1K tokens). */
-export function catalogPricing(id: string): { inputPer1K: number; outputPer1K: number } | undefined {
+/**
+ * Pricing table entry for a provider — the numbers WITH their provenance.
+ *
+ * The extra fields are not decoration: `source` is the page to re-check and `asOf`
+ * is how old the number is, and every accounting surface that prints a dollar
+ * derived from here is really printing this entry's age too.
+ */
+export function catalogPricing(id: string): CatalogProviderEntry['pricing'] | undefined {
   return PROVIDER_CATALOG[id]?.pricing;
+}
+
+/**
+ * How old a catalog price may get before it is STALE.
+ *
+ * A year, not a quarter: this is the backstop that stops a price being silently
+ * eternal, not a re-pricing schedule (providers change prices on their own; the
+ * live feed in `learning/catalog-feed.ts` is how a fresh number arrives). Too
+ * short a window would fail CI every quarter for no accounting gain — a number a
+ * year old is a number nobody has looked at, which is exactly what to surface.
+ */
+export const PRICING_MAX_AGE_DAYS = 365;
+
+/**
+ * Age of a catalog price in whole days, from its `asOf` day (UTC).
+ *
+ * Returns `undefined` for an unparseable date — never 0, because "could not read
+ * the date" must not read as "fresh today".
+ */
+export function pricingAgeDays(asOf: string, now: number = Date.now()): number | undefined {
+  const at = Date.parse(`${asOf}T00:00:00Z`);
+  if (!Number.isFinite(at)) return undefined;
+  return Math.floor((now - at) / 86_400_000);
 }
 
 /** Nominal input context window for a provider (tokens). */

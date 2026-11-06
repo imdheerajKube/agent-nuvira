@@ -57,6 +57,12 @@ export interface ChatEngine {
       /** P4 — attached project dir; the engine recalls its sessions + facts. */
       projectPath?: string;
       /**
+       * Skills the user PINNED for this turn (the dashboard's `/skill <name>`).
+       * The engine loads their methodology into the turn instead of hinting —
+       * see `learning/skill-pin.ts`.
+       */
+      skills?: string[];
+      /**
        * Cluster G — this turn has NO workspace. Carried into the tool context so
        * a write asks WHERE the file goes rather than dropping it in the
        * dashboard process's own cwd (see `unscopedWriteRefusal`).
@@ -791,6 +797,12 @@ export class ChatConsole {
       model?: string;
       projectContext?: string;
       projectPath?: string;
+      /**
+       * Skills the user PINNED for this turn (received from the chat request).
+       * Passed straight to the engine, which loads each methodology into the
+       * turn and records the load — the same path the CLI's `--skill` uses.
+       */
+      skills?: string[];
       /** Cluster G — no workspace for this turn: writes must ask where. */
       unscopedWorkspace?: boolean;
       attachments?: ChatAttachment[];
@@ -931,6 +943,9 @@ export class ChatConsole {
       const answer = await runUnderPinLock(() => engine.answerOnce(clean, {
         // P4 — the cancel signal rides into the turn.
         signal: controller.signal,
+        // Pinned skills (the composer's `/skill <name>`): loaded into this
+        // turn's context by the engine, never merely hinted.
+        ...(opts.skills && opts.skills.length > 0 ? { skills: opts.skills } : {}),
         // WS1 — a recorded finding, forwarded live and kept for the result.
         onFinding: (finding) => {
           findings.push(finding);

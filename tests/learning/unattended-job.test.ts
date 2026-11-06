@@ -36,6 +36,7 @@ import {
   scheduleFromPendingWork,
 } from '../../src/learning/unattended-progress.js';
 import { clearLongFormJobs, recordSectionOutcome, startOrResumeJob } from '../../src/learning/long-form.js';
+import type { SpendBreakdown } from '../../src/utils/spend.js';
 
 let memDir: string;
 let projectDir: string;
@@ -397,42 +398,91 @@ describe('artifactsPresence', () => {
  * hides.
  */
 describe('per-batch cost & latency (G27)', () => {
+  /**
+   * A batch window the PROVIDER billed — the only bucket that is the amount owed.
+   *
+   * Built here rather than passed as a bare `usd` because that is the shape the
+   * store now keeps: a single `costUsd` could not say whether the figure was
+   * reported, list-priced, free or unknown, so a `$0.00` meant both "free" and
+   * "never priced". The G27 assertions below still pin the SUM, which is what the
+   * report prints.
+   */
+  function billed(tokens: number, usd: number): SpendBreakdown {
+    return {
+      tokens,
+      calls: 1,
+      reportedCalls: 1,
+      exactUsd: usd,
+      listedCalls: 0,
+      estimatedUsd: 0,
+      unverifiedCalls: 0,
+      unverifiedUsd: 0,
+      unverifiedProviders: [],
+      freeCalls: 0,
+      freeValueUsd: 0,
+      unpricedCalls: 0,
+    };
+  }
+
   it('accumulates measured cost and tokens across batches, failures included', () => {
     const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
     claimUnattendedJob(job.id);
-    recordBatchOutcome(job.id, { progress: 10, costUsd: 0.00123, tokens: 1000, durationMs: 1500 });
+    recordBatchOutcome(job.id, { progress: 10, spend: billed(1000, 0.00123), durationMs: 1500 });
     claimUnattendedJob(job.id);
     const after = recordBatchOutcome(job.id, {
       error: 'provider 503 on batch 2',
-      costUsd: 0.00077,
-      tokens: 500,
+      spend: billed(500, 0.00077),
       durationMs: 800,
     })!;
 
-    expect(after.costUsd).toBeCloseTo(0.002, 6);
-    expect(after.tokens).toBe(1500);
+    expect(after.spend!.exactUsd).toBeCloseTo(0.002, 6);
+    expect(after.spend!.tokens).toBe(1500);
     expect(after.batchStats).toHaveLength(2);
     // The batch that DIED is accounted for — the failure path is exactly where
     // a report that counted only successes would hide spend.
     expect(after.batchStats![1].error).toMatch(/503/);
-    expect(after.batchStats![1].costUsd).toBeCloseTo(0.00077, 6);
-    expect(after.batchStats![1].tokens).toBe(500);
+    expect(after.batchStats![1].spend!.exactUsd).toBeCloseTo(0.00077, 6);
+    expect(after.batchStats![1].spend!.tokens).toBe(500);
   });
 
   it('renders per-batch rows plus a measured total', () => {
     const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
     claimUnattendedJob(job.id);
-    recordBatchOutcome(job.id, { progress: 50, costUsd: 0.002, tokens: 2000, durationMs: 2000 });
+    recordBatchOutcome(job.id, { progress: 50, spend: billed(2000, 0.002), durationMs: 2000 });
     claimUnattendedJob(job.id);
-    recordBatchOutcome(job.id, { progress: 100, finished: true, costUsd: 0.001, tokens: 1000, durationMs: 4000 });
+    recordBatchOutcome(job.id, { progress: 100, finished: true, spend: billed(1000, 0.001), durationMs: 4000 });
 
     const report = formatBatchReport(listUnattendedJobs()[0]);
     expect(report).toMatch(/Per-batch cost & latency/);
     expect(report).toMatch(/^\s*batch\s+done\s+tokens\s+cost\s+time/m);
     expect(report).toMatch(/^\s*total\s+100%/m);
-    expect(report).toMatch(/\$0\.00300/);
+    // Provider-reported money: printed plain, with no `~`/`?` mark.
+    expect(report).toMatch(/\$0\.003000/);
+    expect(report).not.toMatch(/\$0\.003000\?/);
     expect(report).toMatch(/3,000/);
     expect(report).toMatch(/~3\.0s avg/);
+  });
+
+  it('keeps an undeclared-tier list price visible through the run total', () => {
+    const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
+    claimUnattendedJob(job.id);
+    recordBatchOutcome(job.id, {
+      progress: 50,
+      spend: {
+        ...billed(2000, 0),
+        reportedCalls: 0,
+        unverifiedCalls: 2,
+        unverifiedUsd: 0.002,
+        unverifiedProviders: ['deepseek'],
+      },
+      durationMs: 2000,
+    });
+
+    const report = formatBatchReport(listUnattendedJobs()[0]);
+    // Priced but not provably charged: both marks, never a plain dollar.
+    expect(report).toMatch(/~\$0\.002000\?/);
+    // And the legend explains the marks, naming the setting that makes it exact.
+    expect(report).toMatch(/declare providers\.<id>\.billingTier/);
   });
 
   it('prints a dash — never a fabricated 0 — for a column a surface did not measure', () => {
@@ -442,6 +492,7 @@ describe('per-batch cost & latency (G27)', () => {
 
     const stored = listUnattendedJobs()[0];
     // Absent, not zero: "free" and "not measured" must stay distinguishable.
+    expect(stored.spend).toBeUndefined();
     expect(stored.costUsd).toBeUndefined();
     expect(stored.tokens).toBeUndefined();
     expect(formatBatchReport(stored)).toMatch(/—/);
@@ -455,11 +506,11 @@ describe('per-batch cost & latency (G27)', () => {
   it('persists the per-batch economy across a reload', () => {
     const { job } = startUnattendedJob({ kind: 'long-form', goal: 'g', projectPath: projectDir, surface: SURFACE });
     claimUnattendedJob(job.id);
-    recordBatchOutcome(job.id, { progress: 30, costUsd: 0.004, tokens: 4000, durationMs: 1200 });
+    recordBatchOutcome(job.id, { progress: 30, spend: billed(4000, 0.004), durationMs: 1200 });
 
     const reloaded = listUnattendedJobs()[0] as UnattendedJob;
-    expect(reloaded.costUsd).toBeCloseTo(0.004, 6);
-    expect(reloaded.tokens).toBe(4000);
+    expect(reloaded.spend!.exactUsd).toBeCloseTo(0.004, 6);
+    expect(reloaded.spend!.tokens).toBe(4000);
     expect(reloaded.batchStats).toHaveLength(1);
     expect(reloaded.batchStats![0].durationMs).toBe(1200);
   });

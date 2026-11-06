@@ -36,6 +36,65 @@ export const TURN_BUDGET_MIN_MINUTES = 1;
 /** ...and above this it is indistinguishable from "no budget". */
 export const TURN_BUDGET_MAX_MINUTES = 24 * 60;
 
+/**
+ * THE STEP BUDGET, MADE A SETTING.
+ *
+ * A step count is the wrong PRIMARY unit (see {@link resolveTurnBudget}), but it is
+ * still the only absolute guard against a turn that keeps claiming progress. The
+ * defect was never that a number existed — it was that the number was unreachable:
+ * `chat` passed a literal 16, the loop added 2×8, two progress extensions of 8 and
+ * two closing steps, and a build stopped at 50 with named requirements still open.
+ * Nobody could raise it without editing TypeScript.
+ *
+ * So both numbers are config:
+ *   - `turn.maxSteps`      the first slice (default {@link STEP_BUDGET_DEFAULT_BASE})
+ *   - `turn.maxTotalSteps` the absolute guard (default {@link STEP_BUDGET_DEFAULT_TOTAL})
+ *
+ * Neither is the finishing rule: the loop's requirement-driven budget ends a turn
+ * when the ask is satisfied, or when two granted rounds moved nothing. These only
+ * decide where the first slice ends and when even a productive turn must stop.
+ */
+export const STEP_BUDGET_DEFAULT_BASE = 16;
+export const STEP_BUDGET_DEFAULT_TOTAL = 1000;
+/** A base above this is a runaway setting, not an intention. */
+export const STEP_BUDGET_MAX_BASE = 10_000;
+export const STEP_BUDGET_MAX_TOTAL = 1_000_000;
+
+export interface StepBudget {
+  /** Steps the first slice grants. */
+  maxSteps: number;
+  /** Absolute guard for the whole turn. */
+  maxTotalSteps: number;
+  /** Where the numbers came from, so a turn report can say why it stopped. */
+  source: 'config' | 'default';
+}
+
+/**
+ * Resolve the step budget. A bad value falls back per-field instead of silently
+ * becoming zero, and the guard is never allowed below the first slice — a
+ * `maxTotalSteps` smaller than `maxSteps` would end every turn at once.
+ */
+export function resolveStepBudget(cm?: ConfigManagerLike): StepBudget {
+  let turn: { maxSteps?: unknown; maxTotalSteps?: unknown } | undefined;
+  try {
+    turn = (cm?.getAll?.() as { turn?: { maxSteps?: unknown; maxTotalSteps?: unknown } } | undefined)?.turn;
+  } catch {
+    turn = undefined;
+  }
+  const read = (value: unknown, fallback: number, max: number): number => {
+    const n = typeof value === 'number' && Number.isFinite(value) ? Math.round(value) : NaN;
+    if (!Number.isFinite(n) || n < 1) return fallback;
+    return Math.min(max, n);
+  };
+  const maxSteps = read(turn?.maxSteps, STEP_BUDGET_DEFAULT_BASE, STEP_BUDGET_MAX_BASE);
+  const maxTotalSteps = Math.max(
+    maxSteps,
+    read(turn?.maxTotalSteps, STEP_BUDGET_DEFAULT_TOTAL, STEP_BUDGET_MAX_TOTAL),
+  );
+  const configured = turn?.maxSteps !== undefined || turn?.maxTotalSteps !== undefined;
+  return { maxSteps, maxTotalSteps, source: configured ? 'config' : 'default' };
+}
+
 export interface TurnBudget {
   /** `false` when the user turned the wall clock off (`turn.maxMinutes: 0`). */
   enabled: boolean;

@@ -7,6 +7,7 @@ import { getCostTracker } from '../learning/cost-tracker.js';
 import { getModelRegistry } from '../learning/model-registry.js';
 import { requireAdapterModel } from '../learning/model-selection.js';
 import { attachHttpContext } from './http-error.js';
+import { readWithIdleGuard, streamIdleTimeoutMs } from './sse.js';
 import {
   resolveReasoningRequest,
   withReasoningFallback,
@@ -24,6 +25,40 @@ import {
 } from './native-tools.js';
 
 const GEMINI_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models';
+
+/**
+ * How long a Gemini call may wait for response HEADERS before it is treated as
+ * unreachable.
+ *
+ * WHY THE STREAMING PATHS NEED THIS AT ALL. `generateTools` has always carried
+ * `AbortSignal.timeout(...)`; `generate`, `generateStream` and
+ * `generateToolsStream` did not, and the two stream loops also read the body
+ * with no silence budget. Measured live (2026-11-04): a CLI `assess the project`
+ * turn routed to `gemini/gemini-3.1-flash-lite` and parked for over three
+ * minutes with zero steps (trace-1793805158776-vdsc8q, left `in progress`),
+ * while the same pair on the dashboard failed in ~30 s and fell over to another
+ * model. The request had opened and then gone silent; nothing on the CLI path
+ * could end it but Ctrl-C. A connect budget + the shared idle guard turns that
+ * into an ordinary `timeout`, which the failover walk already knows how to
+ * retry.
+ */
+const GEMINI_CONNECT_TIMEOUT_MS = 30_000;
+
+/**
+ * Forward a caller's abort (Ctrl-C, a step deadline) into our own controller,
+ * returning the cleanup. The streaming methods used to ignore `options.signal`
+ * entirely, so an abort could not release the socket either.
+ */
+function forwardAbort(controller: AbortController, external?: AbortSignal): () => void {
+  if (!external) return () => {};
+  const forward = (): void => controller.abort(external.reason);
+  if (external.aborted) {
+    forward();
+    return () => {};
+  }
+  external.addEventListener('abort', forward, { once: true });
+  return () => external.removeEventListener('abort', forward);
+}
 
 interface GeminiResponse {
   candidates: Array<{
@@ -133,39 +168,57 @@ export class GeminiAdapter implements InferenceProvider {
 
     const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${apiKey}`;
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        applyGeminiThinking(
-          {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature,
-              maxOutputTokens: maxTokens,
-            },
-          },
-          reasoningBody,
-        ),
-      ),
-    });
+    // Bounded even when the caller supplied a signal: a bare CLI abort signal
+    // carries no deadline, and a request that never answers is exactly what
+    // parked the turn (see GEMINI_CONNECT_TIMEOUT_MS).
+    const controller = new AbortController();
+    const unlink = forwardAbort(controller, options?.signal);
+    const budgetMs = this.config.timeoutMs ?? GEMINI_CONNECT_TIMEOUT_MS;
+    const timer = setTimeout(
+      () => controller.abort(new Error(`Gemini request timeout after ${budgetMs} ms`)),
+      budgetMs,
+    );
+    timer.unref?.();
 
-    if (!response.ok) {
-      const errorBody = await response.text();
-      // Headers attached so extractRetryAfterMs() can read Retry-After and
-      // park for the provider's ACTUAL reset time (not a fixed window).
-      throw attachHttpContext(new Error(`Gemini API error (${response.status}): ${errorBody}`), response.status, response.headers);
-    }
-
-    const data = (await response.json()) as GeminiResponse;
-    const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
-
-    // Track cost
     try {
-      getCostTracker().recordCallEstimated('gemini', model, prompt, content);
-    } catch { /* Non-critical */ }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          applyGeminiThinking(
+            {
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature,
+                maxOutputTokens: maxTokens,
+              },
+            },
+            reasoningBody,
+          ),
+        ),
+        signal: controller.signal,
+      });
 
-    return content;
+      if (!response.ok) {
+        const errorBody = await response.text();
+        // Headers attached so extractRetryAfterMs() can read Retry-After and
+        // park for the provider's ACTUAL reset time (not a fixed window).
+        throw attachHttpContext(new Error(`Gemini API error (${response.status}): ${errorBody}`), response.status, response.headers);
+      }
+
+      const data = (await response.json()) as GeminiResponse;
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text || '';
+
+      // Track cost
+      try {
+        getCostTracker().recordCallEstimated('gemini', model, prompt, content);
+      } catch { /* Non-critical */ }
+
+      return content;
+    } finally {
+      clearTimeout(timer);
+      unlink();
+    }
   }
 
   async generateStream(
@@ -204,85 +257,111 @@ export class GeminiAdapter implements InferenceProvider {
     // Use Gemini's streamGenerateContent endpoint
     const url = `${GEMINI_BASE_URL}/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
 
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(
-        applyGeminiThinking(
-          {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature,
-              maxOutputTokens: maxTokens,
-            },
-          },
-          reasoningBody,
-        ),
-      ),
-    });
-
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw attachHttpContext(
-        new Error(`Gemini streaming API error (${response.status}): ${errorBody}`),
-        response.status,
-        response.headers,
-      );
-    }
-
-    const reader = response.body?.getReader();
-    if (!reader) {
-      throw new Error('Gemini response body is not readable');
-    }
-
-    const decoder = new TextDecoder();
-    const fullContent: string[] = [];
-    let buffer = '';
+    // ONE controller for the whole exchange: the connect timer aborts when
+    // headers never arrive, the idle guard aborts when the body goes silent,
+    // and a caller abort (Ctrl-C) is forwarded into it. Without all three a
+    // stalled SSE connection parks the turn forever (see GEMINI_CONNECT_TIMEOUT_MS).
+    const controller = new AbortController();
+    const unlink = forwardAbort(controller, options?.signal);
+    const connectMs = this.config.timeoutMs ?? GEMINI_CONNECT_TIMEOUT_MS;
+    const connectTimer = setTimeout(
+      () => controller.abort(new Error(`Gemini stream timeout: no response headers within ${connectMs} ms`)),
+      connectMs,
+    );
+    connectTimer.unref?.();
+    const idleMs = streamIdleTimeoutMs();
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(
+          applyGeminiThinking(
+            {
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature,
+                maxOutputTokens: maxTokens,
+              },
+            },
+            reasoningBody,
+          ),
+        ),
+        signal: controller.signal,
+      });
+      clearTimeout(connectTimer);
 
-        buffer += decoder.decode(value, { stream: true });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw attachHttpContext(
+          new Error(`Gemini streaming API error (${response.status}): ${errorBody}`),
+          response.status,
+          response.headers,
+        );
+      }
 
-        // Process complete lines from the buffer
-        const lines = buffer.split('\n');
-        // Keep the last (potentially incomplete) line in the buffer
-        buffer = lines.pop() || '';
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('Gemini response body is not readable');
+      }
 
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-          const token = parseGeminiSSELine(trimmed);
+      const decoder = new TextDecoder();
+      const fullContent: string[] = [];
+      let buffer = '';
+
+      try {
+        while (true) {
+          // Per-CHUNK budget, not a total cap: a slow model may stream for
+          // minutes, but silence must be reported as a timeout instead of
+          // parking the turn.
+          const { done, value } = await readWithIdleGuard(reader, idleMs, () =>
+            controller.abort(new Error(`Gemini stream timeout: no data for ${idleMs} ms`)),
+          );
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+
+          // Process complete lines from the buffer
+          const lines = buffer.split('\n');
+          // Keep the last (potentially incomplete) line in the buffer
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const token = parseGeminiSSELine(trimmed);
+            if (token) {
+              fullContent.push(token);
+              onToken(token);
+            }
+          }
+        }
+
+        // Process remaining buffer
+        const remaining = buffer.trim();
+        if (remaining) {
+          const token = parseGeminiSSELine(remaining);
           if (token) {
             fullContent.push(token);
             onToken(token);
           }
         }
+      } finally {
+        reader.releaseLock();
       }
 
-      // Process remaining buffer
-      const remaining = buffer.trim();
-      if (remaining) {
-        const token = parseGeminiSSELine(remaining);
-        if (token) {
-          fullContent.push(token);
-          onToken(token);
-        }
-      }
+      const content = fullContent.join('');
+
+      // Track cost for streaming response
+      try {
+        getCostTracker().recordCallEstimated('gemini', model, prompt, content);
+      } catch { /* Non-critical */ }
+
+      return content;
     } finally {
-      reader.releaseLock();
+      clearTimeout(connectTimer);
+      unlink();
     }
-
-    const content = fullContent.join('');
-
-    // Track cost for streaming response
-    try {
-      getCostTracker().recordCallEstimated('gemini', model, prompt, content);
-    } catch { /* Non-critical */ }
-
-    return content;
   }
 
   // ─── H1b/Phase 1.2 — native tool calling (Gemini function calling) ───────
@@ -341,29 +420,45 @@ export class GeminiAdapter implements InferenceProvider {
 
     logger.debug(`Gemini: Tool-calling with model=${model}, tools=${tools.length}`);
     const url = `${GEMINI_BASE_URL}/${model}:generateContent?key=${apiKey}`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: options?.signal ?? AbortSignal.timeout(this.config.timeoutMs ?? 30_000),
-    });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw attachHttpContext(
-        new Error(`Gemini tool-calling API error (${response.status}): ${errorBody}`),
-        response.status,
-        response.headers,
-      );
-    }
-    const data = (await response.json()) as GeminiToolResponseShape;
-    const result = parseGeminiToolResponse(data);
 
-    // Cost parity with generate(): meter tool-calling turns too.
+    // Bounded even when the caller supplied a signal (see GEMINI_CONNECT_TIMEOUT_MS).
+    const controller = new AbortController();
+    const unlink = forwardAbort(controller, options?.signal);
+    const budgetMs = this.config.timeoutMs ?? GEMINI_CONNECT_TIMEOUT_MS;
+    const timer = setTimeout(
+      () => controller.abort(new Error(`Gemini request timeout after ${budgetMs} ms`)),
+      budgetMs,
+    );
+    timer.unref?.();
+
     try {
-      getCostTracker().recordCallEstimated('gemini', model, promptDigest(messages), result.content);
-    } catch { /* Non-critical */ }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw attachHttpContext(
+          new Error(`Gemini tool-calling API error (${response.status}): ${errorBody}`),
+          response.status,
+          response.headers,
+        );
+      }
+      const data = (await response.json()) as GeminiToolResponseShape;
+      const result = parseGeminiToolResponse(data);
 
-    return result;
+      // Cost parity with generate(): meter tool-calling turns too.
+      try {
+        getCostTracker().recordCallEstimated('gemini', model, promptDigest(messages), result.content);
+      } catch { /* Non-critical */ }
+
+      return result;
+    } finally {
+      clearTimeout(timer);
+      unlink();
+    }
   }
 
   /**
@@ -419,80 +514,104 @@ export class GeminiAdapter implements InferenceProvider {
 
     logger.debug(`Gemini: Streaming tool-calling with model=${model}, tools=${tools.length}`);
     const url = `${GEMINI_BASE_URL}/${model}:streamGenerateContent?key=${apiKey}&alt=sse`;
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-      signal: options?.signal,
-    });
-    if (!response.ok) {
-      const errorBody = await response.text();
-      throw attachHttpContext(
-        new Error(`Gemini streaming tool-calling API error (${response.status}): ${errorBody}`),
-        response.status,
-        response.headers,
-      );
-    }
-    const reader = response.body?.getReader();
-    if (!reader) throw new Error('Gemini response body is not readable');
 
-    const decoder = new TextDecoder();
-    let buffer = '';
-    const textChunks: string[] = [];
-    const functionCalls: Array<{ name: string; args?: Record<string, unknown>; thoughtSignature?: string }> = [];
+    // The caller's signal used to be the ONLY bound on this stream — and a bare
+    // CLI abort signal has no deadline, so a silent connection was unbounded.
+    // Connect budget + per-chunk idle budget, with the caller's abort forwarded.
+    const controller = new AbortController();
+    const unlink = forwardAbort(controller, options?.signal);
+    const connectMs = this.config.timeoutMs ?? GEMINI_CONNECT_TIMEOUT_MS;
+    const connectTimer = setTimeout(
+      () => controller.abort(new Error(`Gemini stream timeout: no response headers within ${connectMs} ms`)),
+      connectMs,
+    );
+    connectTimer.unref?.();
+    const idleMs = streamIdleTimeoutMs();
 
     try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        for (const line of lines) {
-          const parsed = parseGeminiToolSSEChunk(line.trim());
-          if (!parsed) continue;
-          if (parsed.text) {
-            textChunks.push(parsed.text);
-            onToken(parsed.text);
-          }
-          functionCalls.push(...parsed.functionCalls);
-        }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(connectTimer);
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        throw attachHttpContext(
+          new Error(`Gemini streaming tool-calling API error (${response.status}): ${errorBody}`),
+          response.status,
+          response.headers,
+        );
       }
-      const remaining = buffer.trim();
-      if (remaining) {
-        const parsed = parseGeminiToolSSEChunk(remaining);
-        if (parsed) {
-          if (parsed.text) {
-            textChunks.push(parsed.text);
-            onToken(parsed.text);
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error('Gemini response body is not readable');
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+      const textChunks: string[] = [];
+      const functionCalls: Array<{ name: string; args?: Record<string, unknown>; thoughtSignature?: string }> = [];
+
+      try {
+        while (true) {
+          // Silence is a timeout, not a hang (see `sse.ts`).
+          const { done, value } = await readWithIdleGuard(reader, idleMs, () =>
+            controller.abort(new Error(`Gemini stream timeout: no data for ${idleMs} ms`)),
+          );
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+          for (const line of lines) {
+            const parsed = parseGeminiToolSSEChunk(line.trim());
+            if (!parsed) continue;
+            if (parsed.text) {
+              textChunks.push(parsed.text);
+              onToken(parsed.text);
+            }
+            functionCalls.push(...parsed.functionCalls);
           }
-          functionCalls.push(...parsed.functionCalls);
         }
+        const remaining = buffer.trim();
+        if (remaining) {
+          const parsed = parseGeminiToolSSEChunk(remaining);
+          if (parsed) {
+            if (parsed.text) {
+              textChunks.push(parsed.text);
+              onToken(parsed.text);
+            }
+            functionCalls.push(...parsed.functionCalls);
+          }
+        }
+      } finally {
+        reader.releaseLock();
       }
+
+      const content = textChunks.join('');
+      const toolCalls = functionCalls.map((fc, i) => ({
+        id: `call_${i + 1}`,
+        name: fc.name,
+        arguments: fc.args ?? {},
+        // Item 6 — same rule as the one-shot path: an ABSENT `args` is the
+        // empty-payload signature, and the loop only refuses it when the tool
+        // requires arguments.
+        ...(fc.args === undefined ? { argumentsError: 'empty' as const } : {}),
+        // Must survive the round trip: Gemini requires its own thoughtSignature
+        // back on the next turn's functionCall part (see ToolCallRequest).
+        ...(fc.thoughtSignature ? { providerMeta: { thoughtSignature: fc.thoughtSignature } } : {}),
+      }));
+
+      // Cost parity with generate(): meter tool-calling turns too.
+      try {
+        getCostTracker().recordCallEstimated('gemini', model, promptDigest(messages), content);
+      } catch { /* Non-critical */ }
+
+      return { content, toolCalls };
     } finally {
-      reader.releaseLock();
+      clearTimeout(connectTimer);
+      unlink();
     }
-
-    const content = textChunks.join('');
-    const toolCalls = functionCalls.map((fc, i) => ({
-      id: `call_${i + 1}`,
-      name: fc.name,
-      arguments: fc.args ?? {},
-      // Item 6 — same rule as the one-shot path: an ABSENT `args` is the
-      // empty-payload signature, and the loop only refuses it when the tool
-      // requires arguments.
-      ...(fc.args === undefined ? { argumentsError: 'empty' as const } : {}),
-      // Must survive the round trip: Gemini requires its own thoughtSignature
-      // back on the next turn's functionCall part (see ToolCallRequest).
-      ...(fc.thoughtSignature ? { providerMeta: { thoughtSignature: fc.thoughtSignature } } : {}),
-    }));
-
-    // Cost parity with generate(): meter tool-calling turns too.
-    try {
-      getCostTracker().recordCallEstimated('gemini', model, promptDigest(messages), content);
-    } catch { /* Non-critical */ }
-
-    return { content, toolCalls };
   }
 
   async isAvailable(): Promise<boolean> {

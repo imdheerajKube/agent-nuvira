@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-08-27T12:51:59.023Z",
+  "updatedAt": "2026-11-03T05:13:59.256Z",
   "skills": [
     {
       "name": "website-deploy",
@@ -120,7 +120,7 @@
     },
     {
       "name": "api-design",
-      "description": "Design and implement a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes, and write integration tests. Use when the goal asks to create an API, design endpoints, build a REST service, or scaffold an HTTP backend.",
+      "description": "Design, implement and deploy a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes with auth and rate limiting, write integration tests, and ship it. Use when the goal asks to create an API, scaffold a backend service, design endpoints, or build a REST service.",
       "version": "2.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -353,39 +353,6 @@
       "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
-      "name": "email-setup",
-      "description": "Set up transactional email: design responsive HTML templates, configure SMTP/API delivery (SendGrid, Resend, Mailgun, Postmark), and build email sending functions. Use when the goal asks to send emails, build email templates, or configure email delivery.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "email",
-        "smtp",
-        "template",
-        "transactional",
-        "sendgrid",
-        "resend",
-        "delivery"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
-      "name": "payment-setup",
-      "description": "Integrate payment processing with Stripe: implement checkout, subscriptions, webhooks, and invoice handling. Use when the goal asks to add payments, billing, subscriptions, or checkout to an app.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "payment",
-        "stripe",
-        "checkout",
-        "subscription",
-        "billing",
-        "webhooks"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
       "name": "auth-setup",
       "description": "Implement authentication and authorization: OAuth2 (Google, GitHub), magic links, JWT sessions, role-based access control. Use when the goal asks to add login, signup, auth, SSO, or RBAC to an app.",
       "version": "1.0.0",
@@ -398,39 +365,6 @@
         "session",
         "rbac",
         "security"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
-      "name": "monitoring-setup",
-      "description": "Set up application monitoring: structured logging, metrics collection, alerting rules, and health checks. Use when the goal asks to add logging, monitoring, observability, or alerting.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "monitoring",
-        "logging",
-        "metrics",
-        "alerting",
-        "observability",
-        "health-check"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
-      "name": "backup-recovery",
-      "description": "Design and implement backup and disaster recovery: automated database backups, point-in-time recovery, S3 snapshots, and runbook documentation. Use when the goal asks to set up backups, recovery, or disaster resilience.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "backup",
-        "recovery",
-        "disaster-recovery",
-        "resilience",
-        "runbook",
-        "rpo",
-        "rto"
       ],
       "source": "agent-nuvira/bundled",
       "updatedAt": "2026-08-27T12:51:59.023Z"
@@ -535,22 +469,6 @@
       "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
-      "name": "cron-setup",
-      "description": "Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to schedule tasks, set up cron jobs, or automate periodic work.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "cron",
-        "schedule",
-        "automation",
-        "periodic",
-        "timer",
-        "jobs"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
       "name": "image-optimize",
       "description": "Optimize images for web: compress, resize, convert formats (WebP, AVIF), generate thumbnails, and set up responsive images. Use when the goal asks to optimize images, reduce image size, or add responsive images.",
       "version": "1.0.0",
@@ -595,23 +513,6 @@
         "performance",
         "caching",
         "speed"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
-      "name": "queue-setup",
-      "description": "Set up message queues: BullMQ, RabbitMQ, or SQS for background jobs, task processing, and event-driven architecture. Use when the goal asks to add background jobs, task queues, or async processing.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "queue",
-        "job",
-        "background",
-        "worker",
-        "async",
-        "bullmq",
-        "rabbitmq"
       ],
       "source": "agent-nuvira/bundled",
       "updatedAt": "2026-08-27T12:51:59.023Z"
@@ -924,7 +825,7 @@
     },
     {
       "name": "prometheus",
-      "description": "Set up Prometheus monitoring and alerting. Use when the goal asks to add metrics collection, dashboards, or alerting rules.",
+      "description": "Set up Prometheus monitoring: metrics, dashboards, alerting rules, plus structured logging and health/readiness endpoints. Use when the goal asks to add monitoring, metrics collection, dashboards, alerting, structured logs, or a health check.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -971,7 +872,7 @@
     },
     {
       "name": "kafka-queue",
-      "description": "Set up Kafka message queues. Use when the goal asks to add event streaming, message queues, or async processing with Kafka.",
+      "description": "Set up event streaming and background job queues: Kafka topics/consumer groups, or BullMQ/RabbitMQ/SQS workers. Use when the goal asks to add message queues, event streaming, background jobs, task queues, or async processing.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -986,7 +887,7 @@
     },
     {
       "name": "terraform",
-      "description": "Write Terraform infrastructure-as-code. Use when the goal asks to provision, manage, or version cloud infrastructure.",
+      "description": "Write infrastructure-as-code with Terraform (Pulumi or CloudFormation where the project already uses them): modules, remote state, drift detection, and multi-environment setups. Use when the goal asks to provision, manage, or version cloud infrastructure.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -1047,7 +948,7 @@
     },
     {
       "name": "cron-job",
-      "description": "Set up scheduled tasks and cron jobs. Use when the goal asks to automate recurring tasks, schedule jobs, or set up crons.",
+      "description": "Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to automate recurring tasks, schedule jobs, set up crons, or run work on a timer.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -1062,7 +963,7 @@
     },
     {
       "name": "backup-strategy",
-      "description": "Design and implement backup strategies. Use when the goal asks to set up backups, disaster recovery, or data protection.",
+      "description": "Design and implement backup and disaster recovery: RPO/RTO, automated snapshots, point-in-time restore, retention, and the recovery runbook. Use when the goal asks to set up backups, disaster recovery, a restore procedure, or data protection.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -1172,23 +1073,6 @@
       "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
-      "name": "api-creation",
-      "description": "Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "api",
-        "rest",
-        "backend",
-        "http",
-        "server",
-        "endpoints",
-        "deploy"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
       "name": "autonomous-agents",
       "description": "Design, build, and deploy autonomous AI agents with tool use, memory, planning loops, and self-correction. Use when the goal is to create an agent that can reason, act, and iterate without constant human oversight.",
       "version": "1.0.0",
@@ -1235,15 +1119,18 @@
     },
     {
       "name": "rag-pipeline",
-      "description": "Build a Retrieval-Augmented Generation pipeline: document ingestion, chunking, embedding, vector storage, retrieval, and LLM answer generation. Use when the goal is to let an LLM answer questions from a custom knowledge base.",
-      "version": "1.0.0",
+      "description": "Build a Retrieval-Augmented Generation pipeline: document ingestion, chunking, retrieval, answer generation, citations, and retrieval-recall tests under morphology, identifiers and passage boundaries. Use when the goal is to let an LLM answer questions from documents or a custom knowledge base. Do not claim completion on code-path tests alone.",
+      "version": "1.1.1",
       "author": "agent-nuvira",
       "tags": [
         "rag",
         "vector",
         "embedding",
         "llm",
-        "knowledge-base"
+        "knowledge-base",
+        "document-qa",
+        "recall",
+        "bm25"
       ],
       "source": "agent-nuvira/bundled",
       "updatedAt": "2026-08-27T12:51:59.023Z"
@@ -1443,21 +1330,6 @@
       "updatedAt": "2026-08-27T12:51:59.023Z"
     },
     {
-      "name": "infra-as-code",
-      "description": "Define infrastructure with code: Terraform, Pulumi, or CloudFormation. Covers modules, state management, drift detection, and multi-environment setups. Use when the goal is to provision or manage cloud infrastructure.",
-      "version": "1.0.0",
-      "author": "agent-nuvira",
-      "tags": [
-        "terraform",
-        "pulumi",
-        "infrastructure",
-        "cloud",
-        "devops"
-      ],
-      "source": "agent-nuvira/bundled",
-      "updatedAt": "2026-08-27T12:51:59.023Z"
-    },
-    {
       "name": "service-mesh",
       "description": "Set up a service mesh (Istio, Linkerd, Consul Connect): traffic management, mTLS, observability, and resilience. Use when the goal is to add networking capabilities to a microservices architecture.",
       "version": "1.0.0",
@@ -1489,7 +1361,7 @@
     },
     {
       "name": "transactional-email",
-      "description": "Set up transactional email sending: SMTP configuration, email templates, delivery tracking, bounce handling, and provider integration (SendGrid, Postmark, SES). Use when the goal is to send system emails (password resets, notifications, receipts).",
+      "description": "Set up transactional email sending: provider selection (Resend, SMTP, SendGrid, Postmark, SES), templates, delivery tracking, and bounce handling. Use when the goal is to send system emails (password resets, notifications, receipts).",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [
@@ -1519,7 +1391,7 @@
     },
     {
       "name": "payment-gateway",
-      "description": "Integrate payment processing: Stripe, PayPal, or Square. Covers checkout flows, subscriptions, refunds, webhooks, and PCI compliance. Use when the goal is to accept payments in an application.",
+      "description": "Integrate payment processing: Stripe, PayPal, or Square. Covers checkout flows, subscriptions, billing plans, invoices, refunds, webhooks, and PCI compliance. Use when the goal is to accept payments in an application.",
       "version": "1.0.0",
       "author": "agent-nuvira",
       "tags": [

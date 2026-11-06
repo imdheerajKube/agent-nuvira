@@ -2,7 +2,12 @@
  * Requests Panel (Nuvira-Router P3-M3.2) — per provider × model × action
  * request aggregates from the action-telemetry JSONL (the SAME file the Models
  * panel reads, so both panels always agree): requests, p50/p95/p99 latency,
- * error rate, measured cost, and correlation ids for traceability.
+ * error rate, cost WITH its basis, and correlation ids for traceability.
+ *
+ * The basis is the point. `costUsd` is computed from real wire tokens when the
+ * provider reported usage (`measured`) and from a length-based guess otherwise
+ * (`estimated`). Labelling both "Measured cost" — which this panel did — turns a
+ * guess into a measurement, and the two must never render alike.
  *
  * Degrades cleanly: an older server that doesn't send `requests` shows the
  * empty state instead of crashing (established jsonOrNull guard pattern).
@@ -25,6 +30,15 @@ const ACTION_ICONS: Record<string, string> = {
 
 function fmtTime(ts: number): string {
   return new Date(ts).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+/**
+ * `~` marks a cost that was COMPUTED, not billed — the same mark the CLI uses, so
+ * one vocabulary across surfaces. The basis travels with the row from the server
+ * (`measured` = real wire tokens × list price; `estimated` = length-based guess).
+ */
+function costGlyph(r: { costUsd?: number; costBasis?: 'measured' | 'estimated' }): string {
+  return `${r.costBasis === 'estimated' ? '~' : ''}$${(r.costUsd ?? 0).toFixed(4)}`;
 }
 
 function fmtMs(v?: number): string {
@@ -75,6 +89,11 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
   const totalRequests = rows.reduce((a, r) => a + r.requests, 0);
   const totalFailures = rows.reduce((a, r) => a + Math.round(r.errorRate * r.requests), 0);
   const totalCost = rows.reduce((a, r) => a + (r.costUsd ?? 0), 0);
+  const costRows = rows.filter((r) => r.costUsd !== undefined);
+  const estimatedCost = costRows
+    .filter((r) => r.costBasis === 'estimated')
+    .reduce((a, r) => a + (r.costUsd ?? 0), 0);
+  const allMeasured = costRows.length > 0 && costRows.every((r) => r.costBasis === 'measured');
   const latencies = rows.flatMap((r) => (r.latency ? [r.latency.avg] : []));
   const avgLatency = latencies.length > 0
     ? Math.round(latencies.reduce((a, b) => a + b, 0) / latencies.length)
@@ -103,8 +122,8 @@ function RequestsStats({ data }: { data: RequestsInsights }) {
     {
       key: 'cost',
       icon: '💰',
-      value: totalCost > 0 ? `$${totalCost.toFixed(4)}` : '—',
-      label: `Measured cost${actions > 0 ? ` · ${actions} actions` : ''}`,
+      value: totalCost > 0 ? `${estimatedCost > 0 ? '~' : ''}$${totalCost.toFixed(4)}` : '—',
+      label: `${allMeasured ? 'Cost · measured' : estimatedCost > 0 ? 'Cost · ~list price, an estimate' : 'Cost'}${actions > 0 ? ` · ${actions} actions` : ''}`,
       tone: 'warn',
     },
   ];
@@ -260,7 +279,9 @@ export default function RequestsPanel({ data }: RequestsPanelProps) {
               <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>p50</th>
               <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>p95</th>
               <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>p99</th>
-              <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>Measured cost</th>
+              <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>
+                Cost <span style={{ fontWeight: 400, opacity: 0.7 }}>(~ = estimate)</span>
+              </th>
               <th style={{ padding: '8px 12px', fontWeight: 500, textAlign: 'right' }}>Last seen</th>
             </tr>
           </thead>
@@ -329,8 +350,11 @@ export default function RequestsPanel({ data }: RequestsPanelProps) {
                   <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12 }}>
                     {r.latency && r.latency.samples >= 3 ? fmtMs(r.latency.p99) : '—'}
                   </td>
-                  <td style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: r.costUsd ? 'var(--accent-yellow)' : 'var(--text-muted)' }}>
-                    {r.costUsd !== undefined ? `$${r.costUsd.toFixed(4)}` : '—'}
+                  <td
+                    style={{ padding: '8px 12px', textAlign: 'right', fontFamily: "'SFMono-Regular', Consolas, monospace", fontSize: 12, color: r.costUsd ? 'var(--accent-yellow)' : 'var(--text-muted)' }}
+                    title={r.costBasis === 'estimated' ? 'length-based estimate, not provider-reported usage' : r.costBasis === 'measured' ? 'real wire tokens, list-priced' : 'no cost evidence recorded'}
+                  >
+                    {r.costUsd !== undefined ? costGlyph(r) : '—'}
                   </td>
                   <td style={{ padding: '8px 12px', textAlign: 'right', color: 'var(--text-muted)', fontSize: 11, whiteSpace: 'nowrap' }}>
                     {fmtTime(r.lastAt)}

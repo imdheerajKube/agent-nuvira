@@ -54,24 +54,40 @@ describe('RELEASE GATE — system prompt budget', () => {
     // doing while you work" rule). The cap moves by exactly that clause rather than
     // by a guess: 12.5K is the measured size plus a few hundred characters, so the
     // next addition still has to justify itself here.
-    expect(buildToolSystemPrompt().length).toBeLessThan(12_500);
+    //
+    // 2026-11-05 — moved by the WRITE-PERMISSION clause: "Appending … a refusal
+    // that names a question". It replaces a contradiction in the prompt (the write
+    // rule said "call ask_user", the rule two lines below said "NEVER ask for
+    // permission") that two live traces resolved by never asking at all and
+    // dropping the deliverable — 12,577 measured, so the cap is that plus ~100
+    // characters of headroom rather than a rounder number pulled from the air.
+    expect(buildToolSystemPrompt().length).toBeLessThan(12_700);
   });
 
-  it('the DEFAULT skill hint for a software ask is small — the catalog is OPT-IN', async () => {
-    // Model-driven default: a bounded discovery POINTER (the skill tool + the
-    // capability search), never the ~24K catalog.
-    expect(DEFAULT_SKILL_HINT_MODE).toBe('pointer');
-    expect(resolveSkillHintMode()).toBe('pointer');
+  it('the DEFAULT skill hint is a bounded INDEX (name + trigger), never the catalog', async () => {
+    // Model-driven default: every skill by NAME with the clause that says WHEN
+    // it applies. It replaces the old `pointer`, which named no skill at all, so
+    // the model had to guess that a skill existed before it could read anything
+    // about it — the measured routing failure this change exists for.
+    expect(DEFAULT_SKILL_HINT_MODE).toBe('index');
+    expect(resolveSkillHintMode()).toBe('index');
     const hint = await buildConfiguredSkillHint();
-    expect(hint.length).toBeLessThan(2_000);
+    expect(hint).toContain('## Skills');
+    // Bounded: the full catalog is ~24.5K and must never be the default shape.
+    expect(hint.length).toBeLessThan(13_000);
     expect(hint).not.toContain('## Available skills');
   });
 
   it('base prompt + default skill hint stay within the per-turn budget', async () => {
     const hint = await buildConfiguredSkillHint();
     const total = buildToolSystemPrompt().length + hint.length;
-    // The regression was ~32.8K. This is the number that must never regress.
-    expect(total).toBeLessThan(20_000);
+    // The regression was ~32.8K (base 7.6K + the 24.5K catalog on EVERY turn).
+    // The index carries a trigger for all 156 bundled skills in ~10.8K, so the
+    // measured default is ~23.4K — bounded, and it buys routing signal rather
+    // than prose. The cap moved 20K → 25K with that measurement; it is still
+    // well below the regression, and the hint itself is capped at 13K above so
+    // the two assertions cannot both creep.
+    expect(total).toBeLessThan(25_000);
   });
 
   it('only an EXPLICIT opt-in turns the full catalog on', async () => {

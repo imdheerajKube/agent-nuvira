@@ -1,14 +1,25 @@
 import type { DashboardData } from '../types';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Cell } from 'recharts';
+// ONE money formatter (and ONE set of rules about what a figure means).
+import { formatCost } from '../format';
 import PageHeader from './PageHeader';
 
 interface BenchmarkChartsProps {
   data: DashboardData | null;
 }
 
-function formatCost(usd: number | undefined): string {
-  if (usd === undefined || usd === null) return '$0.00';
-  return '$' + usd.toFixed(6);
+/**
+ * A benchmark run's cost is an ESTIMATE — `Result.costUsd` is documented as
+ * "Estimated cost in USD" (`learning/benchmark.ts`), priced from token counts, not
+ * a provider's statement. So every place this page prints one says so, and a run
+ * that recorded none prints a dash rather than `$0.00`: a benchmark that was never
+ * priced is not a free benchmark.
+ */
+const COST_LABEL = 'Cost (est.)';
+const COST_HINT = 'Estimated from token counts × list price — not a provider-stated charge';
+
+function estimateCell(usd: number | undefined): string {
+  return usd === undefined || usd === null ? '—' : formatCost(usd);
 }
 
 function formatPercent(value: number | undefined): string {
@@ -80,9 +91,9 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
                 <div className="benchmark-stat-value">{latest.summary.medianLatencyMs}ms</div>
                 <div className="benchmark-stat-label">Latency</div>
               </div>
-              <div className="benchmark-stat fail">
-                <div className="benchmark-stat-value">{formatCost(latest.summary.totalCostUsd)}</div>
-                <div className="benchmark-stat-label">Cost</div>
+              <div className="benchmark-stat fail" title={COST_HINT}>
+                <div className="benchmark-stat-value">{estimateCell(latest.summary.totalCostUsd)}</div>
+                <div className="benchmark-stat-label">{COST_LABEL}</div>
               </div>
             </div>
           </>
@@ -133,8 +144,8 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
             </ResponsiveContainer>
           </div>
 
-          {/* Cost Chart */}
-          <h2 className="section-subtitle">Cost by Model</h2>
+          {/* Cost Chart — an estimate, and titled as one. */}
+          <h2 className="section-subtitle">Cost by Model (est.)</h2>
           <div className="chart-container">
             <ResponsiveContainer width="100%" height={260}>
               <BarChart data={passRateData} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
@@ -144,7 +155,7 @@ export default function BenchmarkCharts({ data }: BenchmarkChartsProps) {
                 <Tooltip
                   contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
                   labelStyle={{ color: 'var(--text-primary)' }}
-                  formatter={(value: number) => ['$' + value.toFixed(6), 'Cost']}
+                  formatter={(value: number) => [formatCost(value), COST_LABEL]}
                 />
                 <Bar dataKey="cost" radius={[4, 4, 0, 0]} fillOpacity={0.8} fill="var(--accent-purple)" style={{ fill: 'var(--accent-purple)' }} />
               </BarChart>

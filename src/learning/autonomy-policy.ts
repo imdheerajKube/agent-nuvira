@@ -623,16 +623,22 @@ export const IRREVERSIBLE_ACTION_RE =
  *
  * The scoped rule (from the audit): creating a file the request asked for, at a
  * path where NOTHING EXISTS, cannot destroy anything and is undone by deleting
- * the file — so making the user confirm it is pure latency. Everything else
- * keeps the gate it has today:
+ * the file — so making the user confirm it is pure latency. The same question is
+ * asked of every write that touches existing bytes, and answered with EVIDENCE
+ * rather than with the path's mere existence:
  *
  *   - a request that never authorized file creation (gate stays as strict);
- *   - overwriting content that already exists (a re-run cannot recover it).
+ *   - overwriting content that already exists — UNLESS this run wrote it and
+ *     nothing has changed it since (then it is the run's own output, and the
+ *     run still holds it);
+ *   - appending — additive by definition, so nothing on disk is replaced,
+ *     though appending to a file this run did not write and the request never
+ *     named is still a surprise worth one question.
  *
  * Note the asymmetry is deliberate and load-bearing: the safety property the
- * original gate protected (never clobber existing work without a human) is
- * untouched, while the property it lacked (do not stall on work the user
- * already ordered) is added.
+ * original gate protected (never clobber work a human cannot recover) is
+ * untouched, while the property it lacked (do not stall on the run's own
+ * deliverable) is added.
  */
 export interface WriteConfirmationRequest {
   /** Tool being attempted (`write_file`, `edit_file`, …) — for the audit line. */
@@ -643,6 +649,20 @@ export interface WriteConfirmationRequest {
   exists: boolean;
   /** The verdict from {@link requestAuthorizesWrites} for the current request. */
   authorizedByRequest: boolean;
+  /**
+   * `mode: "append"` — the call only ADDS to the end, so no existing byte is
+   * replaced. Absent/false means a whole-file replace.
+   */
+  append?: boolean;
+  /**
+   * The file still holds exactly the bytes this RUN wrote (see
+   * `tools/own-writes.ts`). The one case where replacing existing content is
+   * recoverable by definition — the run wrote it, minutes ago, and nothing has
+   * touched it since.
+   */
+  ownUnchanged?: boolean;
+  /** Does the request itself name this path? */
+  namedByRequest?: boolean;
 }
 
 /** The ruling on a state-changing write. */
@@ -657,6 +677,35 @@ export function decideWriteConfirmation(request: WriteConfirmationRequest): Writ
     return {
       action: 'ask',
       reason: 'the request did not ask for files to be created, so this write is not the user’s stated intent',
+    };
+  }
+  // The run's OWN output, untouched since it wrote it: the bytes are in this
+  // run's transcript, so replacing them recovers them. Checked BEFORE `exists`
+  // because that is the whole point — a file the run just created is the one
+  // case where existence says nothing about recoverability.
+  if (request.ownUnchanged) {
+    return {
+      action: 'proceed',
+      reason: `'${request.path}' still holds exactly what this run wrote and nothing has changed it since — rewriting it destroys nothing the run does not already have`,
+    };
+  }
+  if (request.append) {
+    // Additive: no existing byte is replaced, so there is nothing to lose.
+    if (!request.exists) {
+      return {
+        action: 'proceed',
+        reason: 'creating the file by appending its first section destroys nothing and is undone by deleting it',
+      };
+    }
+    if (request.namedByRequest) {
+      return {
+        action: 'proceed',
+        reason: `the request names '${request.path}' and appending adds to the end without replacing anything already there`,
+      };
+    }
+    return {
+      action: 'ask',
+      reason: `appending to '${request.path}' would add content to a file this run did not write, which the request never mentioned`,
     };
   }
   if (request.exists) {

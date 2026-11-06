@@ -1,6 +1,6 @@
 ---
 name: backup-strategy
-description: Design and implement backup strategies. Use when the goal asks to set up backups, disaster recovery, or data protection.
+description: Design and implement backup and disaster recovery: RPO/RTO, automated snapshots, point-in-time restore, retention, and the recovery runbook. Use when the goal asks to set up backups, disaster recovery, a restore procedure, or data protection.
 version: 2.0.0
 whenToUse: Backup automation, disaster recovery, data retention, compliance, cross-region replication
 whenNotToUse: Real-time replication (use database replication), caching (use redis-cache), log aggregation
@@ -12,7 +12,7 @@ Design and implement backup strategies with enterprise patterns.
 
 ## Goal pattern
 
-backup disaster recovery retention snapshot restore data protection RPO RTO
+backup disaster recovery retention snapshot restore data protection point in time pitr runbook resilience RPO RTO
 
 ## Parameters
 
@@ -145,4 +145,3 @@ find /var/backups -name "*.gz.gpg" -mtime +30 | wc -l
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('backup-strategy', 'references/guide.md')`.

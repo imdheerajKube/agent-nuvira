@@ -34,6 +34,7 @@ import { ConfigManager } from '../config/manager.js';
 import { logger } from '../utils/logger.js';
 import { packagedRegistryDir } from './skills-hub.js';
 import type { HubSkillEntry } from './skills-hub.js';
+import { isSkillPackageDir } from './skill-package.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -184,11 +185,38 @@ const REPOS_DIR = join(resolveNuviraHome(), 'skills-hub', 'repos');
 /** Candidate skills roots inside a cloned repo (probed in order). */
 const REPO_SKILL_ROOTS = ['skills', '.claude/skills', '.agents/skills', '.'];
 
-/** Clone (or reuse) a git repo into the local cache, returning its root. */
-function cloneRepo(base: string): string {
+/**
+ * Re-fetch a cached clone to its remote HEAD (P1 — `skills update` must see
+ * upstream). Best-effort: an offline machine keeps the cached tree, and a
+ * failed refresh is never a failed update of the installed skill.
+ */
+function refreshRepo(target: string): void {
+  try {
+    execFileSync('git', ['-C', target, 'fetch', '--depth', '1', '--quiet', 'origin', 'HEAD'], {
+      stdio: 'ignore',
+      timeout: 60_000,
+    });
+    execFileSync('git', ['-C', target, 'reset', '--hard', '--quiet', 'FETCH_HEAD'], {
+      stdio: 'ignore',
+      timeout: 30_000,
+    });
+  } catch (err) {
+    logger.debug(`git-repo refresh failed for ${target}: ${err}`);
+  }
+}
+
+/**
+ * Clone (or reuse) a git repo into the local cache, returning its root.
+ * `refresh: true` re-fetches the cached clone first (the update path), so the
+ * tree that gets read is the remote's current tree.
+ */
+function cloneRepo(base: string, refresh = false): string {
   const hash = createHash('sha256').update(base).digest('hex').slice(0, 16);
   const target = join(REPOS_DIR, hash);
-  if (existsSync(join(target, '.git'))) return target;
+  if (existsSync(join(target, '.git'))) {
+    if (refresh) refreshRepo(target);
+    return target;
+  }
   try {
     mkdirSync(REPOS_DIR, { recursive: true });
     execFileSync('git', ['clone', '--depth', '1', '--quiet', base, target], { stdio: 'ignore', timeout: 60_000 });
@@ -199,13 +227,76 @@ function cloneRepo(base: string): string {
   }
 }
 
+/** The cached clone's HEAD commit (short) — the derived version for a skill
+ *  whose frontmatter declares none. '?' when unavailable. */
+export function gitRepoCommitSha(source: RegistrySource): string {
+  if (source.kind !== 'git-repo') return '?';
+  const repoRoot = cloneRepo(baseRoot(source));
+  if (!repoRoot) return '?';
+  try {
+    return execFileSync('git', ['-C', repoRoot, 'rev-parse', '--short=12', 'HEAD'], {
+      encoding: 'utf-8',
+      timeout: 10_000,
+    }).trim();
+  } catch {
+    return '?';
+  }
+}
+
+/**
+ * The version to record for an entry from `source`.
+ *
+ * A git-repo skill that declares no `version:` used to install as `0.0.0`,
+ * which made the update gate compare equal forever — a silent never-updates
+ * bug. The source commit sha IS the version in that case, so an upstream
+ * change is observable. A declared version still wins (authors use it).
+ */
+export function sourceVersionFor(
+  source: RegistrySource,
+  entry: HubSkillEntry,
+): { version: string; commit: string | null } {
+  const commit = source.kind === 'git-repo' ? gitRepoCommitSha(source) : null;
+  const declared = entry.version && entry.version !== '0.0.0' ? entry.version : null;
+  const version = declared ?? (commit && commit !== '?' ? commit : entry.version || '0.0.0');
+  return { version, commit: commit === '?' ? null : commit };
+}
+
+/**
+ * P1 — resolve a skill's source DIRECTORY so the installer can copy the whole
+ * package (SKILL.md + references/scripts/data).
+ *
+ * Only directory-backed sources can supply one: a `git+` repo (the clone) and a
+ * local dir. A raw-HTTP registry has no listing protocol, so it returns null and
+ * the caller falls back to the single-file path — degraded, never broken.
+ */
+export async function fetchSourcePackage(
+  source: RegistrySource,
+  name: string,
+): Promise<{ dir: string; root: string } | null> {
+  if (!/^[a-z0-9-]+$/.test(name)) return null;
+  if (source.kind === 'git-repo') {
+    const repoRoot = cloneRepo(baseRoot(source));
+    if (!repoRoot) return null;
+    const root = findRepoSkillsRoot(repoRoot);
+    if (!root) return null;
+    const dir = join(root, name);
+    return isSkillPackageDir(dir) ? { dir, root } : null;
+  }
+  if (source.kind === 'local-dir') {
+    const root = baseRoot(source);
+    const dir = join(root, name);
+    return isSkillPackageDir(dir) ? { dir, root } : null;
+  }
+  return null;
+}
+
 /**
  * Index a cloned repo: find its skills root, then the SKILL.md dirs.
  * Names are validated with the install sandbox rule before any read — a
  * hostile repo entry can never smuggle a traversal path into the catalog.
  */
-function indexGitRepo(source: RegistrySource): HubSkillEntry[] {
-  const repoRoot = cloneRepo(baseRoot(source));
+function indexGitRepo(source: RegistrySource, refresh = false): HubSkillEntry[] {
+  const repoRoot = cloneRepo(baseRoot(source), refresh);
   if (!repoRoot) return [];
   const root = findRepoSkillsRoot(repoRoot);
   if (!root) return [];
@@ -261,11 +352,19 @@ function fetchGitRepoSkill(source: RegistrySource, name: string): string | null 
 
 // ─── Unified dispatch ───────────────────────────────────────────────────────
 
-/** Fetch the index from ONE source (normalized to HubSkillEntry[]). */
-export async function fetchSourceIndex(source: RegistrySource): Promise<HubSkillEntry[]> {
+/**
+ * Fetch the index from ONE source (normalized to HubSkillEntry[]).
+ *
+ * `refresh` re-fetches a cached `git+` clone first (the update path); it is a
+ * no-op for every other source kind.
+ */
+export async function fetchSourceIndex(
+  source: RegistrySource,
+  opts: { refresh?: boolean } = {},
+): Promise<HubSkillEntry[]> {
   switch (source.kind) {
     case 'git-repo':
-      return indexGitRepo(source);
+      return indexGitRepo(source, opts.refresh === true);
     case 'browse-sh':
       return fetchBrowseShIndex(source);
     case 'local-dir':
@@ -444,8 +543,15 @@ export async function installFromSource(
   force = false,
 ): Promise<{ ok: boolean; name: string; version?: string; source?: string; quarantined?: boolean; reason?: string }> {
   const { installHubSkill } = await import('./skills-hub.js');
-  return installHubSkill({ ...entry, source: source.base }, projectRoot, force, {
+  // P1 — prefer the whole package; fall back to the single SKILL.md when the
+  // source cannot supply a directory.
+  const pkg = await fetchSourcePackage(source, entry.name);
+  const { version } = sourceVersionFor(source, entry);
+  return installHubSkill({ ...entry, version, source: source.base }, projectRoot, force, {
     registry: source.base,
-    fetchSkill: (name) => fetchSourceSkill(source, name),
+    version,
+    ...(pkg
+      ? { sourceDir: pkg.dir }
+      : { fetchSkill: (name) => fetchSourceSkill(source, name) }),
   });
 }

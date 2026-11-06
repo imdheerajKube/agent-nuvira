@@ -35,6 +35,7 @@ import { getCostTracker, recordCallWithUsage } from '../learning/cost-tracker.js
 import { buildConversationKey, cacheReasoning } from '../learning/reasoning-cache.js';
 import { getCatalogProvider } from './provider-catalog.js';
 import { getModelRegistry } from '../learning/model-registry.js';
+import { noteOutputBudgetExhausted, rememberedOutputBudget } from './output-budget.js';
 import {
   resolveReasoningRequest,
   withReasoningFallback,
@@ -74,6 +75,8 @@ const FALLBACK_BASE_URL = 'http://127.0.0.1:8080/v1';
 interface ChatCompletionResponse {
   choices?: Array<{
     message?: { content?: string };
+    /** `'length'` = cut at the output cap — the evidence a step needs more room. */
+    finish_reason?: string | null;
   }>;
   usage?: WireUsage;
 }
@@ -207,6 +210,63 @@ export class OpenAICompatAdapter implements InferenceProvider {
     );
   }
 
+  /**
+   * The output cap to SEND for this pair: the configured value, raised to a
+   * floor this pair has already proved it needs (a previous step ended at
+   * `finish_reason: 'length'` — see output-budget.ts). Learning is per pair and
+   * expires, so a short-answer model is never punished for one long step.
+   */
+  private outputBudget(model: string, requested?: number): number {
+    const base = compatMaxTokens(model, requested, this.config.maxTokens);
+    const learned = rememberedOutputBudget(this.meta.providerId, model);
+    return learned ? Math.max(base, learned) : base;
+  }
+
+  /** Learn from a cap-truncated step so the NEXT request has room to finish. */
+  private learnFromTruncation(model: string, maxTokens: number, finishReason?: string | null): void {
+    if (finishReason !== 'length') return;
+    try {
+      noteOutputBudgetExhausted(this.meta.providerId, model, maxTokens);
+    } catch {
+      // Best-effort — budget learning must never break the call.
+    }
+  }
+
+  /**
+   * Learn from a step whose TOOL-CALL ARGUMENTS were cut, not only from an empty
+   * answer, and report the cap the next request will carry.
+   *
+   * A tool call whose argument JSON does not parse is the same evidence as
+   * `finish_reason: 'length'` — the model was still emitting when the cap ended
+   * it — but it arrives on wires that do not echo `finish_reason` at all, and it
+   * ends a step that has CONTENT (so the empty-completion path never sees it).
+   * Without this, the pair kept being re-asked under the cap that had just cut
+   * it, and the only way to deliver a large document was to fragment it.
+   *
+   * Measured (trace-1793853385112-sf2exl, 2026-11-05): a 9 KB `write_file` and a
+   * sectioned `edit_file` were both cut at 4,096 tokens; the audit report on disk
+   * ended at §1 with the remaining sections in a different file.
+   */
+  private learnFromCutToolArguments(
+    model: string,
+    maxTokens: number,
+    result: ToolCallResponse,
+  ): number | undefined {
+    const cut = result.toolCalls.some((c) => c.argumentsError !== undefined);
+    if (!cut) return undefined;
+    try {
+      // `learnFromTruncation` already covers the explicit 'length' case; either
+      // way the learned floor is what the NEXT request will send.
+      if (result.finishReason !== 'length') {
+        noteOutputBudgetExhausted(this.meta.providerId, model, maxTokens);
+      }
+      return rememberedOutputBudget(this.meta.providerId, model);
+    } catch {
+      // Best-effort — budget learning must never break the call.
+      return undefined;
+    }
+  }
+
   /** Unconditional (gate-bypassing) request used ONLY by the model probe. */
   private probeReasoningRequest(): ReasoningRequest | undefined {
     const shape = reasoningShapeForProvider(this.meta.providerId);
@@ -243,7 +303,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
     reasoningBody: Record<string, unknown>,
   ): Promise<string> {
     const temperature = options?.temperature ?? this.config.temperature ?? 0.7;
-    const maxTokens = compatMaxTokens(model, options?.maxTokens, this.config.maxTokens);
+    const maxTokens = this.outputBudget(model, options?.maxTokens);
 
     logger.debug(`${this.meta.label}: Generating with model=${model} via ${this.baseUrl}`);
 
@@ -288,6 +348,10 @@ export class OpenAICompatAdapter implements InferenceProvider {
 
     const data = (await response.json()) as ChatCompletionResponse;
     const content = data.choices?.[0]?.message?.content || '';
+    // EVIDENCE BEFORE VERDICT: a step cut at the output cap is not a dead pair.
+    // Recording it here lets the retry carry more room instead of the failover
+    // walk treating a reasoning model's spent budget as an outage.
+    this.learnFromTruncation(model, maxTokens, data.choices?.[0]?.finish_reason);
     if (!content && !data.choices) {
       throw new Error(`${this.meta.label} API error (empty response)`);
     }
@@ -330,7 +394,8 @@ export class OpenAICompatAdapter implements InferenceProvider {
       ...extraHeaders(this.config),
       ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
     };
-    return withReasoningFallback({
+    const maxTokens = this.outputBudget(model, options?.maxTokens);
+    const result = await withReasoningFallback({
       provider: this.meta.providerId,
       model,
       request: this.reasoningRequest(model, options),
@@ -346,7 +411,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
       messages,
       tools,
       temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-      maxTokens: compatMaxTokens(model, options?.maxTokens, this.config.maxTokens),
+      maxTokens,
       timeoutMs: this.config.timeoutMs ?? 30_000,
       // P4 — external cancellation (the dashboard Cancel button).
       signal: options?.signal,
@@ -362,6 +427,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
       reasoningBody,
       }),
     });
+    this.learnFromTruncation(model, maxTokens, result.finishReason);
+    const budgetAfterTruncation = this.learnFromCutToolArguments(model, maxTokens, result);
+    return budgetAfterTruncation === undefined ? result : { ...result, budgetAfterTruncation };
   }
 
   /**
@@ -373,13 +441,15 @@ export class OpenAICompatAdapter implements InferenceProvider {
     tools: ToolSchema[],
     options: InferenceOptions | undefined,
     onToken: (token: string) => void,
-  ): Promise<ToolCallResponse> {    const model = options?.model || this.config.model || 'default';
+  ): Promise<ToolCallResponse> {
+    const model = options?.model || this.config.model || 'default';
     const headers: Record<string, string> = {
       ...extraHeaders(this.config),
       ...buildAuthHeaders(this.meta, this.config, options?.apiKey),
     };
+    const maxTokens = this.outputBudget(model, options?.maxTokens);
 
-    return withReasoningFallback({
+    const result = await withReasoningFallback({
       provider: this.meta.providerId,
       model,
       request: this.reasoningRequest(model, options),
@@ -394,7 +464,7 @@ export class OpenAICompatAdapter implements InferenceProvider {
         messages,
         tools,
         temperature: options?.temperature ?? this.config.temperature ?? 0.7,
-        maxTokens: compatMaxTokens(model, options?.maxTokens, this.config.maxTokens),
+        maxTokens,
         timeoutMs: this.config.timeoutMs ?? 30_000,
         // P4 — external cancellation (the dashboard Cancel button).
         signal: options?.signal,
@@ -414,6 +484,9 @@ export class OpenAICompatAdapter implements InferenceProvider {
       onToken,
     ),
     });
+    this.learnFromTruncation(model, maxTokens, result.finishReason);
+    const budgetAfterTruncation = this.learnFromCutToolArguments(model, maxTokens, result);
+    return budgetAfterTruncation === undefined ? result : { ...result, budgetAfterTruncation };
   }
 
   async generateStream(

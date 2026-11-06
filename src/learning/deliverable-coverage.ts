@@ -114,6 +114,58 @@ interface FileFact {
 const has = (files: readonly FileFact[], re: RegExp): boolean => files.some((f) => re.test(f.path));
 
 /**
+ * A NEGATED mention is a CONSTRAINT, not a demand.
+ *
+ * Measured 2026-11-06, the RAG benchmark: the ask said "**No external vector
+ * database service** — use a local index", and this module told a correct build
+ * "Still missing database / schema — the ask named it". The false gap cost steps
+ * and, worse, taught the model that the loop's own claims are noise.
+ *
+ * The rule is clause-scoped: look only at the text between the match and the
+ * nearest clause boundary, so "use PostgreSQL, not SQLite" still demands
+ * PostgreSQL while "do not use a database" demands nothing.
+ */
+const NEGATION = /\b(?:no|not|never|without|avoid|skip|exclude|don't|do not|does not|doesn't|must not|should not|cannot|can't)\b/i;
+const NEGATION_BEFORE = 80;
+const NEGATION_AFTER = 40;
+
+/** Start of the clause holding `index` (sentence, semicolon, comma or line). */
+function clauseStart(text: string, index: number): number {
+  for (let i = index - 1; i >= 0; i -= 1) {
+    if (/[.;,\n]/.test(text[i])) return i + 1;
+  }
+  return 0;
+}
+
+function clauseEnd(text: string, index: number): number {
+  for (let i = index; i < text.length; i += 1) {
+    if (/[.;,\n]/.test(text[i])) return i;
+  }
+  return text.length;
+}
+
+/**
+ * The first NON-NEGATED match of a surface's demand words, or null.
+ *
+ * A fresh regex per call so a `g` flag on the table's pattern cannot leak state
+ * between asks.
+ */
+function demandMatch(ask: string, demand: RegExp): RegExpExecArray | null {
+  const flags = demand.flags.includes('g') ? demand.flags : `${demand.flags}g`;
+  const scan = new RegExp(demand.source, flags);
+  for (let match = scan.exec(ask); match; match = scan.exec(ask)) {
+    const before = ask.slice(Math.max(clauseStart(ask, match.index), match.index - NEGATION_BEFORE), match.index);
+    const after = ask.slice(
+      match.index + match[0].length,
+      Math.min(clauseEnd(ask, match.index + match[0].length), match.index + match[0].length + NEGATION_AFTER),
+    );
+    if (!NEGATION.test(before) && !NEGATION.test(after)) return match;
+    if (match[0].length === 0) scan.lastIndex += 1;
+  }
+  return null;
+}
+
+/**
  * Extensions that hold PROGRAM SOURCE, in any language this agent is pointed at.
  * Used only to decide which files are worth reading for runtime evidence.
  */
@@ -206,7 +258,12 @@ const SURFACES: readonly SurfaceDef[] = [
   {
     id: 'e2e',
     label: 'end-to-end tests',
-    demand: /\b(e2e|end[- ]to[- ]end|playwright|cypress)\b/i,
+    // See the matching note in `task-artifacts.ts`: a bare "end to end" is how a
+    // flow is described, not a demand for a suite. Only test-shaped phrasing asks
+    // for this surface, so an architecture section saying "works end to end" is
+    // never read as "build e2e tests".
+    demand:
+      /\b(?:e2e|playwright|cypress)\b|\bend[- ]to[- ]end\s+(?:tests?|testing|suite|coverage|specs?)\b|\b(?:tests?|testing|suite|coverage)\b[^.\n]{0,16}\bend[- ]to[- ]end\b/i,
     missing: 'no `*.spec.*` / `*.e2e.*` file, no playwright/cypress config, no `tests/e2e/` directory',
     evidence: (files) =>
       has(files, /\.(?:e2e|spec)\.[cm]?[jt]sx?$/) ||
@@ -282,7 +339,7 @@ export function missingSurfaceGaps(input: {
   const files = input.files ?? collectFileFacts(input.cwd);
   const gaps: SurfaceGap[] = [];
   for (const surface of SURFACES) {
-    const match = surface.demand.exec(ask);
+    const match = demandMatch(ask, surface.demand);
     if (!match) continue;
     if (surface.evidence(files)) continue;
     // A filename convention is one kind of evidence, not the only one. Before

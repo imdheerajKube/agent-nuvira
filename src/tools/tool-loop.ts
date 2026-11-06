@@ -40,6 +40,10 @@ import { stepDigest, stepShape, type StepReplay } from '../learning/step-checkpo
 // nothing usable". The loop does not re-invent the rule; it asks the same module
 // the failover walk validates with, so "empty" means one thing in this repo.
 import type { UnusableResponseKind } from '../learning/response-usability.js';
+import { diagnoseEmptyCompletion } from '../learning/empty-completion.js';
+// The learned output budget — the loop's FALLBACK path for a pair whose adapter
+// could not report the raised cap itself (see `learnFromCutArguments`).
+import { noteOutputBudgetExhausted, rememberedOutputBudget } from '../inference/output-budget.js';
 // P7 — the identical-command guard's memory. The loop drops it when a WRITE is
 // applied, so a repaired project can re-run its own check (see the context below).
 import { existsSync } from 'node:fs';
@@ -170,6 +174,7 @@ import { REASONING_NOT_RETAINED } from '../inference/thinking-replay.js';
 import type { PlanEvidence, PlanSnapshot } from './plan-store.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
+import { checkDeliverableShape, describeShapeGaps } from '../learning/deliverable-shape.js';
 import { verifyArtifacts } from '../agents/artifact-verification.js';
 import { fenceUntrustedToolOutput } from './untrusted-content.js';
 import {
@@ -208,6 +213,7 @@ import {
 import {
   FINISH_ACCEPTED_MARKER,
   completionNudge,
+  outstandingCloseoutFacts,
   type TurnLedgerSnapshot,
 } from '../learning/completion-contract.js';
 import { isBuildShapedAsk } from '../learning/task-artifacts.js';
@@ -491,6 +497,23 @@ export interface StepResponse {
    */
   finishReason?: string;
   /**
+   * The output cap THIS step's request sent, when the caller knows it. With
+   * `finishReason` and `usage` it is what turns an empty step from "the provider
+   * returned nothing" into "this model spent its budget on reasoning" — see
+   * `diagnoseEmptyCompletion` in `learning/empty-completion.ts`.
+   */
+  requestedMaxTokens?: number;
+  /**
+   * The raised output cap this pair earned because THIS step's tool-call
+   * arguments were cut off (see `inference/interface.ts`).
+   *
+   * It changes what the refusal can honestly say: re-sending the SAME call under
+   * a larger cap may now succeed, so telling the model to split the payload
+   * immediately is what turned one audit report into a §1 fragment in three
+   * files (trace-1793853385112-sf2exl).
+   */
+  budgetAfterTruncation?: number;
+  /**
    * Which transport ACTUALLY carried this step's tool calls, in the same
    * vocabulary the subagent child announces
    * (`src/tools/child-agent-runtime.ts`):
@@ -598,6 +621,27 @@ export interface ToolLoopDeps {
    * `requestModelSwitch`. Omitted entirely (mocks, sub-agent children, older
    * callers) → byte-for-byte the previous behaviour.
    */
+  /**
+   * EVIDENCE-BASED LIVENESS CHECK for the pair that just returned nothing.
+   *
+   * An empty step with NO cap evidence (`finish_reason`/`usage` absent) cannot be
+   * attributed from the response alone. Instead of guessing — waiting out a blip
+   * that is actually a dead key, or rotating away from a model that is up and
+   * merely choked on one prompt — the loop asks the caller to ping the pair with
+   * a one-line question:
+   *
+   *   - `alive`       → it answered a trivial prompt seconds ago. Re-ask it the
+   *                     real step instead of rotating.
+   *   - `unavailable` → it refused/paid nothing for a trivial prompt. Skip the
+   *                     patience window and hand off with that evidence.
+   *   - `unknown`     → the probe itself timed out or was inconclusive. Fall back
+   *                     to {@link emptyResponsePatienceMs} exactly as before.
+   *
+   * Asked at most ONCE per empty streak, and only for steps whose diagnosis says
+   * the response carried no exhaustion evidence. Omitted (mocks, sub-agent
+   * children, older callers) → previous behaviour, byte for byte.
+   */
+  assessServedPair?(): Promise<'alive' | 'unavailable' | 'unknown'>;
   emptyResponsePatienceMs?(info: {
     /** Empties in a row on the current pair, including the one being handled. */
     emptyStreak: number;
@@ -1929,6 +1973,20 @@ export const MAX_THINK_CONTINUES = 3;
  */
 export const MAX_SAME_MODEL_EMPTY_RETRIES = 1;
 /**
+ * How many times a step that provably ended AT THE OUTPUT CAP may be re-asked on
+ * the SAME pair before the ordinary empty-response policy applies.
+ *
+ * A cap-truncated step is not evidence of an outage — the model was producing
+ * tokens and the limit stopped it, which is the normal shape of a reasoning model
+ * whose chain of thought is longer than `max_tokens`. Rotating away from it there
+ * is how a working model gets silently replaced by a weaker one (measured on
+ * `deepseek-v4-pro`, which returned reasoning-only steps with
+ * `finish_reason: 'length'` and was handed off). Two re-asks let the adapter's
+ * learned budget take effect (it doubles the cap up to 32K) without letting a
+ * genuinely stuck model spin: after that the normal streak bookkeeping owns it.
+ */
+export const MAX_EMPTY_BUDGET_RETRIES = 2;
+/**
  * P2 — ceiling on mid-turn handoffs, so a caller whose pool churns through
  * unusable models cannot spin. Each handoff is a genuinely different candidate
  * (the caller must refuse to hand back the same pair), so this only bounds a
@@ -2246,6 +2304,15 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // nothing. Both are reset wherever the streak resets.
   let emptyPatienceSchedule: readonly number[] | undefined;
   let emptyPatienceSpent = 0;
+  // EVIDENCE — how many of this streak's empties were cap-truncations re-asked
+  // on the same pair (see MAX_EMPTY_BUDGET_RETRIES) and whether the liveness
+  // probe has already been asked. Both reset wherever the streak resets, so each
+  // new empty streak gets its own one probe and its own budget re-asks.
+  let emptyBudgetRetries = 0;
+  let emptyPairAssessed = false;
+  // Set when the liveness probe itself proved the pair cannot serve — patience
+  // on a pair we just watched refuse a one-line prompt is pure waste.
+  let emptyPairUnavailable = false;
   // P3 — the ATTEMPT budget (see MAX_HANDOFF_ATTEMPT_CREDIT): step credit
   // granted by mid-turn handoffs, so a run against several dead models cannot
   // exhaust its road before it has done any work.
@@ -2577,6 +2644,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // The run's own behaviour, so a gate can refuse to RE-ASK a question the
     // user already answered (see learning/run-trace.ts).
     runTrace,
+    // WALL CLOCK, readable by every tool: how long this turn has left. `run_terminal`
+    // clamps its own wait to it so one long command cannot consume the turn that
+    // still has to write the deliverable (a 13.5-minute suite under a 7-minute
+    // budget, measured 2026-11-05). The value is already computed below for the
+    // closing window; this exposes the same clock to the tool layer.
+    remainingBudgetMs: () =>
+      turnDurationMs === undefined ? Infinity : Math.max(0, turnDurationMs - (clock() - turnStartedAt)),
     // C3 — the commands THIS run already answered.
     //
     // Created here, so its lifetime is exactly the tool loop's: one answer's
@@ -2665,9 +2739,19 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         })(),
       }))
       .filter((entry) => entry.exists || workShaped);
+    // THE SHAPE OF THE REPORT the ask enumerated. Existence is already checked
+    // above; this asks whether the file contains the parts the ask named, because
+    // the measured 2026-11-05 run wrote the file with 2 of 5 sections and zero
+    // citations and was accepted.
+    const shape = checkDeliverableShape({
+      ask: requestText,
+      cwd,
+      paths: namedState.filter((entry) => entry.exists).map((entry) => entry.path),
+    });
     const snapshot: TurnLedgerSnapshot = {
       unmet: describeUnmet(ledger.unmet),
       ...(namedState.length > 0 ? { namedDeliverables: namedState } : {}),
+      ...(shape ? { deliverableShape: shape } : {}),
       redChecks: red.map((r) => ({
         command: r.command,
         stale: r.stale,
@@ -2887,7 +2971,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // every gate stayed silent (measured 2026-10-29). Named here — and refused by
       // `finish` — because the requested artifact is the deliverable.
       const missingNamed = (snapshot.namedDeliverables ?? []).filter((entry) => !entry.exists);
-      const outstanding = unmet.length + unbound.length + redChecks.length + missingNamed.length;
+      // The report's missing sections / citations / Limitations heading, as facts.
+      const shapeGaps = snapshot.deliverableShape ? describeShapeGaps(snapshot.deliverableShape) : [];
+      const outstanding =
+        unmet.length + unbound.length + redChecks.length + missingNamed.length + shapeGaps.length;
       if (outstanding > 0) {
         completionNudges += 1;
         const named = [
@@ -2895,6 +2982,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           ...unbound.slice(0, 2),
           ...redChecks.slice(0, 2).map((r) => `${r.command} is red`),
           ...missingNamed.slice(0, 2).map((d) => `${d.path} is missing`),
+          ...shapeGaps.slice(0, 2),
         ];
         return {
           gate: 'completion',
@@ -2904,10 +2992,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             redChecks: redChecks.map((r) =>
               r.stale ? `\`${r.command}\` FAILED and has not been re-run since the code changed` : `\`${r.command}\` is red`,
             ),
-            extra: missingNamed.map(
-              (entry) =>
-                `\`${entry.path}\` is named in the request and is not on disk — write the file now, with the content the request described`,
-            ),
+            extra: [
+              ...missingNamed.map(
+                (entry) =>
+                  `\`${entry.path}\` is named in the request and is not on disk — write the file now, with the content the request described`,
+              ),
+              ...shapeGaps,
+            ],
           }),
           summary: `${outstanding} checkable requirement(s) outstanding at the end of the turn: ${named.join('; ')}`,
           event: `   ✅ The turn is ending with ${outstanding} outstanding requirement(s) — asking the model to close them or state them.`,
@@ -3490,17 +3581,32 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         } catch {
           return 0;
         }
-      })()}|${progress.mutatedPaths.length}`;
-      const requirementOpen = openRows > 0 || planStillOpen || owesDeliverable;
+      })()}|${new Set(progress.mutatedPaths).size}`;
+      // The close-out gates count more than the ledger: a file the ask named by
+      // path, a red check this turn owns, a report section the request enumerated.
+      // The budget must read the SAME facts, or it stops while announcing work it
+      // could not see (measured 2026-11-06: the RAG arm ended at 50 steps with
+      // "2 requirement(s) the ask named are still unmet" — and those two were
+      // exactly the facts this line now includes).
+      const closeoutFacts = (() => {
+        try {
+          return outstandingCloseoutFacts(completionEvidence().snapshot);
+        } catch {
+          return 0;
+        }
+      })();
+      const requirementOpen = openRows > 0 || closeoutFacts > 0 || planStillOpen || owesDeliverable;
       const extensionReason = gainedFindings
         ? `${freshFindings} new finding(s) in the report`
         : openRows > 0
           ? `${openRows} requirement(s) the ask named are still unmet`
-          : planStillOpen
-            ? 'the plan has open steps'
-            : owesDeliverable
-              ? `the deliverable ${namedDeliverables.join(', ')} is not on disk yet`
-              : 'the assessment has not credited a finding yet';
+          : closeoutFacts > 0
+            ? `${closeoutFacts} close-out fact(s) are still outstanding (named file, red check or report section)`
+            : planStillOpen
+              ? 'the plan has open steps'
+              : owesDeliverable
+                ? `the deliverable ${namedDeliverables.join(', ')} is not on disk yet`
+                : 'the assessment has not credited a finding yet';
       // A STALL is the count's real job, done from evidence: two consecutive grants
       // that left every requirement row and the file count exactly where they were.
       const stalled = requirementDriven && requirementFingerprint === fingerprintAtLastGrant;
@@ -3521,7 +3627,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         maybeNudgeEditBreadth();
         actionsAtLastGrant = actionsNow;
         fingerprintAtLastGrant = requirementFingerprint;
-        if (requirementDriven) stalledGrants = 0;
+        // Do NOT reset the stall counter here. A grant that moved no requirement is
+        // exactly what the counter exists to count; resetting it on every grant made
+        // "two consecutive silent grants" unreachable, so a turn that kept calling
+        // tools without changing the tree ran to the absolute guard. The `else`
+        // above already resets on a MOVING grant (the fingerprint changed).
         rememberYield();
         deps.onEvent?.(
           `   🔄 Still working — ${extensionReason} ` +
@@ -4049,6 +4159,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       // twenty turns of the loop ago.
       emptyPatienceSchedule = undefined;
       emptyPatienceSpent = 0;
+      // EVIDENCE — a new streak gets its own budget re-asks and its own probe.
+      emptyBudgetRetries = 0;
+      emptyPairAssessed = false;
+      emptyPairUnavailable = false;
     }
 
     if (toolCalls.length === 0) {
@@ -4077,6 +4191,111 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // is the exact class of defect this work exists to remove, so the two
         // cases are named apart even though they are bounded together.
         const emptyResponse = response.content.trim().length === 0;
+        // Name the pair generically when the route is unknown — a wrong name
+        // would be worse than none (see `servedRoute`). Computed once, used by
+        // every empty-response path below (budget, probe, patience, handoff).
+        let pairLabel = 'the same model';
+        try {
+          const route = opts.servedRoute?.();
+          if (route?.model && !isUnresolvedModel(route.model)) {
+            pairLabel = `${route.providerType}/${route.model}`;
+          }
+        } catch {
+          // Unknown route reads generically.
+        }
+        // ── EVIDENCE BEFORE ROTATION (empty-completion diagnosis) ────────────
+        //
+        // "The provider returned nothing" is a VERDICT, and the wire usually
+        // already says whether it is true. A reasoning model that spent its
+        // entire output budget thinking returns `content: ''` with
+        // `finish_reason: 'length'` and tens of thousands of chars of
+        // reasoning_content — indistinguishable, to the old code, from a dead
+        // endpoint. Rotating there is how a working model (measured:
+        // `deepseek-v4-pro` in a pinned turn) gets silently replaced by a weaker
+        // one. So the response is DIAGNOSED first, and only an empty with no
+        // explanation is treated as a provider failure.
+        const emptyVerdict = emptyResponse
+          ? diagnoseEmptyCompletion({
+              finishReason: response.finishReason,
+              reasoningChars: response.reasoningContent?.length ?? 0,
+              contentChars: 0,
+              completionTokens: response.usage?.completionTokens,
+              maxTokens: response.requestedMaxTokens,
+            })
+          : undefined;
+
+        // ── A CAP-TRUNCATED STEP IS NOT AN OUTAGE ──────────────────────────
+        // Re-ask the SAME pair: the adapter learned this pair needs more room
+        // from the truncated response itself (see inference/output-budget.ts),
+        // so the next request carries a larger cap. Bounded — after
+        // MAX_EMPTY_BUDGET_RETRIES the ordinary empty-response policy owns it.
+        if (
+          emptyVerdict?.recommendation === 'retry-same-pair-larger-budget' &&
+          emptyBudgetRetries < MAX_EMPTY_BUDGET_RETRIES
+        ) {
+          emptyBudgetRetries += 1;
+          thinkContinues = 0;
+          deps.onEvent?.(
+            `   🧠 ${pairLabel}: ${emptyVerdict.summary} (${emptyVerdict.evidence}). ` +
+              `Re-asking the SAME model with more output room (${emptyBudgetRetries}/${MAX_EMPTY_BUDGET_RETRIES}) ` +
+              `instead of switching models.`,
+          );
+          traceEvent({
+            kind: 'decision',
+            summary:
+              `the step ended at the output cap, not at the provider (${emptyVerdict.evidence}) — ` +
+              `re-asked the SAME pair with a larger budget instead of handing off`,
+          });
+          continue;
+        }
+
+        // ── PROBE AN UNEXPLAINED EMPTY BEFORE JUDGING THE PAIR ─────────────
+        // No cap evidence means the response cannot say why it was empty. Ask
+        // the pair something trivial: a reply proves it is UP (re-ask the real
+        // step), a refusal proves it is NOT (hand off without spending the
+        // patience window on it), a timeout proves nothing (existing policy).
+        if (
+          emptyVerdict?.recommendation === 'probe-then-retry' &&
+          !emptyPairAssessed &&
+          !opts.signal?.aborted &&
+          deps.assessServedPair
+        ) {
+          emptyPairAssessed = true;
+          let probe: 'alive' | 'unavailable' | 'unknown' = 'unknown';
+          try {
+            probe = await deps.assessServedPair();
+          } catch {
+            probe = 'unknown';
+          }
+          if (probe === 'alive') {
+            deps.onEvent?.(
+              `   🩺 ${pairLabel} answered a one-line probe just now — the model is UP. ` +
+                `Re-asking the real step instead of rotating.`,
+            );
+            traceEvent({
+              kind: 'decision',
+              summary:
+                `an empty step was unexplained, so the pair was probed with a one-line prompt — ` +
+                `it answered, so the SAME pair was re-asked instead of being replaced`,
+            });
+            continue;
+          }
+          if (probe === 'unavailable') {
+            emptyPairUnavailable = true;
+            emptyRetriesOnCurrentModel = Math.max(emptyRetriesOnCurrentModel, MAX_SAME_MODEL_EMPTY_RETRIES);
+            deps.onEvent?.(
+              `   🩺 ${pairLabel} refused a one-line probe (auth, quota or model access) — ` +
+                `this is the PAIR, not the prompt. Not spending patience on it.`,
+            );
+            traceEvent({
+              kind: 'gate',
+              gate: 'handoff',
+              summary:
+                `a one-line liveness probe was refused by the provider — the empty step is attributed to ` +
+                `the pair's account, so patience was skipped and the turn is moving on`,
+            });
+          }
+        }
         // ── P5 — WAIT OUT A BLINK ON THE PAIR THAT ANSWERED NOTHING ──────────
         //
         // An empty 200 is the one unusable response that never reaches the blip
@@ -4093,7 +4312,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // loop memoizes that answer per streak so a shifting plan cannot extend the
         // wait, sleeps each granted delay, and re-asks the SAME pair. Cancelling
         // mid-wait is honored.
-        if (emptyResponse && !opts.signal?.aborted) {
+        if (emptyResponse && !emptyPairUnavailable && !opts.signal?.aborted) {
           if (emptyPatienceSchedule === undefined) {
             try {
               emptyPatienceSchedule = deps.emptyResponsePatienceMs?.({
@@ -4110,17 +4329,6 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             const waitMs = emptyPatienceSchedule[emptyPatienceSpent++];
             emptyRetriesOnCurrentModel += 1;
             thinkContinues = 0;
-            // Name the pair generically when the route is unknown — a wrong name
-            // would be worse than none (see `servedRoute`).
-            let pairLabel = 'the same model';
-            try {
-              const route = opts.servedRoute?.();
-              if (route?.model && !isUnresolvedModel(route.model)) {
-                pairLabel = `${route.providerType}/${route.model}`;
-              }
-            } catch {
-              // Unknown route reads generically.
-            }
             if (waitMs > 0) {
               deps.onEvent?.(
                 `   👀 ${pairLabel} returned nothing — waiting ${Math.round(waitMs / 100) / 10}s ` +
@@ -4238,6 +4446,11 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
             // (and half-spent on) the model that just returned nothing.
             emptyPatienceSchedule = undefined;
             emptyPatienceSpent = 0;
+            // EVIDENCE — and its OWN budget re-asks and probe: a probe that
+            // condemned the previous pair says nothing about this one.
+            emptyBudgetRetries = 0;
+            emptyPairAssessed = false;
+            emptyPairUnavailable = false;
             // ── DROP THE FAILED MODEL'S PRIVATE REASONING ─────────────────
             // Every assistant turn records `reasoningContent`, and the wire
             // layer echoes it back on that assistant message — which is
@@ -4902,7 +5115,13 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
           call,
           refuse: malformedToolCallRefusal(
             { name: call.name, argumentsError: call.argumentsError },
-            { finishReason: response.finishReason, attempt: malformedToolCalls },
+            {
+              finishReason: response.finishReason,
+              attempt: malformedToolCalls,
+              budgetAfter:
+                response.budgetAfterTruncation ??
+                learnFromCutArguments(opts, response, call.argumentsError),
+            },
           ),
         };
       }
@@ -7507,9 +7726,42 @@ export function planCloseoutNudge(plan: {
  * loop's honest accounting (successful calls, mutations, verification) depends
  * on that prefix, so a call that never reached a tool is never counted as one.
  */
+/**
+ * The cap the NEXT request will carry, learned HERE when the adapter could not
+ * report it.
+ *
+ * The adapter learns from `finish_reason: 'length'` and from cut argument bytes,
+ * and hands the number back on the response (`budgetAfterTruncation`). This is
+ * the fallback for the wires that report neither — a provider that omits
+ * `finish_reason`, or an adapter without the plumbing — so it uses the one fact
+ * the loop always has: a tool call arrived whose arguments do not parse.
+ *
+ * 'unparseable' only. `empty` is also how a legitimate no-argument call can look
+ * on some wires, and raising the cap for one of those would spend the user's
+ * money on a step that was never truncated.
+ *
+ * Best-effort by construction: an unknown route or a throwing learner leaves the
+ * refusal exactly as it was.
+ */
+function learnFromCutArguments(
+  opts: ToolLoopOptions,
+  response: StepResponse,
+  argumentsError: ToolArgumentsError,
+): number | undefined {
+  if (argumentsError !== 'unparseable') return undefined;
+  try {
+    const route = opts.servedRoute?.();
+    if (!route?.providerType || !route.model) return undefined;
+    noteOutputBudgetExhausted(route.providerType, route.model, response.requestedMaxTokens);
+    return rememberedOutputBudget(route.providerType, route.model);
+  } catch {
+    return undefined;
+  }
+}
+
 export function malformedToolCallRefusal(
   call: { name: string; argumentsError: ToolArgumentsError },
-  opts: { finishReason?: string; attempt?: number } = {},
+  opts: { finishReason?: string; attempt?: number; budgetAfter?: number } = {},
 ): string {
   const attempt = opts.attempt ?? 1;
   const cause =
@@ -7520,10 +7772,18 @@ export function malformedToolCallRefusal(
     opts.finishReason === 'length'
       ? 'the provider stopped this step at its output-token limit (finish_reason: "length"), so the payload was cut off before the arguments were complete'
       : 'this is what a payload too large to emit in ONE step looks like on the wire — nothing was lost on this side';
+  // TWO remedies, and the order matters. When the cap was RAISED (the adapter
+  // learned this pair needs more room), re-sending the same call is the shortest
+  // path to the deliverable AS ONE DOCUMENT — and it is the path the old text
+  // never offered: it demanded fragmentation every time, which is how a §1-only
+  // audit report ended up split across three files. Splitting stays as the
+  // fallback for the case the cap cannot save.
   const escape =
-    'Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call `write_file` again ' +
-    'with mode:"append" for each further section (or write a smaller file and grow it with `edit_file`). ' +
-    'Do NOT re-send this call unchanged — it cannot succeed, and every attempt is a full round trip.';
+    opts.budgetAfter !== undefined
+      ? `Re-send the SAME call once: the output cap for this model is now ${opts.budgetAfter} tokens (it was raised because this payload did not fit), so it may still arrive whole — a document delivered in ONE file is what you want. If it is cut again, then split it: \`write_file\` the FIRST section, then \`write_file\` with mode:"append" for each further section.`
+      : 'Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call `write_file` again ' +
+        'with mode:"append" for each further section (or write a smaller file and grow it with `edit_file`). ' +
+        'Do NOT re-send this call unchanged — it cannot succeed, and every attempt is a full round trip.';
   const escalation =
     attempt >= 3
       ? ` (This is time ${attempt} this turn that a call arrived with no usable arguments — change the SHAPE of the call, not its wording.)`

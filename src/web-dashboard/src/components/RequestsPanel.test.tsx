@@ -129,6 +129,49 @@ describe('RequestsPanel', () => {
     expect(screen.getAllByText('0.0%').length).toBeGreaterThan(0);
   });
 
+  it('labels the cost by its basis — an estimate is never printed as a measurement', () => {
+    const requests = makeRequests({
+      rows: [
+        {
+          provider: 'groq', model: 'llama-3.3-70b-versatile', action: 'chat',
+          requests: 3, errorRate: 0, partials: 0, costUsd: 0.0012, costBasis: 'measured',
+          costCalls: 3, callIds: [], lastAt: 1750000000000,
+        },
+        {
+          provider: 'gemini', model: 'gemini-2.0-flash', action: 'execute',
+          requests: 2, errorRate: 0, partials: 0, costUsd: 0.0024, costBasis: 'estimated',
+          costCalls: 2, callIds: [], lastAt: 1749990000000,
+        },
+      ],
+    });
+    render(<RequestsPanel data={makeData(requests)} />);
+
+    // Measured row: the figure as computed, no mark.
+    expect(screen.getByText('$0.0012')).toBeTruthy();
+    // Estimated row: the same mark the CLI and the batch table use.
+    expect(screen.getByText('~$0.0024')).toBeTruthy();
+    // The total contains an estimate, so the tile says so and carries the mark.
+    expect(screen.getByText(/Cost · ~list price, an estimate/)).toBeTruthy();
+    expect(screen.getByText('~$0.0036')).toBeTruthy();
+    // The column header explains the mark rather than claiming "measured".
+    expect(screen.getByText(/~ = estimate/)).toBeTruthy();
+  });
+
+  it('says "measured" only when every priced row is provider-metered', () => {
+    const requests = makeRequests({
+      rows: [{
+        provider: 'groq', model: 'llama-3.3-70b-versatile', action: 'chat',
+        requests: 3, errorRate: 0, partials: 0, costUsd: 0.0012, costBasis: 'measured',
+        costCalls: 3, callIds: [], lastAt: 1750000000000,
+      }],
+    });
+    render(<RequestsPanel data={makeData(requests)} />);
+
+    expect(screen.getByText(/Cost · measured/)).toBeTruthy();
+    expect(screen.queryByText(/list price, an estimate/)).toBeNull();
+    expect(screen.queryByText(/^~\$/)).toBeNull();
+  });
+
   it('shows no degraded signal when the traces report none', () => {
     render(<RequestsPanel data={makeData(makeRequests())} />);
     expect(screen.queryByText(/degraded/i)).toBeNull();

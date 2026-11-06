@@ -33,7 +33,10 @@ import {
 } from '../gateway/channel-directory.js';
 import { ArtifactStore } from '../tools/artifact-store.js';
 import { getSkillStore } from '../learning/skill-store.js';
-import { readDisabledSkills } from '../learning/hub-skill-catalog.js';
+import { readSkillPolicy, readHubCatalog, skillPolicyAllows } from '../learning/hub-skill-catalog.js';
+import { listHubSkills } from '../learning/skills-hub.js';
+import { skillPackageSize } from '../learning/skill-package.js';
+import { lintSkillDescription } from '../learning/skill-index.js';
 import { isAdminConfigured } from './src/admin-auth.js';
 import { ConfigManager } from '../config/manager.js';
 import { whatsappSessionDir } from '../gateway/whatsapp/session.js';
@@ -150,6 +153,25 @@ export interface HubSkill {
   usageCount?: number;
   /** P3 — derived from buffconfig `skills.disabled[]` (false when disabled). */
   enabled: boolean;
+  /** P4 — absolute skill directory (hub skills only). */
+  dir?: string;
+  /** P4 — files that shipped with the skill (SKILL.md + references/scripts/data). */
+  fileCount?: number;
+  /** P4 — total bytes installed. */
+  bytes?: number;
+  /**
+   * P4 — who owns the root the skill was read from: 'nuvira' (our install
+   * target / user root) or 'external' (a read-only `.claude/skills` root).
+   */
+  owner?: 'nuvira' | 'external';
+  /** P4 — 'project' or 'home' scope. */
+  rootScope?: 'project' | 'home';
+  /** P4 — the derived index line the model actually sees. */
+  trigger?: string;
+  /** P4 — description-lint findings (empty = routable). */
+  lint?: string[];
+  /** P4 — 'package' (multi-file) or 'single-file' (SKILL.md only). */
+  installKind?: 'package' | 'single-file';
 }
 
 /**
@@ -703,22 +725,53 @@ function readSkillsData(): HubSkillsData {
   } catch {
     compiled = [];
   }
-  const hub = [
-    ...scanHubSkills(join(process.cwd(), '.agents', 'skills')),
-    ...scanHubSkills(join(resolveNuviraHome(), 'skills')),
-  ];
-  // Dedupe by id — the user root wins over the project root when both exist.
-  const seen = new Set<string>();
-  const deduped = hub.filter((s) => (seen.has(s.id) ? false : (seen.add(s.id), true)));
-  // P3 — the I7 skills.disabled[] list (the SAME config the CLI + Agent Hub
-  // toggle write) drives the per-skill flag + counts, so the hub reflects the
-  // runtime match gate exactly. readDisabledSkills is best-effort: an
-  // unreadable config simply means everything is enabled.
-  const disabled = new Set(readDisabledSkills(new ConfigManager()));
-  const mark = (s: HubSkill): HubSkill => ({ ...s, enabled: !disabled.has(s.id) });
+  // P3/P4 — read the SAME catalog the runtime matches against (all four roots,
+  // pinned precedence, external `.claude` roots included). The old code had its
+  // own two-root scanner here, which is exactly how the dashboard came to show a
+  // different set of skills than the model could actually load.
+  const hub: HubSkill[] = [];
+  try {
+    // Provenance gives a hub skill its real version + install kind (single-file
+    // vs package) — both invisible before, so a one-file install of a
+    // multi-file skill looked identical to a working one.
+    const provenance = new Map(
+      listHubSkills(undefined, process.cwd()).map((r) => [r.name, r] as const),
+    );
+    for (const s of readHubCatalog()) {
+      const size = skillPackageSize(s.dir);
+      const prov = provenance.get(s.id);
+      const lint = lintSkillDescription(s.description);
+      hub.push({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        version: prov?.version,
+        origin: 'hub',
+        enabled: true, // the disabled gate is applied below (single place)
+        dir: s.dir,
+        fileCount: size.fileCount,
+        bytes: size.bytes,
+        owner: s.origin,
+        rootScope: s.root,
+        trigger: lint.trigger,
+        lint: lint.issues,
+        installKind: prov?.installKind ?? (size.fileCount > 1 ? 'package' : 'single-file'),
+      });
+    }
+    hub.sort((a, b) => a.name.localeCompare(b.name));
+  } catch {
+    /* best-effort — a catalog failure leaves the compiled half */
+  }
+  // P3 — the effective policy (global `skills.disabled[]` the CLI + Agent Hub
+  // toggle write, plus this project's own disabled/allowed lists) drives the
+  // per-skill flag + counts, so the hub reflects the runtime match gate exactly.
+  // `readSkillPolicy` is best-effort: an unreadable config simply means
+  // everything is enabled.
+  const policy = readSkillPolicy(new ConfigManager());
+  const mark = (s: HubSkill): HubSkill => ({ ...s, enabled: skillPolicyAllows(s.id, policy) });
   const compiledMarked = compiled.map(mark);
-  const hubMarked = deduped.map(mark);
-  const total = compiled.length + deduped.length;
+  const hubMarked = hub.map(mark);
+  const total = compiled.length + hub.length;
   const disabledCount = [...compiledMarked, ...hubMarked].filter((s) => !s.enabled).length;
   return {
     compiled: compiledMarked,

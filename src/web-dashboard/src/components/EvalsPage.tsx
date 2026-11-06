@@ -60,7 +60,9 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
                 <th>Pass</th>
                 <th>Completion</th>
                 <th>Composite</th>
-                <th>Cost</th>
+                <th title="Estimated from token counts × list price — not a provider-stated charge">
+                  Cost (est.)
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -73,7 +75,9 @@ export default function EvalsPage({ data }: { data: DashboardData | null }) {
                   <td>{r.summary.tasksPassed}/{r.summary.totalTasks}</td>
                   <td>{fmtPct(r.summary.completionRate)}</td>
                   <td>{fmtPct(r.summary.avgCompositeScore)}</td>
-                  <td>${(r.summary.totalCostUsd ?? 0).toFixed(4)}</td>
+                  {/* `?? 0` printed $0.0000 for a run that recorded no cost at all —
+                      "nobody priced this" rendered as "it was free". */}
+                  <td>{r.summary.totalCostUsd === undefined ? '—' : `$${r.summary.totalCostUsd.toFixed(4)}`}</td>
                 </tr>
               ))}
             </tbody>

@@ -221,4 +221,3 @@ ab -n 100 -c 10 http://localhost/api/test
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('nginx-config', 'references/reverse-proxy.md')`.

@@ -1326,6 +1326,92 @@ export function degradedCallsFromTraces(
   return [...byPair.values()].sort((a, b) => b.steps - a.steps);
 }
 
+/**
+ * ROUTING FIDELITY — did the pair the router CHOSE actually serve the step?
+ *
+ * WHY THIS IS DERIVED FROM TRACES. Two questions get confused whenever routing
+ * is described: "was the pick a good model for the task" (accuracy — needs a
+ * verdict per turn) and "did the pick survive to the wire" (fidelity — the
+ * decision and the request agreeing). Only the second is a fact the traces can
+ * answer for every step, because a step records the SERVED `provider`/`model`
+ * and its `routing` snapshot carries the decision, including
+ * `substitutedFor` when the candidate walk replaced it (see
+ * `TraceRoutingSnapshot.substitutedFor`). Measuring the first from traces alone
+ * would be guessing; measuring this one is arithmetic.
+ *
+ * Counted per STEP, not per trace: a long turn makes many calls and each can
+ * diverge on its own. Pure and read-only — callers print it, never write back.
+ */
+export interface RoutingFidelityInput {
+  id: string;
+  steps: ReadonlyArray<{
+    provider?: string;
+    model?: string;
+    routing?: { provider?: string; model?: string; substitutedFor?: string };
+  }>;
+}
+
+export interface RoutingFidelity {
+  /** Steps that carry a router decision (auto-routed; a pinned call has none). */
+  decided: number;
+  /** Decided steps served by EXACTLY the decided pair. */
+  matched: number;
+  /** Decided steps served by another pair (the walk changed which pair ran). */
+  substituted: number;
+  /**
+   * Decided steps the walk flagged (`substitutedFor`) but which STILL ran on the
+   * decided pair — an in-place repair (a dead pin re-resolved to the same pair).
+   *
+   * Counted apart from `substituted` because the wire still agrees with the
+   * decision: folding it into the substitution count would report a pair change
+   * that never happened (`a` -> `a`), which is exactly the kind of number this
+   * census exists to avoid.
+   */
+  repairedInPlace: number;
+  /** `matched / decided`, 0–1 — undefined when nothing was auto-routed. */
+  fidelity?: number;
+  /** Every substitution, counted, decided→served, most frequent first. */
+  substitutions: Array<{ decided: string; served: string; steps: number }>;
+}
+
+export function routingFidelityFromTraces(
+  traces: readonly RoutingFidelityInput[],
+): RoutingFidelity {
+  let decided = 0;
+  let matched = 0;
+  let repairedInPlace = 0;
+  const bySwap = new Map<string, { decided: string; served: string; steps: number }>();
+  for (const t of traces) {
+    for (const step of t.steps ?? []) {
+      const dp = step.routing?.provider;
+      const dm = step.routing?.model;
+      // A provider-level decision (no model) is not comparable to a served pair.
+      if (!dp || !dm || !step.provider || !step.model) continue;
+      decided++;
+      const samePair = dp === step.provider && dm === step.model;
+      if (samePair) {
+        matched++;
+        if (step.routing?.substitutedFor) repairedInPlace++;
+        continue;
+      }
+      const decidedPair = `${dp}/${dm}`;
+      const servedPair = `${step.provider}/${step.model}`;
+      const key = `${decidedPair} -> ${servedPair}`;
+      const row = bySwap.get(key) ?? { decided: decidedPair, served: servedPair, steps: 0 };
+      row.steps += 1;
+      bySwap.set(key, row);
+    }
+  }
+  return {
+    decided,
+    matched,
+    substituted: decided - matched,
+    repairedInPlace,
+    ...(decided > 0 ? { fidelity: matched / decided } : {}),
+    substitutions: [...bySwap.values()].sort((a, b) => b.steps - a.steps),
+  };
+}
+
 export function traceOutcomeSucceeded(outcome: TraceOutcome | undefined): boolean {
   if (!outcome) return true;
   // A DEGRADED turn is not a success either (§6.5): part of its answer came from

@@ -22,6 +22,7 @@ import {
   FONT_SCALES,
   PALETTES,
   applyTheme,
+  effectiveMode,
   loadTheme,
   resolveTheme,
   saveTheme,
@@ -75,6 +76,15 @@ describe('theme — defaults', () => {
     expect(DEFAULT_THEME.a11y).toBe(false);
     expect(DEFAULT_THEME.fontScale).toBe(100);
   });
+
+  it('defaults both LOOK switches off and motion on', () => {
+    // Glass and compact are looks, so nobody gets them without asking. Motion is
+    // the opposite: the designed dashboard animates, and switching it off is the
+    // deviation — so the switch starts on.
+    expect(DEFAULT_THEME.glass).toBe(false);
+    expect(DEFAULT_THEME.compact).toBe(false);
+    expect(DEFAULT_THEME.motion).toBe(true);
+  });
 });
 
 /**
@@ -116,14 +126,24 @@ describe('theme — the first-run default follows the OS', () => {
     });
   });
 
-  it('gives a light machine the light palette', () => {
+  it('asks for SYSTEM mode instead of freezing whatever the machine has right now', () => {
+    // The choice is the intent, not a snapshot: a user who resets at dusk should
+    // not be stuck in dark at breakfast. So the stored mode is `system` whatever
+    // the OS says, and the RESOLUTION is what follows it.
     stubPrefersDark(false);
-    expect(systemDefaultTheme()).toEqual({ ...DEFAULT_THEME, mode: 'light' });
+    expect(systemDefaultTheme().mode).toBe('system');
+    expect(effectiveMode('system')).toBe('light');
+
+    stubPrefersDark(true);
+    expect(systemDefaultTheme().mode).toBe('system');
+    expect(effectiveMode('system')).toBe('dark');
   });
 
-  it('gives a dark machine the dark palette', () => {
+  it('leaves a fixed choice alone when the OS asks for something else', () => {
     stubPrefersDark(true);
-    expect(systemDefaultTheme()).toEqual({ ...DEFAULT_THEME, mode: 'dark' });
+    expect(effectiveMode('light')).toBe('light');
+    stubPrefersDark(false);
+    expect(effectiveMode('dark')).toBe('dark');
   });
 
   it('changes ONLY the mode — never the palette or the accessibility settings', () => {
@@ -143,13 +163,24 @@ describe('theme — the first-run default follows the OS', () => {
       writable: true,
       value: undefined,
     });
-    expect(systemDefaultTheme().mode).toBe(DEFAULT_THEME.mode);
+    // `system` is still a valid choice; it just resolves to the fallback, because
+    // absence of information is not a preference.
+    expect(systemDefaultTheme().mode).toBe('system');
+    expect(effectiveMode(systemDefaultTheme().mode)).toBe(DEFAULT_THEME.mode);
   });
 });
 
 describe('theme — persistence', () => {
   it('round-trips a saved theme', () => {
-    const theme: ThemeState = { palette: 'pastel', mode: 'light', a11y: true, fontScale: 125 };
+    const theme: ThemeState = {
+      palette: 'pastel',
+      mode: 'light',
+      a11y: false,
+      fontScale: 100,
+      glass: true,
+      compact: true,
+      motion: false,
+    };
     saveTheme(theme);
     expect(loadTheme()).toEqual(theme);
   });
@@ -176,6 +207,30 @@ describe('theme — persistence', () => {
       mode: 'light',
       a11y: true,
       fontScale: 150,
+      glass: DEFAULT_THEME.glass,
+      compact: DEFAULT_THEME.compact,
+      // Not the DEFAULT (true): a stored theme from before the switch existed
+      // says a11y on, and accessibility mode removes motion.
+      motion: false,
+    });
+  });
+
+  it('migrates a stored theme from before the look switches existed', () => {
+    // The real upgrade path: `{palette, mode, a11y, fontScale}` is exactly what
+    // the previous release wrote. The missing fields must take defaults rather
+    // than load as `undefined`, and the a11y/motion coupling must still hold.
+    storage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ palette: 'executive', mode: 'system', a11y: false, fontScale: 100 }),
+    );
+    expect(loadTheme()).toEqual({
+      palette: 'executive',
+      mode: 'system',
+      a11y: false,
+      fontScale: 100,
+      glass: false,
+      compact: false,
+      motion: true,
     });
   });
 
@@ -191,7 +246,15 @@ describe('theme — persistence', () => {
 });
 
 describe('theme — resolveTheme', () => {
-  const base: ThemeState = { palette: 'enterprise', mode: 'dark', a11y: false, fontScale: 100 };
+  const base: ThemeState = {
+    palette: 'enterprise',
+    mode: 'dark',
+    a11y: false,
+    fontScale: 100,
+    glass: false,
+    compact: false,
+    motion: true,
+  };
 
   it('applies only the fields it is given', () => {
     expect(resolveTheme(base, { mode: 'light' })).toEqual({ ...base, mode: 'light' });
@@ -214,18 +277,71 @@ describe('theme — resolveTheme', () => {
     expect(off.a11y).toBe(false);
     expect(off.fontScale).toBe(100);
   });
+
+  it('removes motion when accessibility mode is turned on', () => {
+    // Accessibility mode promises "no motion" as part of what it is, so the two
+    // switches cannot be left disagreeing: one of them has to win, and it is the
+    // one the user turned on for accessibility reasons.
+    const on = resolveTheme(base, { a11y: true });
+    expect(on.motion).toBe(false);
+    expect(resolveTheme(on, { motion: true }).motion).toBe(false);
+  });
+
+  it('leaves the look switches independent of each other', () => {
+    const glass = resolveTheme(base, { glass: true });
+    expect(glass.glass).toBe(true);
+    expect(glass.compact).toBe(false);
+    expect(resolveTheme(glass, { compact: true })).toMatchObject({
+      glass: true,
+      compact: true,
+      motion: true,
+    });
+  });
+
+  it('ignores a non-boolean look switch', () => {
+    const bad = { glass: 'on', compact: 1, motion: null } as unknown as Partial<ThemeState>;
+    expect(resolveTheme(base, bad)).toEqual(base);
+  });
 });
 
 describe('theme — applyTheme', () => {
   it('puts every axis on the element as data attributes', () => {
     const el = document.createElement('div');
-    applyTheme({ palette: 'contrast', mode: 'light', a11y: true, fontScale: 150 }, el);
+    applyTheme(
+      {
+        palette: 'contrast',
+        mode: 'light',
+        a11y: true,
+        fontScale: 150,
+        glass: true,
+        compact: false,
+        motion: false,
+      },
+      el,
+    );
     expect(el.getAttribute('data-palette')).toBe('contrast');
     expect(el.getAttribute('data-mode')).toBe('light');
     expect(el.getAttribute('data-a11y')).toBe('on');
     expect(el.getAttribute('data-font-scale')).toBe('150');
+    // The stylesheet keys glass, compact and motion off these three, so an
+    // attribute that is missing (rather than "off") silently does nothing.
+    expect(el.getAttribute('data-glass')).toBe('on');
+    expect(el.getAttribute('data-compact')).toBe('off');
+    expect(el.getAttribute('data-motion')).toBe('off');
     // So native scrollbars and form controls follow the mode.
     expect(el.style.colorScheme).toBe('light');
+  });
+
+  it('resolves a system choice before writing data-mode', () => {
+    // `data-mode='system'` would match no palette block and no code-block block,
+    // so the whole dashboard would paint the :root fallback while the switcher
+    // reported the user's choice. The attribute is always a real colour scheme.
+    const el = document.createElement('div');
+    applyTheme({ ...DEFAULT_THEME, mode: 'system' }, el);
+    const written = el.getAttribute('data-mode');
+    expect(['light', 'dark']).toContain(written);
+    expect(el.style.colorScheme).toBe(written);
+    expect(el.getAttribute('data-motion')).toBe('on');
   });
 
   it('writes off/on rather than true/false for the accessibility axis', () => {

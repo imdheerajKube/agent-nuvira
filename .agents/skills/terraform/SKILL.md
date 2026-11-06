@@ -1,6 +1,6 @@
 ---
 name: terraform
-description: Write Terraform infrastructure-as-code. Use when the goal asks to provision, manage, or version cloud infrastructure.
+description: Write infrastructure-as-code with Terraform (Pulumi or CloudFormation where the project already uses them): modules, remote state, drift detection, and multi-environment setups. Use when the goal asks to provision, manage, or version cloud infrastructure.
 version: 2.0.0
 whenToUse: Provisioning cloud resources (AWS/GCP/Azure), managing infrastructure state, multi-environment setups, infrastructure versioning
 whenNotToUse: Simple Docker Compose setups, Kubernetes-only deployments (use Helm), application-level config
@@ -12,7 +12,7 @@ Write Terraform infrastructure-as-code with enterprise patterns.
 
 ## Goal pattern
 
-terraform infrastructure iac provision cloud resource module state
+terraform infrastructure iac provision cloud resource module state pulumi cloudformation drift multi-environment
 
 ## Parameters
 
@@ -181,4 +181,3 @@ aws resourcegroupstaggingapi get-resources \
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('terraform', 'references/aws-resources.md')`.

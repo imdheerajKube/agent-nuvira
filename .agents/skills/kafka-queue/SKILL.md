@@ -1,9 +1,9 @@
 ---
 name: kafka-queue
-description: Set up Kafka message queues. Use when the goal asks to add event streaming, message queues, or async processing with Kafka.
+description: Set up event streaming and background job queues: Kafka topics/consumer groups, or BullMQ/RabbitMQ/SQS workers. Use when the goal asks to add message queues, event streaming, background jobs, task queues, or async processing.
 version: 2.0.0
 whenToUse: Event streaming, async processing, log aggregation, real-time data pipelines, microservices communication
-whenNotToUse: Simple task queues (use Redis), HTTP APIs (use api-creation), scheduled tasks (use cron-job)
+whenNotToUse: HTTP APIs (use api-design), scheduled tasks (use cron-job), simple in-process debouncing (no queue needed)
 ---
 
 # Kafka Queue
@@ -12,13 +12,25 @@ Set up Kafka message queues with enterprise patterns.
 
 ## Goal pattern
 
-kafka message queue event streaming async processing producer consumer
+kafka message queue event streaming async processing producer consumer background worker bullmq rabbitmq sqs task queue jobs
 
 ## Parameters
 
 - serialization (choice [default: json]): Message format
 - partitioning (choice [default: key-based]): Partition strategy
 - monitoring (boolean [default: true]): Monitor consumer lag
+
+## Choosing a backend (decide before Step 1)
+
+| Need | Use | Why |
+|---|---|---|
+| Background jobs (email, images, reports) on one app | BullMQ (Redis) | Retries, priorities, delays, dashboards — no broker to run |
+| Cross-service events, replay, high throughput | Kafka | Durable log, consumer groups, replay from offset |
+| Managed queue without ops | SQS (+ SNS) | Serverless-friendly, at-least-once, DLQ built in |
+| Complex routing (topic exchanges, headers) | RabbitMQ | Flexible bindings, per-message ack |
+
+Everything below is the Kafka path. If the table says BullMQ/SQS/RabbitMQ, keep Steps 3–5
+(retries, DLQ, lag/queue-depth monitoring) and swap the client library.
 
 ## Steps
 
@@ -202,4 +214,3 @@ kafka-run-class kafka.tools.GetOffsetShell \
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('kafka-queue', 'references/guide.md')`.

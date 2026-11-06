@@ -11,6 +11,7 @@ export const SHORTCUTS: Array<{ group: string; items: Shortcut[] }> = [
     group: 'General',
     items: [
       { keys: ['?'], description: 'Show the shortcut cheatsheet' },
+      { keys: ['⌘/Ctrl', 'K'], description: 'Search pages and actions (command palette)' },
       { keys: ['F1'], description: 'Open the Help page' },
       { keys: ['Esc'], description: 'Close a dialog or panel' },
       { keys: ['g', 'c'], description: 'Go to Chat' },
@@ -26,6 +27,16 @@ export const SHORTCUTS: Array<{ group: string; items: Shortcut[] }> = [
     items: [
       { keys: ['/'], description: 'Focus the navigation filter' },
       { keys: ['['], description: 'Collapse / expand the navigation drawer' },
+    ],
+  },
+  {
+    // These two only apply inside the chat page, and are registered where the
+    // page can hear them — but they are listed here because a shortcut nobody
+    // can find is a shortcut nobody uses, and this is the one list users read.
+    group: 'Chat',
+    items: [
+      { keys: ['f'], description: 'Focus mode — the conversation takes the whole window (while reading)' },
+      { keys: ['Esc'], description: 'Leave focus mode' },
     ],
   },
 ];

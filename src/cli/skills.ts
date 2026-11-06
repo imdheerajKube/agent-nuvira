@@ -32,7 +32,7 @@ import { listBundles, getBundle, writeBundle, deleteBundle } from '../learning/s
 import {
   searchAllRegistries,
   findEntryAcrossRegistries,
-  fetchSourceSkill,
+  installFromSource,
   detectSourceKind,
   probeRegistries,
   unreachableRegistryHint,
@@ -113,16 +113,26 @@ export class SkillsCommand {
           if (hint) logger.warn(hint);
           return;
         }
-        const result = await installHubSkill(entry, opts.project || process.cwd(), false, {
-          registry: found ? found.source.base : undefined,
-          fetchSkill: found ? (n) => fetchSourceSkill(found.source, n) : undefined,
-        });
+        // P1 — installFromSource prefers the whole skill PACKAGE (references,
+        // scripts, data) and derives a version from the source commit when the
+        // skill declares none. The legacy single-file path stays as the fallback
+        // for a raw-HTTP registry, which has no directory listing.
+        const result = found
+          ? await installFromSource(entry, found.source, opts.project || process.cwd(), false)
+          : await installHubSkill(entry, opts.project || process.cwd(), false);
         spinner.stop();
         if (result.ok) {
           if (result.reason === 'already up to date') {
             logger.info(`✅ ${name} v${result.version} is already up to date.`);
           } else {
             logger.success(`✅ Installed ${name} v${result.version} (${result.source}).`);
+          }
+          // P2 — the description IS the routing index: lint it at install so a
+          // skill that can never be matched says so now, not after a failed turn.
+          const { lintSkillDescription, describeLintIssue } = await import('../learning/skill-index.js');
+          const lint = lintSkillDescription(entry.description ?? '');
+          for (const issue of lint.issues) {
+            logger.warn(`   ⚠️  description: ${describeLintIssue(issue)}`);
           }
         } else if (result.quarantined) {
           logger.error(`⛔ ${result.reason}`);
@@ -154,12 +164,13 @@ export class SkillsCommand {
         // `nuvira skill gc` / `clear` (skill.remove), not a silent write.
         if (!guardRbacAction('skill.remove')) return;
         const spinner = ora({ text: 'Checking installed skills against the registry...', spinner: 'dots' }).start();
-        // Deliberate divergence: `update` checks the LEGACY provenance registry
-        // (env/default) rather than buffconfig skills.registries[] — installed
-        // skills carry their origin registry in provenance, so search/install
-        // honor config while update stays source-faithful. Revisit if a
-        // multi-source re-fetch is ever wanted.
-        const { updated, current, failed } = await updateHubSkills(opts.project || process.cwd());
+        // P1 — update resolves EVERY configured source (the old comment here
+        // documented a divergence: only the default index was consulted, so a
+        // `git+` skill could never update and reported "no longer in registry").
+        const { updated, current, failed } = await updateHubSkills(
+          opts.project || process.cwd(),
+          new ConfigManager(),
+        );
         spinner.stop();
         if (updated.length === 0 && current.length === 0 && failed.length === 0) {
           logger.info(`No skills installed yet — install one with \`${getCliName()} skills install <name>\`.`);
@@ -244,7 +255,9 @@ export class SkillsCommand {
       .description('List installed skills with provenance (origin: registry vs local)')
       .option('--origin <origin>', 'Filter by origin: registry | local')
       .option('--project <path>', 'Project root for .agents/skills/ (default: cwd)')
-      .action((opts) => {
+      // P2d — routing health: which installed skills say WHEN they apply.
+      .option('--lint', 'Report installed skills whose description cannot route (no trigger clause)', false)
+      .action(async (opts) => {
         if (opts.origin !== undefined && opts.origin !== 'registry' && opts.origin !== 'local') {
           logger.warn(`Unknown --origin '${opts.origin}' — expected 'registry' or 'local'; showing all.`);
         }
@@ -259,9 +272,39 @@ export class SkillsCommand {
         for (const s of items) {
           const originBadge = s.origin === 'registry' ? '🌐 registry' : '📁 local';
           const installedBadge = s.installed ? '✅ on disk' : '⚠️  record only';
-          console.log(`  • ${s.name} v${s.version}  [${originBadge}] ${installedBadge}`);
+          // P1 — say whether this install carried its references/scripts/data.
+          const pkgBadge = s.installKind === 'package' && s.fileCount
+            ? `📦 ${s.fileCount} files${typeof s.bytes === 'number' ? ` · ${formatBytes(s.bytes)}` : ''}`
+            : s.installKind === 'single-file' ? '📄 SKILL.md only' : '';
+          console.log(`  • ${s.name} v${s.version}  [${originBadge}] ${installedBadge}${pkgBadge ? `  ${pkgBadge}` : ''}`);
           console.log(`    source: ${s.source} · installed: ${s.installedAt ? new Date(s.installedAt).toLocaleDateString() : 'n/a'}`);
+          if (s.installKind === 'single-file') {
+            console.log('    note: single-file install — this skill\'s references/scripts were not shipped by its source');
+          }
           console.log('');
+        }
+
+        // P2d — lint the descriptions of everything READABLE in the catalog
+        // (installed skills across all roots, including read-only `.claude`
+        // ones), because a description without a trigger is a skill the model
+        // cannot choose. Report only; never rewrite an author's text.
+        if (opts.lint) {
+          const { readHubCatalog } = await import('../learning/hub-skill-catalog.js');
+          const { lintSkillDescription, describeLintIssue } = await import('../learning/skill-index.js');
+          const rows = readHubCatalog(opts.project || process.cwd())
+            .map((s) => ({ id: s.id, ...lintSkillDescription(s.description) }))
+            .filter((r) => !r.ok);
+          if (rows.length === 0) {
+            logger.success('✅ Every installed skill description states when to use it.');
+          } else {
+            console.log(`\n🩺 ${rows.length} skill(s) with routing problems:\n`);
+            for (const r of rows) {
+              console.log(`  • ${r.id}`);
+              for (const issue of r.issues) console.log(`      - ${describeLintIssue(issue)}`);
+              if (r.trigger) console.log(`      index line: ${r.trigger}`);
+              console.log('');
+            }
+          }
         }
       });
 
@@ -271,3 +314,10 @@ export class SkillsCommand {
 
 /** Kept for clarity in the command help (the source-kind vocabulary). */
 export const SKILL_SOURCE_KINDS = ['github-raw', 'local-dir', 'browse-sh', 'git-repo'] as const;
+
+/** Human-readable byte size for a skill package (`3.6 MB`, `12.4 kB`). */
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} kB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}

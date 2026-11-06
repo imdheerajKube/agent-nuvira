@@ -53,7 +53,7 @@ const CEILING_RECOVERY_MAX_MISSES = 10;
 const LIVE_TICK_MS = 1000;
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { dashboardAPI, type PendingQuestion } from '../api';
 import { useAuthVersion } from '../useAuthVersion';
 import Markdown from './Markdown';
@@ -61,8 +61,12 @@ import Markdown from './Markdown';
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
 import type { ResumeOutcome, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
-import { formatCount, formatElapsed } from '../format';
+import { formatCount, formatElapsed, formatSpendFull } from '../format';
 import PageHeader from './PageHeader';
+import ResumeRunsPanel from './ResumeRunsPanel';
+import { isTypingTarget } from './KeyboardHelp';
+import { isChatFocused, setChatFocus, useChatFocus } from '../chat-focus';
+import { onChatCommand, takePendingChatCommands, type ChatCommand } from '../chat-commands';
 
 interface AuthState {
   configured: boolean;
@@ -1140,6 +1144,21 @@ function TurnReportCard({ report }: { report: TurnReport }) {
           ))}
         </div>
       ) : null}
+      {/*
+        WHAT THIS TURN COST — the whole breakdown, not one blended dollar.
+
+        Absent `cost` means the ledger recorded nothing for the turn, which is
+        NOT the same as free, so this renders nothing rather than $0.00. And
+        because a list-priced call on an undeclared tier is not provably spend,
+        each figure arrives with its own word: `exact`, `est.`, `unverified`,
+        `free`, `price unknown` — printed by the same `utils/spend.ts` the CLI
+        uses, so the two surfaces cannot describe the same turn differently.
+      */}
+      {report.cost ? (
+        <div className="chat-turn-spend" data-testid="turn-spend">
+          💰 {formatSpendFull(report.cost)}
+        </div>
+      ) : null}
       </div>
     </details>
   );
@@ -1397,14 +1416,64 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const projectPathInputRef = useRef<HTMLInputElement | null>(null);
   // Resume the session open before a reload when one was stored; otherwise a
   // brand-new id.
-  const sessionIdRef = useRef<string>(readPersistedSessionId() ?? newSessionId());
+  /**
+   * Commands the palette sent BEFORE this page existed.
+   *
+   * Taken during the first render, not in an effect, because "start a new chat"
+   * has to outrank the page's own resume-on-mount: the session id below must be
+   * fresh and the resume must not run, or the page would restore the very chat
+   * the user asked to replace.
+   */
+  const initialCommandsRef = useRef<ChatCommand[] | null>(null);
+  if (initialCommandsRef.current === null) initialCommandsRef.current = takePendingChatCommands();
+  const pendingOnMount = initialCommandsRef.current;
+  const sessionIdRef = useRef<string>(
+    pendingOnMount.includes('new-chat') ? newSessionId() : readPersistedSessionId() ?? newSessionId(),
+  );
   // Phase 6 — the last sent message (↑ recalls it into the box).
   const lastSentRef = useRef<string>('');
   // P4 — the session sidebar: past conversations, click to resume.
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   // P8 — smart rail: the sidebar collapses to a rail while the agent works and
   // returns when the turn finishes (results own the full window mid-task).
-  const [railOpen, setRailOpen] = useState(true);
+  // Starts collapsed when the tab is still in focus mode (a reload), so the
+  // first paint already matches the mode instead of opening the history column
+  // and then taking it away in an effect.
+  const [railOpen, setRailOpen] = useState(() => !isChatFocused());
+  /**
+   * Focus mode: the shell steps out and the conversation owns the window.
+   *
+   * The state lives in `chat-focus.ts` rather than here because hiding the top
+   * bar and rail is the SHELL's job, and this page is rendered inside it as
+   * `children`. See that module for why it is session-scoped and why the chrome
+   * is hidden with CSS instead of unmounted.
+   */
+  const chatFocused = useChatFocus();
+  /** Focus goes back to the control that made the change, not to <body>. */
+  const focusBtnRef = useRef<HTMLButtonElement | null>(null);
+  /** What the history rail was doing before focus mode hid it. */
+  const railWasOpenRef = useRef(true);
+  const wasFocusedRef = useRef(chatFocused);
+
+  /**
+   * Focus mode takes the history column with it.
+   *
+   * The column is 260px of a window whose whole point is now the conversation,
+   * and on a phone it leaves ~100px for the chat — every control wraps and the
+   * composer ends up below the fold. Collapsing to the existing 34px rail is the
+   * behaviour the rail already has during a turn, so the control and the layout
+   * agree; leaving focus puts the sidebar back the way the user had it.
+   */
+  useEffect(() => {
+    if (wasFocusedRef.current === chatFocused) return;
+    wasFocusedRef.current = chatFocused;
+    if (chatFocused) {
+      railWasOpenRef.current = railOpen;
+      setRailOpen(false);
+    } else {
+      setRailOpen(railWasOpenRef.current);
+    }
+  }, [chatFocused, railOpen]);
   // P8 — sidebar search filter (title / preview / first message).
   const [sessionQuery, setSessionQuery] = useState('');
   // P8 — the session being renamed (inline input in the sidebar).
@@ -1412,6 +1481,12 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [renameValue, setRenameValue] = useState('');
   // P8 — composer attachments (file picker / paste-as-attachment / drag-drop).
   const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
+  // Skills the user pinned with `/skill <name>`. This is the GUI half of
+  // `nuvira chat --skill`: the names ride on every turn of this chat, and the
+  // server loads each methodology into the turn instead of hinting at it. The
+  // chips are the confirmation — "the agent ignored my skill" is otherwise
+  // indistinguishable from "the skill was never sent".
+  const [pinnedSkills, setPinnedSkills] = useState<string[]>([]);
   const [pasteOffer, setPasteOffer] = useState<{ text: string } | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1694,7 +1769,10 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   // the stored transcript, and while the server reports the session busy we keep
   // the composer busy and re-read the transcript until the answer lands.
   const resumedOnMountRef = useRef(false);
+  /** A pending "new chat" replaces the stored conversation instead of resuming it. */
+  const skipInitialResumeRef = useRef(pendingOnMount.includes('new-chat'));
   useEffect(() => {
+    if (skipInitialResumeRef.current) return;
     if (!canChat || resumedOnMountRef.current) return;
     resumedOnMountRef.current = true;
     const id = sessionIdRef.current;
@@ -2161,6 +2239,28 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       const clean = text.trim();
       const chipList = Array.isArray(withAttachments) ? withAttachments : attachments;
       if ((!clean && chipList.length === 0) || busy) return;
+      // `/skill <name…>` PINS a skill for the turns that follow; it is a command
+      // for the harness, never a message to the model, so it is consumed here
+      // before any turn state is armed. No name clears the pins.
+      const skillCmd = /^\/skill(?:\s+(.*))?$/i.exec(clean);
+      if (skillCmd) {
+        const names = (skillCmd[1] ?? '')
+          .split(/[,\s]+/)
+          .map((s) => s.trim().toLowerCase())
+          .filter((s) => /^[a-z0-9-]+$/.test(s));
+        if (names.length === 0) {
+          setPinnedSkills([]);
+          setMeta('🧩 Skill pins cleared — turns go back to the model choosing which skill (if any) applies.');
+        } else {
+          setPinnedSkills((prev) => [...prev, ...names.filter((n) => !prev.includes(n))]);
+          setMeta(
+            `🧩 Pinned ${names.join(', ')} — every following turn in this chat loads ` +
+              `${names.length === 1 ? 'it' : 'them'}. Send \`/skill\` with no name to clear.`,
+          );
+        }
+        setInput('');
+        return;
+      }
       setError('');
       setMeta(null);
       setLiveSteps([]);
@@ -2253,6 +2353,9 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // server's `NUVIRA_ISOLATE` still decides (a control that never expressed
           // an opinion must not overrule the deployment's).
           ...(isolate ? { worktree: true, keepWorktree } : {}),
+          // The pinned skills travel with the turn; the server resolves them
+          // against the installed skills and the engine loads each methodology.
+          ...(pinnedSkills.length > 0 ? { skills: pinnedSkills } : {}),
           // WS5 (#27) — the resume the operator asked for, and ONLY then: the key
           // is omitted while the control is off, so the deployment's `NUVIRA_RESUME`
           // is still in charge. A named id wins over the automatic record for this
@@ -2396,7 +2499,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     // allowed". A control that reports one thing and sends another is worse than
     // no control. Pinned next to `pinnedModel` because the pair and its lock are
     // one decision, and they must travel together.
-    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, strictPin, commitRecoveredAnswer, recoverFromCeiling],
+    // `pinnedSkills` belongs here for the same reason the note above gives: this
+    // callback SENDS what the controls say, and a missing dep would send the
+    // empty list from the render that mounted it — the user's `/skill` chips on
+    // screen while the turn carried no pin at all.
+    [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, strictPin, pinnedSkills, commitRecoveredAnswer, recoverFromCeiling],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2615,16 +2722,140 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     if (Array.isArray(s)) setSessions(s);
   }, []);
 
+  /** The project bar, so an "attach a folder" request can bring it into view. */
+  const projectBarRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Put the caret where a folder is typed.
+   *
+   * The palette's action is deliberately "open the control", not "open the OS
+   * folder dialog": a picker launched from the shell's keyboard context would
+   * raise a window the user did not connect to anything, and the path box is the
+   * same control the button uses anyway (it accepts a typed path and Enter).
+   */
+  const focusProjectPicker = useCallback(() => {
+    const input = projectPathInputRef.current;
+    if (input) {
+      input.focus();
+      input.select();
+      input.scrollIntoView?.({ block: 'center' });
+      return;
+    }
+    if (attachedProject) {
+      projectBarRef.current?.scrollIntoView?.({ block: 'center' });
+      setMeta('A project folder is already attached — detach it to choose another.');
+    }
+  }, [attachedProject]);
+
+  /**
+   * Do what the palette asked, with the page's own rules.
+   *
+   * A live turn is the one thing a new conversation must not silently abandon: the
+   * server keeps running it, but the transcript would vanish from under the user
+   * mid-run. So the request is refused with the same reason the disabled button
+   * implies, and the message says what to do about it.
+   */
+  const runChatCommand = useCallback(
+    (command: ChatCommand) => {
+      if (command === 'new-chat') {
+        if (busy) {
+          setMeta('A turn is running — cancel it, or wait for it to finish, before starting a new conversation.');
+          return;
+        }
+        void resetConversation();
+        return;
+      }
+      focusProjectPicker();
+    },
+    [busy, resetConversation, focusProjectPicker],
+  );
+
+  const pendingHandledRef = useRef(false);
+  useEffect(() => {
+    const off = onChatCommand(runChatCommand);
+    // "new chat" was already honoured by starting this mount on a fresh session
+    // id with the resume skipped; replaying it would reset a page that is
+    // already empty. The rest wait for `canChat`: the project bar does not exist
+    // until the page is past its auth gate, so focusing it any earlier is a
+    // request against a control that is not in the document yet.
+    const outstanding = pendingOnMount.filter((command) => command !== 'new-chat');
+    if (!pendingHandledRef.current && (outstanding.length === 0 || canChat)) {
+      pendingHandledRef.current = true;
+      for (const command of outstanding) runChatCommand(command);
+    }
+    return off;
+  }, [canChat, pendingOnMount, runChatCommand]);
+
   const latestFollowups = [...messages].reverse().find((m) => m.role === 'assistant' && !m.error && (m.followups?.length ?? 0) > 0)?.followups ?? [];
 
+  /**
+   * The page's keyboard layer.
+   *
+   * Scoped to the page, not the document, so it cannot fight the shell: the
+   * cheatsheet and the nav drawer keep their own Escape handling, and an event
+   * that began inside this page is the only one that can leave focus mode. The
+   * history rail is exempt while it matters — its inline rename field closes on
+   * Escape itself, and diving out of the whole window instead would discard the
+   * mode the user did not ask to leave.
+   */
+  function onPageKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+
+    if (chatFocused) {
+      if (event.key !== 'Escape') return;
+      const target = event.target as HTMLElement | null;
+      if (target?.closest?.('.chat-sidebar')) {
+        // A rename field owns Escape while it is open; anywhere else in the
+        // history drawer, Escape means "close the drawer" — the same expectation
+        // the scrim creates — and only a second Escape leaves focus mode.
+        if (!isTypingTarget(target)) {
+          event.stopPropagation();
+          setRailOpen(false);
+        }
+        return;
+      }
+      event.stopPropagation();
+      setChatFocus(false);
+      focusBtnRef.current?.focus();
+      return;
+    }
+
+    // `f` mirrors the button while reading (never while typing — the composer
+    // must keep every letter it is given).
+    if (event.key === 'f' && !isTypingTarget(event.target)) {
+      event.preventDefault();
+      setChatFocus(true);
+    }
+  }
+
   return (
-    <div className="panel">
+    <div className="panel" onKeyDown={onPageKeyDown}>
       <PageHeader
         icon="💬"
         title="Chat with the agent"
         actions={
           <div className="chat-head-actions">
             {meta ? <span className="admin-hint">{meta}</span> : null}
+            {/*
+              * Focus mode is offered here, next to the other page-level
+              * controls, because it changes the PAGE — not the theme. Entering
+              * is reversible in one click, by Esc, or by navigating away.
+              */}
+            <button
+              ref={focusBtnRef}
+              className="admin-refresh-btn chat-focus-btn"
+              type="button"
+              aria-pressed={chatFocused}
+              aria-keyshortcuts="f"
+              onClick={() => setChatFocus(!chatFocused)}
+              title={
+                chatFocused
+                  ? 'Leave focus mode — the shell comes back (Esc)'
+                  : 'Focus mode: hide the shell and give the conversation the whole window (f)'
+              }
+            >
+              {chatFocused ? '⤡ Exit focus' : '⤢ Focus'}
+            </button>
             <button className="admin-refresh-btn" type="button" onClick={() => void resetConversation()} disabled={busy || messages.length === 0}>
               🗑 New conversation
             </button>
@@ -2647,7 +2878,9 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
         </div>
       ) : (
         <>
-          <div className="chat-project-bar">
+          {/* The work that outlived its process belongs where work starts. */}
+          <ResumeRunsPanel />
+          <div className="chat-project-bar" ref={projectBarRef}>
             {attachedProject ? (
               <div className="chat-project-attached">
                 <span className="chat-project-icon">📁</span>
@@ -2796,6 +3029,18 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
               )}
             </div>
           ) : null}
+          {/* The drawer's dismiss surface. It exists only while focus mode is
+              on and the history is open; CSS shows it only where the history is
+              an overlay (phones), so on desktop it is an inert, display:none
+              element rather than a click target over the page. */}
+          {chatFocused && railOpen ? (
+            <button
+              type="button"
+              className="chat-drawer-scrim"
+              aria-label="Close conversation history"
+              onClick={() => setRailOpen(false)}
+            />
+          ) : null}
           <div className="chat-layout">
           {!railOpen ? (
             <div className="chat-rail">
@@ -2872,8 +3117,20 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           <div className="chat-main">
           <div className="chat-thread" ref={listRef} role="log" aria-live="polite">
             {messages.length === 0 ? (
-              <div className="empty-state">
-                <p className="empty-state-title">Say anything — the agent decides what to do (answer, fix code, plan, run the pipeline).</p>
+              <div className="empty-state empty-state-hero">
+                <span className="empty-state-mark" aria-hidden="true">
+                  <svg viewBox="0 0 48 48" width="30" height="30" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <rect x="6" y="10" width="36" height="26" rx="6" />
+                    <path d="M15 36v5l6-5" />
+                    <path d="M16 20h16M16 26h10" />
+                    <path d="M35 6l1.6 3.4L40 11l-3.4 1.6L35 16l-1.6-3.4L30 11l3.4-1.6z" />
+                  </svg>
+                </span>
+                <h2 className="empty-state-title">Say anything — the agent decides what to do</h2>
+                <p className="empty-state-copy">
+                  It can answer, fix code, plan and run the pipeline. Each turn runs the same engine as{' '}
+                  <code>nuvira chat</code>.
+                </p>
                 <div className="empty-state-chips">
                   <button type="button" className="chat-chip" onClick={() => void send("what's the state of this project?")}>
                     📋 assess this project
@@ -2896,6 +3153,10 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                     🚀 publish the release
                   </button>
                 </div>
+                <p className="empty-state-hint">
+                  Press <kbd className="shortcuts-key">f</kbd> for focus mode, or <kbd className="shortcuts-key">?</kbd> for
+                  every shortcut.
+                </p>
               </div>
             ) : (
               messages.map((m, i) => (
@@ -3221,6 +3482,26 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                   Skip — best judgment
                 </button>
               </div>
+            </div>
+          ) : null}
+
+          {pinnedSkills.length > 0 ? (
+            <div
+              className="chat-attach-row"
+              title="Pinned for every turn in this chat — the methodology is loaded into each turn"
+            >
+              {pinnedSkills.map((name) => (
+                <span key={name} className="chat-attach-chip">
+                  🧩 {name}
+                  <button
+                    type="button"
+                    className="chat-mini-action"
+                    onClick={() => setPinnedSkills((prev) => prev.filter((n) => n !== name))}
+                  >
+                    ✕
+                  </button>
+                </span>
+              ))}
             </div>
           ) : null}
 

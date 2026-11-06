@@ -163,6 +163,98 @@ describe('decideWriteConfirmation', () => {
     expect(verdict.action).toBe('ask');
     expect(verdict.reason).toMatch(/did not ask for files/);
   });
+
+  /**
+   * THE RUN'S OWN OUTPUT — the measured defect (trace-1793853385112-sf2exl): an
+   * assessment turn created its report, then could not add §2, because the path
+   * existed. The report on disk stopped at one section. Existing content that the
+   * RUN wrote, and nothing has touched since, is recoverable by definition.
+   */
+  it('proceeds on replacing a file this run wrote and nothing has changed', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'AUDIT_CROSSCHECK.md',
+      exists: true,
+      ownUnchanged: true,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('proceed');
+    expect(verdict.reason).toMatch(/this run wrote/);
+  });
+
+  it('still asks when the file changed since this run wrote it', () => {
+    // ownUnchanged is false: someone edited it, so the two cases diverged and
+    // the original gate applies again.
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'AUDIT_CROSSCHECK.md',
+      exists: true,
+      ownUnchanged: false,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('ask');
+  });
+
+  it('never lets ownUnchanged bypass the request authorization', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'AUDIT_CROSSCHECK.md',
+      exists: true,
+      ownUnchanged: true,
+      authorizedByRequest: false,
+    });
+    expect(verdict.action).toBe('ask');
+  });
+});
+
+describe('decideWriteConfirmation — append is additive', () => {
+  it('proceeds on the first section of a new file', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'report.md',
+      exists: false,
+      append: true,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('proceed');
+  });
+
+  it('proceeds on appending another section to a file this run wrote', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'report.md',
+      exists: true,
+      append: true,
+      ownUnchanged: true,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('proceed');
+  });
+
+  it('proceeds on appending to an existing file the REQUEST names', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'CHANGELOG.md',
+      exists: true,
+      append: true,
+      namedByRequest: true,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('proceed');
+    expect(verdict.reason).toMatch(/names/);
+  });
+
+  it('asks before appending to a file nobody mentioned', () => {
+    const verdict = decideWriteConfirmation({
+      tool: 'write_file',
+      path: 'README.md',
+      exists: true,
+      append: true,
+      authorizedByRequest: true,
+    });
+    expect(verdict.action).toBe('ask');
+    expect(verdict.reason).toMatch(/never mentioned/);
+  });
 });
 
 describe('IRREVERSIBLE_ACTION_RE — the escalation escape', () => {

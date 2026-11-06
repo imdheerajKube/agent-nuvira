@@ -44,7 +44,7 @@ export const dockerManagementSkill: Skill = {
     'User wants to deploy to Kubernetes (use kubernetes skill instead)',
     'User wants to set up CI/CD (use ci-cd-setup skill instead)',
     'User wants to monitor production systems (use infra-monitoring skill instead)',
-    'User wants to manage cloud infrastructure (use infra-as-code skill instead)',
+    'User wants to manage cloud infrastructure (use terraform skill instead)',
   ],
   steps: [
     {
@@ -422,7 +422,7 @@ export const containerSupervisionSkill: Skill = {
   whenNotToUse: [
     'User wants to deploy to Kubernetes (use kubernetes skill instead)',
     'User wants to set up CI/CD (use ci-cd-setup skill instead)',
-    'User wants to manage cloud infrastructure (use infra-as-code skill instead)',
+    'User wants to manage cloud infrastructure (use terraform skill instead)',
   ],
   steps: [
     {

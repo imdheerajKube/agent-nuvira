@@ -3,6 +3,8 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import ThemeSwitcher from './ThemeSwitcher';
 import AccountMenu from './AccountMenu';
 import KeyboardHelp, { GO_TARGETS, isTypingTarget } from './KeyboardHelp';
+import CommandPalette, { paletteKeyLabel } from './CommandPalette';
+import { setChatFocus } from '../chat-focus';
 // The navigation MODEL lives outside the shell: the Help page lists it too, and
 // a page should not have to import the shell to describe where things are.
 import { PRIMARY_NAV, filterGroups } from '../nav';
@@ -31,6 +33,7 @@ export default function Layout({
   const [navOpen, setNavOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [helpOpen, setHelpOpen] = useState(false);
+  const [paletteOpen, setPaletteOpen] = useState(false);
   const menuRef = useRef<HTMLButtonElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const goArmedAt = useRef(0);
@@ -122,10 +125,36 @@ export default function Layout({
   }, [navOpen]);
 
   // Navigating is the drawer's whole purpose, so it should not survive the
-  // navigation it caused.
+  // navigation it caused. Chat focus mode is a mode OF THE CHAT PAGE: leaving
+  // that page with the shell hidden would strand the user on a page whose
+  // navigation cannot be reached at all, so the mode ends with the navigation
+  // that left it. The palette closes for the same reason — the destination it
+  // opened is the answer, and it should not sit over it.
   useEffect(() => {
     closeNav();
+    setPaletteOpen(false);
+    if (location.pathname !== '/chat') setChatFocus(false);
   }, [location.pathname]);
+
+  /**
+   * ⌘K / Ctrl+K.
+   *
+   * A SECOND listener, not another branch of the shortcut handler below: that
+   * one deliberately bails on any modifier combination, because Cmd+K belongs
+   * to the browser unless we claim it. Claiming it is the whole point of a
+   * palette, so it is handled here, before the type-ahead rules, and only for
+   * this exact chord.
+   */
+  useEffect(() => {
+    function onKeyDown(event: KeyboardEvent) {
+      if (!(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'k') return;
+      event.preventDefault();
+      setPaletteOpen((value) => !value);
+    }
+    document.addEventListener('keydown', onKeyDown);
+    return () => document.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   return (
     <div className="layout">
@@ -163,6 +192,21 @@ export default function Layout({
         </nav>
 
         <div className="topbar-actions">
+          {/* The palette's visible door. The shortcut is printed on the control
+              for the keyboard users who will use it, and the aria-label keeps
+              it meaningful when the hint is hidden at narrow widths. */}
+          <button
+            type="button"
+            className="topbar-action palette-trigger"
+            onClick={() => setPaletteOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={paletteOpen}
+            aria-label="Search and jump"
+            title={`Search pages and actions (${paletteKeyLabel()})`}
+          >
+            <span aria-hidden="true">🔎</span>
+            <kbd className="palette-trigger-key" aria-hidden="true">{paletteKeyLabel()}</kbd>
+          </button>
           <button
             type="button"
             className="topbar-action"
@@ -254,6 +298,12 @@ export default function Layout({
       </div>
 
       <KeyboardHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
+      <CommandPalette
+        open={paletteOpen}
+        onClose={() => setPaletteOpen(false)}
+        onRefresh={onRefresh}
+        onShortcuts={() => setHelpOpen(true)}
+      />
     </div>
   );
 }

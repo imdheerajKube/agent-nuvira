@@ -167,6 +167,33 @@ export interface ToolCallResponse {
     /** Input tokens the provider served from its prompt cache (a subset). */
     cachedPromptTokens?: number;
   };
+  /**
+   * The output cap THIS request sent (`max_tokens` / `maxOutputTokens`), when the
+   * adapter knows it.
+   *
+   * Carried so an EMPTY step can be attributed instead of just counted: with the
+   * cap and `usage.completionTokens` above, `finish_reason: 'length'` becomes
+   * "this model spent its whole budget on reasoning" rather than "the provider
+   * returned nothing" — opposite meanings with opposite remedies. See
+   * `learning/empty-completion.ts`.
+   */
+  requestedMaxTokens?: number;
+  /**
+   * The raised output cap this pair has now EARNED, when this step's TOOL-CALL
+   * ARGUMENTS were cut off.
+   *
+   * Separate from `requestedMaxTokens` because it answers the NEXT request's
+   * question, not this one's: `finish_reason: 'length'` mid-tool-call means the
+   * payload did not fit, and re-sending it under the same cap cannot succeed.
+   * The adapter learns the pair a larger floor (see `inference/output-budget.ts`)
+   * and reports it here so the loop can TELL the model to re-send the same call
+   * once instead of teaching it to fragment its deliverable.
+   *
+   * Measured (trace-1793853385112-sf2exl, 2026-11-05): an `edit_file` was cut at
+   * 4,096 tokens, the refusal told the model to split the payload, and a
+   * single-document audit became a §1 fragment in three separate files.
+   */
+  budgetAfterTruncation?: number;
 }
 
 /**

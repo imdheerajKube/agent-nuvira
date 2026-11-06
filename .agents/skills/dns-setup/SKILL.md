@@ -166,4 +166,3 @@ curl -I https://example.com | grep -i "ssl\|certificate"
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('dns-setup', 'references/guide.md')`.

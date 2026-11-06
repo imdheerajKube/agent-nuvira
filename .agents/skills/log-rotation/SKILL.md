@@ -172,4 +172,3 @@ df -h /var/log
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('log-rotation', 'references/guide.md')`.

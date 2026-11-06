@@ -28,6 +28,7 @@ import { envBuff } from '../config/paths';
 import { z, toJSONSchema, type ZodType } from 'zod';
 import { ACTION_BY_INTENT } from '../nlu/actions.js';
 import { detectPermissionSeeking, IRREVERSIBLE_ACTION_RE } from '../learning/autonomy-policy.js';
+import { recordCommandEvidence, recordReadEvidence } from '../learning/skill-obligations.js';
 // The explicit, session-scoped "allow all <category> for this session" grant —
 // offered at the confirmation a state-changing tool demanded (see the
 // `ask_user` runner) and consulted by the write/terminal gates.
@@ -151,6 +152,20 @@ export interface ToolContext {
    * existing, longer default — nothing changes for a batch pipeline.
    */
   interactive?: boolean;
+  /**
+   * How much of this turn's wall-clock budget is left, in ms (`Infinity`/absent
+   * = no wall clock, the pre-`turn.maxMinutes` behaviour).
+   *
+   * `run_terminal` reads it to CLAMP its own wait. Measured 2026-11-05: an audit
+   * turn with a 7-minute budget ran `pytest` on a 13.5-minute suite at
+   * `timeout_ms: 900000`, so the harness killed the process while the model was
+   * still inside a single tool call, holding a skeleton deliverable and no
+   * findings. The wait is the only thing clamped, never the command: a run that
+   * outlives the clamped wait is handed to monitoring and keeps going, so the
+   * turn regains control in time to write what it has instead of losing both the
+   * findings and the run.
+   */
+  remainingBudgetMs?: () => number;
   /**
    * G13 — does the CURRENT request authorize file writes?
    *
@@ -320,6 +335,24 @@ export interface ToolContext {
    * `src/tools/command-memo.ts`.
    */
   commandMemo?: import('./command-memo.js').RunCommandMemo;
+  /**
+   * The files THIS RUN wrote, as absolute path → SHA-256 of the bytes it wrote
+   * (see `tools/own-writes.ts`).
+   *
+   * What it buys is narrow, and deliberately so. Rewriting a file is gated
+   * because a re-run cannot recover content somebody else authored. Content the
+   * RUN authored is the other case: it is in this run's transcript, and when the
+   * file on disk still hashes to exactly what the tool wrote, replacing it
+   * destroys nothing the run does not already hold.
+   *
+   * Measured (trace-1793853385112-sf2exl, 2026-11-05): an assessment turn
+   * created its report and could not add the next section — `state-changing —
+   * NOT applied` — so the deliverable on disk stopped at §1 while the answer
+   * said the rest was written. Created once per run by the tool loop; absent (a
+   * direct tool call, a bare test context) means every write is treated as
+   * before.
+   */
+  ownWrites?: Map<string, string>;
 }
 
 /** A clarify-style choice. */
@@ -878,12 +911,12 @@ export const TOOL_CONTRACT = `You have tools available. Call them when appropria
 - If a subtask can be delegated to a specialized sub-agent (gather context, review, security scan, run tests), call \`delegate\` with the agent type, a focused prompt, and optional file paths.
 - To find code matching a pattern (context gathering, locating definitions/usages), call \`code_search\` with the pattern and optional globs.
 - To READ the project: call \`read_file\` to open a file (with line numbers), \`list_dir\` to see a directory's contents, or \`glob\` to find files by pattern. Always prefer reading the actual file over assuming its contents — a large file reports a line range, continue with offset/limit.
-- To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. CREATING a file the request asked for is applied directly — no confirmation needed, so just call it. An \`edit_file\` that is surgical (small relative to the file) also applies directly, as does one on a file the request names — the verify loop must not need a human between iterations. A whole-file write over existing content, or an edit that rewrites most of a file, refuses without confirm — call \`ask_user\` with a one-line summary, then retry with confirm:true.
+- To CHANGE code (after reading it): call \`edit_file\` for a surgical exact-text replacement, or \`write_file\` to create/replace a file. CREATING a file the request asked for is applied directly — no confirmation needed, so just call it. An \`edit_file\` that is surgical (small relative to the file) also applies directly, as does one on a file the request names — the verify loop must not need a human between iterations. Appending, and rewriting a file this run wrote and nothing has changed, never asks — build a long deliverable in sections in ONE file. A whole-file write over content this run did not write, or an edit that rewrites most of it, refuses: ask the question the refusal names, then retry with confirm:true.
 - WORK IN BATCHES — one call per step is the exception, not the habit. Put every independent call in the SAME step: several \`read_file\` calls together, or ONE \`run_terminal\` that chains what you need (\`ls -la; cat README.md; cat package.json; git status\`). Each step re-sends this whole conversation to the model, so one-call-per-step costs the user real money and buys no extra care. Batch first (only serialize when the next call's arguments depend on this result), then act.
 - KEEP THE PLAN MOVING IN THE SAME STEP as the work that closes it — and do not restate what the harness already watched: a step that names a file the turn wrote, or a check the turn actually ran, is advanced for you, with that call recorded as its evidence. Only settle what the harness cannot see (a decision, a step you are abandoning), and settle it alongside a real call, never as a step of its own.
 - RUN THE CHECK ONCE, not once per file. When you already know the remaining edits (a version bump, a changelog entry, the implementation), make them all FIRST and then run the project's check ONE time — three edits each followed by the same \`npm test\` is three full re-reads of the conversation for the same verdict. The exception, and it is the important one: when you are DEBUGGING a failure, change one thing and re-check, because there the check's result is what tells you what to do next.
 - NEVER repeat a call you already made. Do not re-run a command with only a different output filter (\`| head\`, \`| tail\`, \`| grep\`) — read the output you already have, or request the range you need in ONE call. Do not re-read a file you have not changed. Re-running is only for verifying work you just changed, and the loop refuses an identical repeat on an unchanged workspace rather than paying for it twice.
-- NEVER ask for permission to do work the user already asked for — not via \`ask_user\` and never in plain text. Decide it yourself, state the decision in your answer, and continue. Reserve \`ask_user\` for a decision that is genuinely the user's: it cannot proceed without an answer, it is high-impact AND irreversible, and there is no sensible default (overwriting existing work, deleting data, spending money, publishing).
+- NEVER ask for permission to do work the user already asked for — not via \`ask_user\` and never in plain text. Decide it yourself, state the decision in your answer, and continue. Reserve \`ask_user\` for a decision that is genuinely the user's: it cannot proceed without an answer, it is high-impact AND irreversible, and there is no sensible default (overwriting existing work, deleting data, spending money, publishing). EXCEPTION, not permission-seeking: a refusal that names a question for the user — ask exactly that, then retry with confirm:true.
 - To VERIFY code by actual invocation: call \`run_terminal\` with the real command (\`npx vitest run tests/x.test.ts\`, \`npx tsc --noEmit\`, \`npm run build\`, \`git diff\`). Read-only verify commands run directly, and so do recoverable workspace commands (\`npm/pnpm/yarn/bun install\`, \`pip install\`, \`mkdir\`, \`touch\`, \`cp\`, \`mv\`, \`git add\`, \`npm init\`) when the request authorized the work — the build you were asked for is your job to set up. Everything else state-changing (network fetches, arbitrary code, global installs, anything leaving the machine) needs confirm:true after the user approves via ask_user. Never guess that a test passes — run it and read the output. Use run_cli (not run_terminal) for buff/agent-nuvira control commands, and the \`git\` tool (not run_terminal) to commit.
 - WHEN DONE, STATE IT: call \`finish\` with a one-line \`summary\` and \`verified\` (true only if this turn's tool output proves the request is met). The claim is checked against the turn's own evidence: a RED check, or changed files with no check ever run, contradicts it and comes back refused. Unmet requirement rows and untested modules come back as OBSERVATIONS you may close or answer; they never refuse your ending. If something cannot be done, call it with \`verified:false\` and list it in \`unmet\`; that ending is accepted and the user is told.
 - END EVERY RESPONSE by calling \`suggest_followups\` with exactly 3 followups the user is likely to want next — natural next questions, deeper dives, or related directions that build on what you just said; specific to this conversation, not generic.
@@ -1370,7 +1403,18 @@ registerTool({
   category: 'workflow',
   inputSchema: readFileSchema,
   endsAgentStep: false,
-  run: (args, ctx) => import('./coding-tools.js').then((m) => m.runReadFile(args as import('./coding-tools.js').ReadFileArgs, ctx)),
+  run: (args, ctx) =>
+    import('./coding-tools.js').then(async (m) => {
+      const result = await m.runReadFile(args as import('./coding-tools.js').ReadFileArgs, ctx);
+      // P6 — a successful read is EVIDENCE a loaded skill's `must_read` can be
+      // checked against. Recording it here (not in the read path) keeps the big
+      // tool modules free of obligation bookkeeping.
+      if (!result.startsWith('Error:')) {
+        const { path, paths } = args as { path?: string; paths?: string[] };
+        recordReadEvidence(paths ?? (path ? [path] : []));
+      }
+      return result;
+    }),
 });
 
 registerTool({
@@ -1396,7 +1440,7 @@ registerTool({
 registerTool({
   name: 'edit_file',
   capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a git revert" },
-  description: 'Surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). Make ONE call for ALL edits to a file via `replacements[]` (they apply atomically — all-or-nothing, never a partial edit). Optionally `dry_run` to preview a unified diff without writing. State-changing: confirm with the user via ask_user first, then retry with confirm:true. Use after read_file so the match is exact.',
+  description: 'Surgical exact-text edit to a file (find old_string, replace with new_string — like str_replace). Make ONE call for ALL edits to a file via `replacements[]` (they apply atomically — all-or-nothing, never a partial edit). Optionally `dry_run` to preview a unified diff without writing. A surgical edit, an edit of a file the request names, and an edit of a file THIS RUN wrote (unchanged since) apply directly; an edit that replaces most of a file the request never named refuses, and the refusal carries the one question to ask before retrying with confirm:true. Use after read_file so the match is exact.',
   category: 'workflow',
   inputSchema: editFileSchema,
   endsAgentStep: false,
@@ -1406,7 +1450,7 @@ registerTool({
 registerTool({
   name: 'write_file',
   capability: { effectClass: 'local-write', grantCategory: 'write', reversibleHow: "a create is undone by deleting the file; an overwrite is a git revert" },
-  description: 'Create a new file, overwrite one, or append to one (parent directories are created). One call holds the COMPLETE file up to about 8,000 characters — write it in a single call at that size; splitting a file that fits costs a whole model round-trip. Past ~8,000 characters, where one model output cannot carry the payload: send the first part with no mode, then each later part with mode "append" containing ONLY the new tail, never re-sending what is already on disk. To change part of a file that exists, use edit_file (old_string → new_string) rather than rewriting the whole file. State-changing: confirm with the user via ask_user first, then retry with confirm:true.',
+  description: 'Create a new file, overwrite one, or append to one (parent directories are created). One call holds the COMPLETE file up to about 8,000 characters — write it in a single call at that size; splitting a file that fits costs a whole model round-trip. Past ~8,000 characters, where one model output cannot carry the payload: send the first part with no mode, then each later part with mode "append" containing ONLY the new tail, never re-sending what is already on disk. To change part of a file that exists, use edit_file (old_string → new_string) rather than rewriting the whole file. Creating a file the request asked for applies directly, `mode:"append"` always applies directly, and so does replacing a file THIS RUN wrote that nothing has changed since; replacing existing content the request never named and this run did not write refuses, and the refusal carries the one question to ask before retrying with confirm:true.',
   category: 'workflow',
   inputSchema: writeFileSchema,
   endsAgentStep: false,
@@ -1420,7 +1464,19 @@ registerTool({
   category: 'workflow',
   inputSchema: runTerminalSchema,
   endsAgentStep: false,
-  run: (args, ctx) => import('./run-terminal.js').then((m) => m.runTerminalTool(args as import('./run-terminal.js').RunTerminalArgs, ctx)),
+  run: (args, ctx) =>
+    import('./run-terminal.js').then(async (m) => {
+      const result = await m.runTerminalTool(args as import('./run-terminal.js').RunTerminalArgs, ctx);
+      // P6 — only a real exit-0 finish is evidence (`run-terminal.ts` marks it
+      // with `✅ run_terminal[`); a failed or still-running run records nothing,
+      // so `must_run`/`must_verify` cannot be satisfied by a failure. A poll
+      // carries no command, so it cannot double-record either.
+      const { command } = args as { command?: string };
+      if (command && result.startsWith('✅ run_terminal')) {
+        recordCommandEvidence(command, true);
+      }
+      return result;
+    }),
 });
 
 // ─── P0.7 plan/todo tool (creating AND tracking plans) ─────────────────────
@@ -1743,7 +1799,7 @@ registerTool({
 
 registerTool({
   name: 'skill',
-  description: 'Load a reusable capability pack (skill) into the conversation — its methodology (ordered steps + parameters) comes back to guide the work. Use when a task matches a known skill: code assessment, technical roadmap, plan creation, test strategy, website deployment, etc. Omit the name to list every available skill.',
+  description: 'Load a reusable capability pack (skill) into the conversation — its methodology, plus (for an installed SKILL.md skill) its skill root and file list. Use when the task genuinely matches a skill\'s stated "Use when" trigger; the system prompt carries the catalog as "name: when to use", and this tool with NO name lists every skill with its full description. A loaded hub skill ships references/scripts/data with it — read those files with read_file when the methodology tells you to.',
   category: 'experience',
   inputSchema: skillToolSchema,
   endsAgentStep: false,

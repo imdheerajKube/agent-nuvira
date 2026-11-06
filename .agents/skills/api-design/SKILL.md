@@ -1,7 +1,11 @@
 ---
 name: api-design
-description: Design and implement a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes, and write integration tests. Use when the goal asks to create an API, design endpoints, build a REST service, or scaffold an HTTP backend.
+description: Design, implement and deploy a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes with auth and rate limiting, write integration tests, and ship it. Use when the goal asks to create an API, scaffold a backend service, design endpoints, or build a REST service.
 version: 2.0.0
+# P6 — binding: the finish gate refuses a "done" claim until the spec validates.
+obligations:
+  must_run:
+    - scripts/validate_openapi.py
 ---
 
 # api-design
@@ -10,7 +14,7 @@ Design and implement a REST API: gather requirements, design endpoints with prop
 
 ## Goal pattern
 
-API design REST endpoint route HTTP backend server create implement OpenAPI swagger
+API design REST endpoint route HTTP backend server create build implement deploy scaffold OpenAPI swagger
 
 ## Parameters
 

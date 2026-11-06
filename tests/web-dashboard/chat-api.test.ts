@@ -441,6 +441,23 @@ describe('/api/chat', () => {
     expect(autoOpts.resume).toBe(true);
   });
 
+  it('P — a PINNED skill reaches the engine as validated names, and is echoed on the turn', async () => {
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId: 'pin-sess',
+      message: 'build the API',
+      // The composer sends `/skill` names; an API caller can send the same list.
+      // A path-shaped token must never reach the engine (the names are validated
+      // at the boundary even though resolution never touches a path directly).
+      skills: ['API-Design', '../etc/passwd', 'api-testing'],
+    });
+    expect(res.status).toBe(200);
+    const opts = engine.calls.at(-1)?.opts as { skills?: string[] };
+    expect(opts.skills).toEqual(['api-design', 'api-testing']);
+    // Echoed, so the client can show the pin on the turn instead of assuming it.
+    const body = (await res.json()) as { pinnedSkills?: string[] };
+    expect(body.pinnedSkills).toEqual(['api-design', 'api-testing']);
+  });
+
   it('strict model pin — an EXPLICIT fallback turn reports auto routing, and names how to hold the pin', async () => {
     // The engine (always `groq/llama-3.3-70b`) stands in for a router that left
     // the pinned model. This turn RELEASED the pin (`strict: false`, the chat's
@@ -1543,6 +1560,43 @@ describe('/api/projects — P3 project attach', () => {
 
     it('gates install on role (viewer → 403)', async () => {
       const viewer = await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'code-assist' }, viewerToken);
+      expect(viewer.status).toBe(403);
+    });
+
+    // ─── P4 — routing preview + update (the dashboard's management surface) ──
+    it('P4 — the routing preview is the SAME block the model is given', async () => {
+      await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'code-assist' });
+      const res = await authedFetch('/api/skills/index-preview');
+      expect(res.status).toBe(200);
+      const d = (await res.json()) as {
+        ok: boolean;
+        mode: string;
+        chars: number;
+        withTrigger: number;
+        index: string;
+        active: string;
+      };
+      expect(d.ok).toBe(true);
+      expect(d.mode).toBe('index');
+      // The just-installed skill is visible, by name, with its routing text —
+      // which is exactly the question the panel answers.
+      expect(d.index).toContain('code-assist');
+      expect(d.active).toContain('code-assist');
+      expect(d.chars).toBeGreaterThan(0);
+    });
+
+    it('P4 — update reports an unchanged fixture as current', async () => {
+      await authedFetch('/api/skills/marketplace/install', 'POST', { name: 'code-assist' });
+      const res = await authedFetch('/api/skills/update', 'POST', {});
+      expect(res.status).toBe(200);
+      const d = (await res.json()) as { ok: boolean; updated: string[]; current: string[]; failed: string[] };
+      expect(d.ok).toBe(true);
+      expect(d.updated).toEqual([]);
+      expect(d.current).toContain('code-assist');
+    });
+
+    it('P4 — update is gated on role (viewer → 403)', async () => {
+      const viewer = await authedFetch('/api/skills/update', 'POST', {}, viewerToken);
       expect(viewer.status).toBe(403);
     });
   });

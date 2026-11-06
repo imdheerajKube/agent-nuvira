@@ -15,6 +15,7 @@
  */
 
 import type { Plan, PlanStepStatus } from '../tools/plan-store.js';
+import { formatSpendFull, spendCeilingUsd, type SpendBreakdown } from '../utils/spend.js';
 import { wantsAuthoredArtifact } from './deliverable-class.js';
 
 /**
@@ -186,7 +187,8 @@ export interface TurnReport {
    */
   assumptions: string[];
   /**
-   * C6 — what the turn COST, from the persisted cost ledger (tokens, USD, calls).
+   * C6 — what the turn SPENT, from the persisted cost ledger, and on what
+   * evidence (see {@link TurnSpend}).
    *
    * The programme's measured run A spent **1,192,115 input tokens in 82 steps** and
    * the turn reported none of it: the only economy figure anywhere was a session
@@ -198,8 +200,16 @@ export interface TurnReport {
    * in a fresh process, and only a timestamp window survives that. Absent when no
    * call was recorded at all (a turn that never reached a provider has no cost to
    * report — `0` would read as "it was free").
+   *
+   * ONE NUMBER NOT ALLOWED. The previous shape was `{ usd, tokens, calls }`, and the
+   * only `usd` available was the evidence-backed bill — which is 0 for every
+   * list-priced call whose account has no declared `billingTier` (the DEFAULT for a
+   * fresh install). So the common case printed `cost: $0.000000` on a turn that was
+   * not free at all: the same defect as the old "Total Spent $7.21", with the sign
+   * flipped. The type now carries each bucket separately so a surface cannot print
+   * a dollar figure without saying which one it is.
    */
-  cost?: { usd: number; tokens: number; calls: number };
+  cost?: TurnSpend;
   /** One deterministic sentence for the console/trace, or null when trivial. */
   summary: string | null;
 }
@@ -226,8 +236,8 @@ export interface BuildTurnReportInput {
   unverifiedPaths?: readonly string[];
   /** E1 — recorded decisions taken on the user's behalf (see TurnReport). */
   assumptions?: readonly string[];
-  /** C6 — the turn's measured cost from the ledger (see `TurnReport.cost`). */
-  cost?: { usd: number; tokens: number; calls: number };
+  /** C6 — the turn's spend from the ledger (see `TurnReport.cost`). */
+  cost?: TurnSpend;
 }
 
 function hasAnyFlag(flags: TurnReportFlags): boolean {
@@ -437,7 +447,7 @@ function buildSummary(input: {
   verifiedPaths: string[];
   unverifiedPaths: string[];
   assumptions: string[];
-  cost?: { usd: number; tokens: number; calls: number };
+  cost?: TurnSpend;
 }): string | null {
   const parts: string[] = [];
   if (input.planned) {
@@ -484,7 +494,9 @@ function buildSummary(input: {
     // C6 — except when the turn actually SPENT something. The cost is the one
     // thing a trivial-looking turn can still be wrong about (a long prompt on an
     // expensive model), and it is exactly the number run A had no way to see.
-    return input.cost && input.cost.usd >= COST_NOTICE_USD ? formatCost(input.cost) : null;
+    return input.cost && spendCeilingUsd(input.cost) >= COST_NOTICE_USD
+      ? formatCost(input.cost)
+      : null;
   }
   if (input.cost) parts.push(formatCost(input.cost));
   return parts.join(' · ');
@@ -499,18 +511,44 @@ function buildSummary(input: {
  */
 export const COST_NOTICE_USD = 0.01;
 
-/** `$0.0042 / 12.3K tok (3 calls)` — the turn's measured spend, one line. */
-export function formatCost(cost: { usd: number; tokens: number; calls: number }): string {
-  const usd = cost.usd >= 0.01 ? `$${cost.usd.toFixed(4)}` : `$${cost.usd.toFixed(6)}`;
-  // Millions are the scale that matters here: the measured run A burned 1,192,115
-  // input tokens, and `1192.1K` reads as noise where `1.19M` reads as a number.
-  const tokens =
-    cost.tokens >= 1_000_000
-      ? `${(cost.tokens / 1_000_000).toFixed(2)}M tok`
-      : cost.tokens >= 1000
-        ? `${(cost.tokens / 1000).toFixed(1)}K tok`
-        : `${cost.tokens} tok`;
-  return `cost: ${usd} / ${tokens} (${cost.calls} call${cost.calls === 1 ? '' : 's'})`;
+/**
+ * C6 — WHAT a turn spent, split by the evidence behind each figure.
+ *
+ * These are `cost-classification.ts`'s buckets, carried onto the report so a display
+ * surface cannot collapse them back into one number. They mean different things and
+ * an invoice cannot answer for any of them:
+ *
+ *   reported    the provider stated this call's charge — EXACT.
+ *   listed      list price on an account DECLARED `paid` — an estimate of money owed.
+ *   unverified  list price on an account with NO declared tier — not known to be
+ *               spend at all (a free tier bills nothing), so it must never be added
+ *               to a bill and printed as one.
+ *   free        provably no per-call charge: a local runtime, a `:free` model, or a
+ *               declared free/subscription account. `$0` here is TRUE.
+ *   unpriced    no price evidence whatsoever. No dollar may be printed.
+ *
+ * `tokens` and `calls` are the only units that hold for every provider (including
+ * local and keyless gateways), so they are always present and always printable;
+ * money is optional and every clause that shows it names its evidence.
+ *
+ * Defined ONCE, in `cost-tracker.ts`, because the unattended-run surfaces
+ * (`BatchStat`, `UnattendedJob`) report the same buckets for a batch window. Two
+ * copies of this shape would drift the moment one of them gained a bucket — which
+ * is the class of defect this change exists to remove.
+ */
+export type TurnSpend = SpendBreakdown;
+
+/**
+ * `cost: ~$0.004400 est. · 12.3K tok · 3 calls` — the turn's spend, one line.
+ *
+ * The RULES live in `utils/spend.ts` (one implementation, shared with the dashboard
+ * and the unattended-run tables). This used to be a local formatter over a single
+ * `usd` number, and because that number is 0 whenever the account's billing tier is
+ * undeclared (the default), the common case read `cost: $0.000000` — a free claim
+ * about a turn that was never priced.
+ */
+export function formatCost(spend: TurnSpend): string {
+  return `cost: ${formatSpendFull(spend)}`;
 }
 
 /** A compact, human-readable close-out block for the console / chat surface. */

@@ -172,4 +172,3 @@ aws kms describe-key --key-id alias/aws/secretsmanager
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('secrets-manager', 'references/guide.md')`.

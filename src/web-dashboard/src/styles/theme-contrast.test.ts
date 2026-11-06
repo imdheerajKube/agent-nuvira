@@ -361,3 +361,81 @@ describe('theme contrast — WCAG 2.2 AA', () => {
     expect(failing(0.9)).toEqual([]);
   });
 });
+
+/* ── Glass mode: the composite is what a user actually reads ─────────────────
+   Frosted surfaces are translucent BY DEFINITION, so the palette primitives the
+   tests above measure are no longer the colour behind the text: it is a 62%
+   surface over a tinted canvas, and no reviewer can eyeball whether that still
+   clears 4.5:1 on fourteen themes. So the alphas are READ OUT OF THE STYLESHEET
+   and the stack is composited in the order a browser paints it.
+
+   The blur is the one part not modelled here: `backdrop-filter` averages the
+   pixels behind the pane, and the honest bound is the tinted canvas those pixels
+   come from — which is exactly what is measured below. Rising the alphas in
+   themes.css raises the guarantee rather than invalidating it, which is why
+   there is deliberately no "glass is close enough" exemption anywhere. */
+
+const glassBlock = /html\[data-glass='on'\]\s*\{([^}]*)\}/.exec(CSS)?.[1] ?? '';
+
+function glassAlpha(token: string): number {
+  const match = new RegExp(`--${token}\\s*:\\s*([0-9]*\\.?[0-9]+)\\s*;`).exec(glassBlock);
+  if (!match) throw new Error(`--${token} is not declared in the glass block`);
+  return Number(match[1]);
+}
+
+describe('glass mode — frosted surfaces stay legible', () => {
+  it('declares every alpha the composite depends on', () => {
+    // A parse that silently yields NaN would make each assertion below vacuously
+    // pass, which is the failure mode this whole file exists to prevent.
+    expect(glassBlock.length).toBeGreaterThan(100);
+    for (const token of ['glass-surface-alpha', 'glass-soft-alpha', 'glass-chrome-alpha', 'glass-tint-alpha']) {
+      expect(Number.isFinite(glassAlpha(token))).toBe(true);
+    }
+    expect(glassAlpha('glass-surface-alpha')).toBeGreaterThan(0.5);
+  });
+
+  const TEXT_TOKENS = ['--p-ink', '--p-ink-2', '--p-ink-3', '--p-accent', '--p-info'];
+  const WASHES = ['--p-accent', '--p-cyan', '--p-purple'];
+
+  it.each(THEMES.map((t) => [`${t.palette}/${t.mode}`, t] as const))('%s', (_name, theme) => {
+    const surfaceAlpha = glassAlpha('glass-surface-alpha');
+    const softAlpha = glassAlpha('glass-soft-alpha');
+    const chromeAlpha = glassAlpha('glass-chrome-alpha');
+    const tintAlpha = glassAlpha('glass-tint-alpha');
+
+    for (const wash of WASHES) {
+      // The painted stack: canvas, then the wash over it, then the frosted pane.
+      const backdrop = composite(theme.tokens[wash], theme.tokens['--p-canvas'], tintAlpha);
+      const pane = composite(theme.tokens['--p-surface'], backdrop, surfaceAlpha);
+      const inner = composite(theme.tokens['--p-sunken'], pane, softAlpha);
+      const chrome = composite(theme.tokens['--p-chrome'], backdrop, chromeAlpha);
+      const rail = composite(theme.tokens['--p-sidebar'], backdrop, chromeAlpha);
+
+      for (const fg of TEXT_TOKENS) {
+        for (const [bg, where] of [
+          [pane, 'a frosted card'],
+          [inner, 'a frosted sub-panel'],
+        ] as const) {
+          const ratio = contrast(theme.tokens[fg], bg);
+          expect(
+            Number(ratio.toFixed(2)),
+            `${fg} on ${where} over ${wash} (${theme.palette}/${theme.mode}): ${theme.tokens[fg]} on ${bg} = ${ratio.toFixed(2)}:1`,
+          ).toBeGreaterThanOrEqual(AA_TEXT);
+        }
+      }
+
+      // The chrome keeps its own ink, and it is the most translucent surface in
+      // the mode (78%) because the page is meant to show through the top bar.
+      for (const [fg, bg, where] of [
+        ['--p-chrome-ink', chrome, 'the frosted top bar'],
+        ['--p-sidebar-ink', rail, 'the frosted rail'],
+      ] as const) {
+        const ratio = contrast(theme.tokens[fg], bg);
+        expect(
+          Number(ratio.toFixed(2)),
+          `${fg} on ${where} over ${wash} (${theme.palette}/${theme.mode}): ${theme.tokens[fg]} on ${bg} = ${ratio.toFixed(2)}:1`,
+        ).toBeGreaterThanOrEqual(AA_TEXT);
+      }
+    }
+  });
+});

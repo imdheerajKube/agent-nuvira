@@ -70,6 +70,20 @@ export interface ExhaustionInput {
   /** Eligible models the router would consider right now (measured, never guessed). */
   poolSize?: number;
   poolProviders?: number;
+  /**
+   * Of `poolSize`, the pairs VERIFIED and callable right now, and those never
+   * tried at all.
+   *
+   * WHY. `poolSize` counts what routing CONSIDERS — every listed model,
+   * proven or not (measured here: 436 considered, 18 verified). Both sentences
+   * this report can print about the pool ("a routing gap, not a shortage" and
+   * "N models were eligible") are claims about AVAILABILITY, so when the split
+   * is known they are decided on `poolRoutable`, and the count is printed with
+   * its breakdown. Without it a catalog number reads as a healthy pool.
+   */
+  poolRoutable?: number;
+  /** Of `poolSize`, pairs listed by a provider but never proven. */
+  poolNeverTried?: number;
   /** What the user asked for, for the header. */
   task?: string;
   /**
@@ -231,6 +245,16 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
   const poolMeasured = typeof input.poolSize === 'number';
   const poolSize = input.poolSize ?? 0;
   const poolProviders = input.poolProviders ?? 0;
+  // Callable pairs when known; the considered pool otherwise (a caller that
+  // built the input by hand keeps the old meaning).
+  const poolCallable = typeof input.poolRoutable === 'number' ? input.poolRoutable : poolSize;
+  const poolSplitKnown = typeof input.poolRoutable === 'number';
+  const poolBreakdown = poolSplitKnown
+    ? ` (${input.poolRoutable} verified and callable${typeof input.poolNeverTried === 'number' ? `, ${input.poolNeverTried} never tried` : ''})`
+    : '';
+  // "callable" only when the split was measured; otherwise keep the established
+  // word for the considered pool rather than overstate a hand-built input.
+  const poolNoun = poolSplitKnown ? 'callable' : 'eligible';
   // A routing gap: the pool was measured, models were reached, and eligible
   // models remained untouched. Presenting that as an outage is the dishonesty
   // the user called out when a healthy pool sat unused behind "no model
@@ -240,7 +264,7 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
   // as a gap would also promise the automatic next attempt that the pin blocks.
   const pinHeld = input.pinnedHeld === true;
   const routingGap =
-    !pinHeld && poolMeasured && triedAttempts.length > 0 && poolSize > triedAttempts.length;
+    !pinHeld && poolMeasured && triedAttempts.length > 0 && poolCallable > triedAttempts.length;
   const emptyPool = poolMeasured && poolSize === 0;
 
   const parts: string[] = [];
@@ -282,7 +306,7 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
 
   let poolClaim: string | undefined;
   if (poolMeasured && !emptyPool) {
-    poolClaim = `${poolSize} model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'} were eligible at the time.`;
+    poolClaim = `${poolSize} model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'} were eligible at the time${poolBreakdown}.`;
     parts.push('');
     parts.push(poolClaim);
   }
@@ -295,7 +319,7 @@ export function buildExhaustionReport(input: ExhaustionInput): ExhaustionReport 
     );
   } else if (routingGap) {
     parts.push(
-      `This was a routing gap, not a shortage: only ${attemptCount} of ${poolSize} eligible models were actually tried. The next attempt routes to an untried model automatically — you do not need to trigger anything.`,
+      `This was a routing gap, not a shortage: only ${attemptCount} of ${poolCallable} ${poolNoun} models were actually tried. The next attempt routes to an untried model automatically — you do not need to trigger anything.`,
     );
   } else if (emptyPool) {
     parts.push(

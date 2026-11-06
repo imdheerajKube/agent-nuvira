@@ -190,3 +190,40 @@ describe('resilience', () => {
     expect(getRoutingHistory()).toHaveLength(1);
   });
 });
+
+describe('impossible pairs never contaminate the audit trail', () => {
+  /**
+   * The store is append-only and is the source of every "what does the router
+   * actually do" number. Measured on this machine: 15 `local/wire-stub-model`
+   * rows (a test fixture id) and 24 `groq/deepseek-flash` rows (a cross-provider
+   * mis-attribution) survived long after both were ruled out — every count read
+   * off the file inherited them.
+   */
+  beforeEach(() => {
+    clearRoutingHistory();
+  });
+
+  it('refuses to record a fixture/stub pair at the door', () => {
+    record({ provider: 'local', model: 'wire-stub-model' });
+    record({ provider: 'groq', model: 'test-model-1' });
+    expect(getRoutingHistory()).toHaveLength(0);
+    expect(getRoutingUsageStats().total).toBe(0);
+  });
+
+  it('filters rows already on disk, without touching real decisions', async () => {
+    const { writeFileSync } = await import('node:fs');
+    const path = join(process.env.NUVIRA_MEMORY_DIR!, 'routing-history.json');
+    const legacy = {
+      version: 1,
+      entries: [
+        { id: 'r1', timestamp: Date.now(), source: 'explain', agentType: 'chat', task: 't', complexity: 'moderate', provider: 'local', model: 'wire-stub-model', score: 0.9 },
+        { id: 'r2', timestamp: Date.now(), source: 'chat', agentType: 'chat', task: 't', complexity: 'moderate', provider: 'groq', model: 'llama-3.3-70b', score: 0.7 },
+      ],
+    };
+    writeFileSync(path, JSON.stringify(legacy), 'utf-8');
+    const stats = getRoutingUsageStats();
+    expect(stats.total).toBe(1);
+    expect(stats.byModel['wire-stub-model']).toBeUndefined();
+    expect(getRoutingHistory().map((e) => e.id)).toEqual(['r2']);
+  });
+});

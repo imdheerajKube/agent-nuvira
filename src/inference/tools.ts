@@ -187,6 +187,19 @@ export async function chatCompletionsWithTools(opts: {
    * reasoning-effort.ts (default-deny); absent → body is byte-identical.
    */
   reasoningBody?: Record<string, unknown>;
+  /**
+   * Ask for streamed `usage` via the top-level `usage` object.
+   *
+   * OPENROUTER ONLY, AND OPT-IN. It is the one endpoint that needs the field to
+   * report `usage.cost` on a stream; every other OpenAI-compatible provider
+   * either ignores it or REJECTS THE WHOLE REQUEST for it. MEASURED
+   * (`trace-1793695499253-rfbtna`, `trace-1793695534308-b198km`): two pinned
+   * turns on `groq/openai/gpt-oss-120b` died in under 2s with
+   * `400 {"error":{"message":"property 'usage' is unsupported"}}` while a
+   * 436-model pool sat unused — the turn was lost to a cost-metering nicety.
+   * The old comment here assumed providers ignore unknown fields; Groq does not.
+   */
+  usageInclude?: boolean;
 }): Promise<ToolCallResponse> {
   const temperature = opts.temperature ?? 0.7;
   const maxTokens = opts.maxTokens ?? 4096;
@@ -261,6 +274,9 @@ export async function chatCompletionsWithTools(opts: {
   const data = (await response.json()) as WireResponse;
   const result = parseToolCallResponse(data);
   if (repairedReasoningTurns > 0) result.repairedReasoningTurns = repairedReasoningTurns;
+  // The cap THIS request sent, so an empty step can be attributed (a model cut
+  // at the cap is not a dead pair — see learning/empty-completion.ts).
+  result.requestedMaxTokens = maxTokens;
   if (opts.onCost) {
     try {
       // M2.2: pass the endpoint's own usage when it reported one (tokens and,
@@ -371,9 +387,10 @@ export async function chatCompletionsWithToolsStream(
           // OpenAI convention for measured usage in the final chunk (Groq and
           // OpenRouter support it; providers that ignore it just omit usage).
           stream_options: { include_usage: true },
-          // OpenRouter only reports `usage.cost` for streams when explicitly asked;
-          // providers that don't understand this field ignore it.
-          usage: { include: true },
+          // OpenRouter only reports `usage.cost` for streams when explicitly
+          // asked — and it is the ONLY provider allowed to be asked: Groq 400s
+          // the entire request on this field (see `usageInclude`).
+          ...(opts.usageInclude ? { usage: { include: true } } : {}),
           ...(opts.reasoningBody || {}),
         }),
       ),
@@ -557,5 +574,6 @@ export async function chatCompletionsWithToolsStream(
     ...(reasoningContent ? { reasoningContent } : {}),
     ...(finishReason ? { finishReason } : {}),
     ...(repairedReasoningTurns > 0 ? { repairedReasoningTurns } : {}),
+    requestedMaxTokens: maxTokens,
   };
 }

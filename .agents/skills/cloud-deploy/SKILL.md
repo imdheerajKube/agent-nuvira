@@ -181,4 +181,3 @@ ab -n 100 -c 10 https://myapp.example.com/
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('cloud-deploy', 'references/aws-services.md')`.

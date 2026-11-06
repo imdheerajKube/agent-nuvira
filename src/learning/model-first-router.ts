@@ -30,6 +30,7 @@ export { isPairPlausible };
 // `medium` on one path and `low` on another, which is how a 0.5B and a 120B
 // ended up as "same tier".
 import { capabilityClassOf, estimateModelCapability } from './model-capability.js';
+import { endpointHeadroom, nextCallDemandTokens } from './endpoint-headroom.js';
 import { isNonChatModel } from '../inference/model-catalog.js';
 import { logger } from '../utils/logger.js';
 import type { ConfigManager } from '../config/manager.js';
@@ -137,6 +138,34 @@ export function estimateTaskRequirements(
 }
 
 // ─── Model Scoring ──────────────────────────────────────────────────────────
+
+/**
+ * The quota dimension of a candidate's score.
+ *
+ * Two facts, and the lower one wins because they answer the same question —
+ * "may this account serve a call right now?":
+ *   1. the registry RULING (parked / refused / never verified), unchanged from
+ *      before; and
+ *   2. the MEASURED headroom for the next call (`learning/endpoint-headroom.ts`).
+ *
+ * Only a measured shortfall can move (2), so a provider with no configured token
+ * window scores exactly as it did before this existed. `Math.min` is the whole
+ * safety argument: headroom can only LOWER the dimension, never raise a refused
+ * pair or buy a call the registry rejects — and it never touches `capabilityFit`,
+ * because a nearly-empty account says nothing about what the model can do.
+ */
+export function quotaDimensionFor(
+  entry: ModelRegistryEntry | undefined,
+  demandTokens?: number,
+  now: number = Date.now(),
+): number {
+  if (!entry) return 1;
+  let base = 1;
+  if (entry.quotaParkedUntil > now) base = 0; // exhausted
+  else if (entry.status === 'unavailable') base = 0.1; // known bad
+  else if (entry.status === 'unverified') base = 0.6; // not verified yet
+  return Math.min(base, endpointHeadroom(entry, demandTokens, now).score);
+}
 
 /**
  * Score a single model on a specific provider against task requirements.
@@ -262,17 +291,12 @@ function scoreModelOnProvider(
     health = (latencyScore * 0.4 + errorScore * 0.6);
   }
 
-  // 4. Quota availability
-  let quotaAvailability = 1.0;
-  if (entry) {
-    if (entry.quotaParkedUntil > Date.now()) {
-      quotaAvailability = 0.0; // Exhausted
-    } else if (entry.status === 'unavailable') {
-      quotaAvailability = 0.1; // Known bad
-    } else if (entry.status === 'unverified') {
-      quotaAvailability = 0.6; // Not verified yet
-    }
-  }
+  // 4. Quota availability — base ruling, capped by MEASURED headroom for the
+  // next call (see `quotaDimensionFor`).
+  const quotaAvailability = quotaDimensionFor(
+    entry,
+    nextCallDemandTokens(entry, requirements.estimatedInputTokens),
+  );
 
   // 5. Provider speed bonus
   const providerSpeed = providerSpeedBonus;
@@ -415,6 +439,18 @@ export function buildModelCandidates(
       if (dims.capabilityFit > 0.8) reasons.push('capability-match');
       if (dims.health > 0.8) reasons.push('healthy');
       if (dims.quotaAvailability >= 1.0) reasons.push('quota-ok');
+      else {
+        // Say "short on quota" only when the LEDGER says so. An unavailable pair
+        // also scores below 1, and calling that a quota shortfall would send the
+        // operator to recharge an account the provider has already refused.
+        const headroom = endpointHeadroom(
+          modelEntry,
+          nextCallDemandTokens(modelEntry, requirements.estimatedInputTokens),
+        );
+        if (headroom.measured && headroom.score < 1 && headroom.calls !== undefined) {
+          reasons.push('quota-short');
+        }
+      }
       if (dims.providerSpeed > 0.8) reasons.push('fast-provider');
       if (dims.verification === 1.0) reasons.push('verified');
 
@@ -475,10 +511,41 @@ export function pickBestModelCandidate(
  * pairs + non-chat models excluded) — the report can never disagree with what
  * routing would actually consider.
  */
+/**
+ * What the pool holds, split by what each pair can ACTUALLY do right now.
+ *
+ * WHY THE SPLIT EXISTS. A single "N eligible models" number is the catalog, not
+ * availability: `buildModelCandidates` keeps every listed model, including the
+ * ones nothing has ever tried. Measured on this machine, that one number read
+ * "436 eligible" while **18** pairs were verified — the same shape as the
+ * reported "507 models were eligible" beside a failed run. Counts derived from
+ * this must never be used to claim availability without also saying how many of
+ * them have been proven.
+ *
+ * Baskets are exclusive and checked in this order, because the most specific
+ * fact wins: a PARKED pair is excluded for a different (temporary) reason than a
+ * pair proven to fail, and calling a park "unavailable" removes the "free in
+ * ~4m" advice that is the one useful thing to say about it.
+ */
+export interface EligibleModelCount {
+  /** Every pair routing CONSIDERS (catalog size — NOT availability). */
+  models: number;
+  /** Providers with at least one considered pair. */
+  providers: number;
+  /** Verified, unexhausted, not dead: the pairs routing can call right now. */
+  routable: number;
+  /** Verified or listed, but parked by the quota ledger right now. */
+  parked: number;
+  /** Listed by the provider, never proven (the sweep's backlog). */
+  neverTried: number;
+  /** Proven to fail (auth / model-not-found / no credits / empty responses). */
+  unavailable: number;
+}
+
 export function countEligibleModels(
   allowedProviders?: string[],
   configManager?: ConfigManager,
-): { models: number; providers: number } {
+): EligibleModelCount {
   try {
     // A neutral, class-agnostic description: we want the SIZE of the pool, not
     // a ranking. Complexity only shifts score weights, never eligibility.
@@ -490,10 +557,29 @@ export function countEligibleModels(
     // has no key for.
     const candidates = buildModelCandidates('general task', 'moderate' as ComplexityLevel, configManager, allowedProviders);
     const providers = new Set<string>();
-    for (const c of candidates) providers.add(c.provider);
-    return { models: candidates.length, providers: providers.size };
+    let routable = 0;
+    let parked = 0;
+    let neverTried = 0;
+    let unavailable = 0;
+    const now = Date.now();
+    for (const c of candidates) {
+      providers.add(c.provider);
+      const entry = c.entry;
+      if (entry && entry.quotaParkedUntil > now) parked++;
+      else if (entry?.status === 'verified') routable++;
+      else if (!entry || entry.status === 'unverified') neverTried++;
+      else unavailable++;
+    }
+    return {
+      models: candidates.length,
+      providers: providers.size,
+      routable,
+      parked,
+      neverTried,
+      unavailable,
+    };
   } catch {
-    return { models: 0, providers: 0 };
+    return { models: 0, providers: 0, routable: 0, parked: 0, neverTried: 0, unavailable: 0 };
   }
 }
 
@@ -521,10 +607,11 @@ export function buildFailoverChain(
 ): ModelCandidate[] {
   const chain: ModelCandidate[] = [];
 
-  // Phase 1: Same model on different providers
-  const sameModel = allCandidates.filter(
+  // Phase 1: Same model on different providers — the twin with the most
+  // measured headroom first (same model, so no capability is traded).
+  const sameModel = headroomFirst(allCandidates.filter(
     c => c.model === bestCandidate.model && c.provider !== bestCandidate.provider
-  );
+  ));
   chain.push(...sameModel);
 
   // Phase 2: Different models (best first)
@@ -586,6 +673,33 @@ function strongestFirstInTier(candidates: readonly ModelCandidate[]): ModelCandi
 }
 
 /**
+ * Order a model's SIBLING endpoints (same model, another provider) by measured
+ * quota headroom.
+ *
+ * WHY ONLY SIBLINGS. Every candidate here is the SAME model, so capability is
+ * identical by construction and the only difference is which account serves it.
+ * Reordering therefore cannot trade capability for anything — it only stops the
+ * walk spending its first call on the free twin whose window is about to run
+ * dry (200 tokens left versus 2M on the paid twin), which is the case this
+ * module exists for. Nothing is filtered: a twin with no headroom stays in the
+ * chain, just after the one that can carry the call.
+ *
+ * Stable on ties, so the scorer's own order still decides when both twins are
+ * equally short — or when no window is measured at all (the common case).
+ */
+function headroomFirst(candidates: readonly ModelCandidate[]): ModelCandidate[] {
+  if (candidates.length < 2) return [...candidates];
+  return candidates
+    .map((candidate, index) => ({
+      candidate,
+      index,
+      score: endpointHeadroom(candidate.entry).score,
+    }))
+    .sort((a, b) => b.score - a.score || a.index - b.index)
+    .map((x) => x.candidate);
+}
+
+/**
  * Check if a model candidate has available quota (not parked, not blocked).
  */
 export function isCandidateAvailable(candidate: ModelCandidate): boolean {
@@ -629,13 +743,15 @@ export function buildTieredFailoverChain(
 
   const tiers: FailoverTier[] = [];
 
-  // Phase 1: Same model on different providers (fastest transition)
-  const sameModelDifferentProvider = allCandidates.filter(
+  // Phase 1: Same model on different providers (fastest transition). Ordered
+  // by measured headroom: identical capability, so the only question is which
+  // account can actually serve the call.
+  const sameModelDifferentProvider = headroomFirst(allCandidates.filter(
     c => c.model === bestCandidate.model
       && c.provider !== bestCandidate.provider
       && !tried.has(`${c.provider}:${c.model}`)
       && isCandidateAvailable(c)
-  );
+  ));
   if (sameModelDifferentProvider.length > 0) {
     tiers.push({
       phase: 'same-model',

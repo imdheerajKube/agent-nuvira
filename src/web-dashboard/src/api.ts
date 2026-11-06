@@ -44,6 +44,8 @@ import type {
   SkillEnvVarRow,
   ProcessEnvVarRow,
   ContinuityData,
+  ResumableRun,
+  ResumeStartResult,
   HistoryData,
   HooksData,
   HookDeclaration,
@@ -1317,6 +1319,114 @@ export class DashboardAPI {
   }
 
   /**
+   * P4 — the routing preview: exactly what the model sees this turn, built by
+   * the same builder the chat loop uses. This is the answer to "the skill is
+   * installed, why didn't it get used?".
+   */
+  async skillsIndexPreview(): Promise<{
+    mode: string;
+    skills: number;
+    chars: number;
+    withTrigger: number;
+    nameOnly: number;
+    index: string;
+    active: string;
+  } | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/index-preview`, {
+        headers: authHeaders(),
+        signal: AbortSignal.timeout(15e3),
+      });
+      const d = (await res.json()) as {
+        ok?: boolean;
+        mode?: string;
+        skills?: number;
+        chars?: number;
+        withTrigger?: number;
+        nameOnly?: number;
+        index?: string;
+        active?: string;
+      };
+      if (!d.ok || typeof d.index !== 'string') return null;
+      return {
+        mode: String(d.mode ?? 'index'),
+        skills: Number(d.skills ?? 0),
+        chars: Number(d.chars ?? 0),
+        withTrigger: Number(d.withTrigger ?? 0),
+        nameOnly: Number(d.nameOnly ?? 0),
+        index: d.index,
+        active: String(d.active ?? ''),
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * P4 — update installed skills (all of them, or one by name). Package installs
+   * compare WHOLE-TREE hashes, so a regenerated script counts as an update even
+   * when the declared version did not move.
+   */
+  async skillsUpdate(name?: string): Promise<{
+    ok: boolean;
+    error?: string;
+    updated: string[];
+    current: string[];
+    failed: string[];
+    alreadyCurrent?: boolean;
+  }> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/skills/update`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify(name ? { name } : {}),
+        signal: AbortSignal.timeout(60e3),
+      });
+      const d = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        updated?: string[];
+        current?: string[];
+        failed?: string[];
+        alreadyCurrent?: boolean;
+        name?: string;
+      };
+      if (res.status === 200 && d.ok) {
+        if (name) {
+          // Single-skill: the server reports one outcome, not a batch.
+          return {
+            ok: true,
+            updated: d.alreadyCurrent ? [] : [name],
+            current: d.alreadyCurrent ? [name] : [],
+            failed: [],
+          };
+        }
+        return {
+          ok: true,
+          updated: Array.isArray(d.updated) ? d.updated : [],
+          current: Array.isArray(d.current) ? d.current : [],
+          failed: Array.isArray(d.failed) ? d.failed : [],
+        };
+      }
+      return {
+        ok: false,
+        error: d.error || 'Update failed.',
+        updated: [],
+        current: [],
+        failed: [],
+      };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : String(err),
+        updated: [],
+        current: [],
+        failed: [],
+      };
+    }
+  }
+
+  /**
    * I11: send a test message through the gateway (authed — routing.operate).
    * Mirrors `nuvira gateway send <target> <text>`; the server resolves the
    * target (alias or platform:channelId) and sends through the SAME
@@ -1949,6 +2059,13 @@ export class DashboardAPI {
       strict?: boolean;
       projectPath?: string;
       /**
+       * Skills the user PINNED for this turn (the composer's `/skill <name>`).
+       * Sent as names only; the server resolves them against the installed
+       * skills and the engine loads each methodology into the turn. Omitted when
+       * the user pinned nothing — an absent list changes nothing.
+       */
+      skills?: string[];
+      /**
        * P8 + P2 — composer attachments. `encoding: 'base64'` means `content` is the
        * file's BYTES and the server extracts them with `read_extract`; 'text' (or
        * absent) means the content is the text to inject inline.
@@ -2074,6 +2191,7 @@ export class DashboardAPI {
           ...(opts?.worktree === undefined ? {} : { worktree: opts.worktree }),
           ...(opts?.keepWorktree === undefined ? {} : { keepWorktree: opts.keepWorktree }),
           ...(opts?.resume === undefined ? {} : { resume: opts.resume }),
+          ...(opts?.skills && opts.skills.length > 0 ? { skills: opts.skills } : {}),
         }),
         // P4 — the Cancel button aborts the POST; the 5-minute ceiling still
         // applies alongside the caller's signal.
@@ -2627,6 +2745,48 @@ export class DashboardAPI {
       };
     } catch {
       return null;
+    }
+  }
+
+  /**
+   * Every unfinished (OPEN) turn. Null when the server predates the endpoint, so
+   * the Chat page's Resume panel can stay quiet instead of showing an error.
+   */
+  async fetchResumableRuns(): Promise<ResumableRun[] | null> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/resume`, { headers: { ...authHeaders() } });
+      const data = (await parseJsonOrNull(res)) as ({ ok?: boolean; runs?: ResumableRun[] } | null);
+      if (!data || data.ok !== true || !Array.isArray(data.runs)) return null;
+      return data.runs.filter(
+        (r) => !!r && typeof r.id === 'string' && typeof r.goal === 'string',
+      );
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Start a continuation in a detached process. `id` continues exactly that
+   * turn; `all` continues every open turn until each session closes; the
+   * deadline bounds the run. Always detached — a surface must not hold a request
+   * open for hours of work.
+   */
+  async startResume(input: {
+    id?: string;
+    all?: boolean;
+    cwd?: string;
+    deadlineMinutes?: number;
+  }): Promise<ResumeStartResult> {
+    try {
+      const res = await fetch(`${this.baseUrl}/api/resume/run`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeaders() },
+        body: JSON.stringify({ ...input, untilDone: true, detach: true }),
+      });
+      const data = (await res.json()) as ResumeStartResult;
+      return { ok: data.ok === true, pid: data.pid, log: data.log, error: data.error };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
   }
 

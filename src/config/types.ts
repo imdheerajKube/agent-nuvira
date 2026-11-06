@@ -676,6 +676,21 @@ export interface TurnConfig {
    * restores step-only budgeting exactly.
    */
   maxMinutes?: number;
+  /**
+   * Steps a turn gets BEFORE it earns extensions (default 16).
+   *
+   * With the requirement-driven budget in force this is the first slice, not a
+   * ceiling: more steps are granted while a requirement row is unmet, a plan step
+   * is open, or an artifact the ask named is still missing. Pinning a number here
+   * is how an operator sizes a genuinely long build without editing code.
+   */
+  maxSteps?: number;
+  /**
+   * Absolute step guard for one turn (default 1000) — an escape hatch, never a
+   * budget. The requirement-driven budget is what normally ends a turn; this is
+   * the only bound that can stop a turn which keeps claiming progress forever.
+   */
+  maxTotalSteps?: number;
 }
 
 /**
@@ -689,6 +704,15 @@ export interface TurnConfig {
 export interface SkillsConfig {
   /** Skill names excluded from runtime matching (absent = all enabled). */
   disabled?: string[];
+  /**
+   * Skill names ALLOWED for this project — an allowlist, not a preference: when
+   * non-empty, every skill it does not name is excluded here. Read from the
+   * PROJECT config (`.nuviraconfig.json` / `buffconfig.json` /
+   * `.nuvira/config.json`) by `readSkillPolicy` (hub-skill-catalog.ts), so one
+   * repo can say "we use api-design" without changing the machine-wide
+   * `disabled[]` every other project reads. Absent/empty = no allowlist.
+   */
+  enabled?: string[];
   /**
    * Ordered registry sources. Each entry is either a URL base
    * (github-raw / browse-sh) or a local dir (auto-detected). Order = priority:

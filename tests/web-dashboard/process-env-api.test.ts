@@ -45,6 +45,7 @@ const ENV_TO_CLEAR = [
   'NUVIRA_RESUME',
   'NUVIRA_SESSION_STORE',
   'NUVIRA_SESSION_RECALL',
+  'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
   'NUVIRA_STRICT_MODEL',
   'NUVIRA_DEBUG_LOG',
   'NUVIRA_OTEL',
@@ -72,6 +73,7 @@ const CURATED = [
   'NUVIRA_ATTACHMENT_MAX_BYTES',
   'NUVIRA_CAPABILITY_MODE',
   'NUVIRA_WORK_DIGEST',
+  'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
   'NUVIRA_STRICT_MODEL',
   'NUVIRA_DEBUG_LOG',
   'NUVIRA_OTEL',
@@ -342,5 +344,40 @@ describe('/api/process-env — the file is not the whole truth', () => {
     const off = await rowOf('NUVIRA_OTEL');
     expect(off.state).toBe('off');
     expect(off.warning).toBeUndefined();
+  });
+});
+
+/**
+ * The switch this page must not lie about.
+ *
+ * `NUVIRA_ENFORCE_SKILL_OBLIGATIONS` is the one setting here that can REFUSE an
+ * ending mid-turn, and it is off by default until it has been measured on a task
+ * where a skill actually loads. A config page that shows "on" while the reader
+ * disagrees is the failure mode this whole allowlist exists to prevent, so the
+ * assertion is against the reader itself, not against the file.
+ */
+describe('/api/process-env — the skill-obligation gate stays off unless asked for', () => {
+  it('writes the canonical `1` and the RUNNING reader sees enforcement on; `0` turns it off', async () => {
+    const { obligationsEnforced } = await import('../../src/learning/skill-obligations.js');
+    delete process.env.NUVIRA_ENFORCE_SKILL_OBLIGATIONS;
+    expect(obligationsEnforced(), 'the gate is off by default').toBe(false);
+
+    const on = await authedFetch('/api/process-env', 'POST', {
+      name: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
+      value: 'true',
+    });
+    expect(on.status).toBe(200);
+    const body = (await on.json()) as { ok: boolean; saved: { value: string }; row: Row };
+    expect(body.saved.value).toBe('1');
+    expect(body.row.state).toBe('on');
+    expect(envFileText()).toContain('NUVIRA_ENFORCE_SKILL_OBLIGATIONS=1');
+    expect(obligationsEnforced(), 'the reader must agree with the page').toBe(true);
+
+    const off = await authedFetch('/api/process-env', 'POST', {
+      name: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
+      value: '0',
+    });
+    expect(off.status).toBe(200);
+    expect(obligationsEnforced()).toBe(false);
   });
 });

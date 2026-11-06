@@ -25,9 +25,13 @@
 
    STATE IS ON <html>, not <body>:  html[data-palette][data-mode]
      data-palette = enterprise | neutral | pastel | executive | contrast | premium | premium-amoled
-     data-mode    = light | dark
+     data-mode    = light | dark     (a `system` choice is RESOLVED before it lands
+                                      here, so this attribute is always one of two)
      data-a11y    = off | on
      data-font-scale = 100 | 112 | 125 | 150
+     data-glass   = off | on       frosted surfaces over a blurred backdrop
+     data-compact = off | on       tighter spacing, smaller targets
+     data-motion  = on | off       the designed animations; a11y forces `off`
 
    CONTRAST: every pairing below is asserted against WCAG 2.2 AA by
    `theme-contrast.test.ts`. Do not hand-edit a colour without running it.
@@ -52,6 +56,13 @@
   --radius-sm: 3px;
   --radius-md: 5px;
   --radius-lg: 8px;
+  /* Two values were used dozens of times as literals — 10px on every card-like
+     surface and 6px on inputs, chips and small controls — while the scale above
+     stopped at 8px. Naming them changes no pixels; it gives the next surface a
+     value to reuse instead of another literal, and it lets compact/glass modes
+     adjust one number if they ever need to. */
+  --radius-card: 10px;
+  --radius-chip: 6px;
   --radius-full: 999px;
 
   /* Type — family, then a scale. Every size in dashboard.css is these values
@@ -995,6 +1006,106 @@ html[data-mode='dark'] {
 }
 
 
+/* ── 3b. OPT-IN LOOK & FEEL — GLASS, COMPACT, MOTION ────────────────────────
+   Three switches in Appearance. Each is another attribute on <html>, for the
+   same reason the palette is: the state must be on the element before first
+   paint, and a stylesheet has to be able to reach it.
+
+   NONE of the three changes what is on screen — only how the same dashboard is
+   drawn — so each is expressed as TOKENS wherever the existing rules already
+   read one. `dashboard.css` then adds a few rules for the things a token cannot
+   express (a backdrop blur, a denser table row), and no component learns that
+   any of this exists.
+   ────────────────────────────────────────────────────────────────────────── */
+
+html[data-glass='on'] {
+  /* Alphas as NUMBERS, converted to percentages where colour-mix needs them.
+     That is not tidiness: theme-contrast.test.ts reads these and composites the
+     real stack (ink over frosted surface over tinted canvas), so the frosted UI
+     is measured rather than assumed.
+
+     The values are deliberately HIGH. The backdrop is a tint of the SAME
+     palette, so a two-thirds-opaque surface can only move it towards a canvas
+     the ink already passes against — which is what keeps frosted text legible
+     instead of relying on the blur to hide a contrast problem. */
+  --glass-surface-alpha: 0.62;
+  --glass-soft-alpha: 0.55;
+  --glass-chrome-alpha: 0.78;
+  --glass-tint-alpha: 0.12;
+  --glass-blur: blur(12px) saturate(140%);
+  /* The edge of a glass pane: the palette's own ink at low alpha, so it is a
+     highlight on a dark surface and a soft shadow on a light one — without a
+     second literal and without another fourteen theme blocks. */
+  --glass-line: color-mix(in srgb, var(--p-ink) 16%, transparent);
+  --glass-highlight: color-mix(in srgb, var(--p-ink) 7%, transparent);
+
+  /* The tinted backdrop the panes are frosted OVER: three washes from the
+     palette's own accent family, over its canvas. `dashboard.css` places them.
+     Kept as tokens so no literal colour enters the themed layer. */
+  --glass-wash-1: color-mix(in srgb, var(--p-accent) calc(var(--glass-tint-alpha) * 100%), transparent);
+  --glass-wash-2: color-mix(in srgb, var(--p-cyan) calc(var(--glass-tint-alpha) * 100%), transparent);
+  --glass-wash-3: color-mix(in srgb, var(--p-purple) calc(var(--glass-tint-alpha) * 100%), transparent);
+
+  /* Every surface a component already paints from a semantic token, so all
+     forty-odd card rules become frosted without being edited. Inputs keep more
+     of their own surface: a field you are typing into should not swim. */
+  --bg-card: color-mix(in srgb, var(--p-surface) calc(var(--glass-surface-alpha) * 100%), transparent);
+  --bg-tertiary: color-mix(in srgb, var(--p-raised) calc(var(--glass-surface-alpha) * 100%), transparent);
+  --surface-raised: color-mix(in srgb, var(--p-raised) calc(var(--glass-surface-alpha) * 100%), transparent);
+  --bg-secondary: color-mix(in srgb, var(--p-sunken) calc(var(--glass-soft-alpha) * 100%), transparent);
+  --surface-sunken: color-mix(in srgb, var(--p-sunken) calc(var(--glass-soft-alpha) * 100%), transparent);
+  --bg-input: color-mix(in srgb, var(--p-input) 88%, transparent);
+  --chrome-bg: color-mix(in srgb, var(--p-chrome) calc(var(--glass-chrome-alpha) * 100%), transparent);
+  --sidebar-bg: color-mix(in srgb, var(--p-sidebar) calc(var(--glass-chrome-alpha) * 100%), transparent);
+}
+
+/* Compact — a tighter SPACING scale, not smaller type. The type scale and
+   --font-scale are untouched, so text stays the size the user chose; what
+   shrinks is the room around it. 28px is still above the 24px CSS-pixel floor
+   WCAG 2.2 2.5.8 asks of a target.
+
+   ORDER MATTERS: this block sits BEFORE the accessibility block, so a user with
+   both on keeps the 44px targets that accessibility mode promises. The font
+   scale's own --nav-width rules come later still and therefore win at 125/150%,
+   where a narrower rail would wrap every label. */
+html[data-compact='on'] {
+  --space-1: 3px;
+  --space-2: 6px;
+  --space-3: 9px;
+  --space-4: 12px;
+  --space-5: 14px;
+  --space-6: 17px;
+  --space-8: 22px;
+  --space-10: 28px;
+  --target-min: 28px;
+  --topbar-height: 50px;
+  --nav-width: 232px;
+}
+
+/* Motion off. `--transition` is the funnel ~20 rules already use, so the token
+   covers every hover state; the element rule covers what a token cannot reach —
+   the nine keyframed animations (spinners, pulsing dots, the stream cursor),
+   which would otherwise keep moving while the switch says otherwise.
+
+   1ms rather than `none` on purpose: the animation still RUNS once and lands on
+   its finished state, instead of freezing a spinner mid-rotation or leaving a
+   fade-in element at opacity 0 because a fill-mode was never set. */
+html[data-motion='off'] {
+  --transition: none;
+  --motion-fast: 0ms;
+  --motion-base: 0ms;
+}
+
+html[data-motion='off'] *,
+html[data-motion='off'] *::before,
+html[data-motion='off'] *::after {
+  animation-duration: 1ms !important;
+  animation-delay: 0ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0ms !important;
+}
+
+
 /* ── 4. OPT-IN ACCESSIBILITY MODE ───────────────────────────────────────────
    OFF by default. The default experience stays the designed one — a user who
    needs none of this should not have their interface thinned out or their
@@ -1010,9 +1121,11 @@ html[data-a11y='on'] {
   --focus-ring-offset: 2px;
   --focus-ring-color: var(--p-focus);
 
-  /* Motion off. Every animated rule in dashboard.css funnels through either
-     --transition or a keyframe, so this is genuinely global. */
-  --transition: none;
+  /* NO MOTION DECLARATION HERE — it lives in `html[data-motion='off']` above.
+     Accessibility mode still removes motion, but it does so by FORCING that
+     switch off in `resolveTheme`, so there is one declaration of "no motion"
+     and the switch in Appearance shows the state the user is actually in rather
+     than a preference that was quietly overruled. */
 
   /* Stronger separation for users who cannot rely on subtle tone differences. */
   --border: var(--p-line-strong);

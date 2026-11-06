@@ -195,6 +195,29 @@ describe('Overview — summary cards', () => {
     await waitFor(() => expect(screen.getByText('Completed today')).toBeTruthy());
     expect(screen.queryByText('Gateway Status')).toBeNull();
   });
+
+  it('plots the EVIDENCE-BACKED per-provider figure, and titles the chart as what it plots', async () => {
+    // The "Billed" tile above the chart is the classified figure. Plotting
+    // `byProvider` (the ledger as recorded) beside it put two different numbers on
+    // one page — the chart one including retired-table prices and test-origin rows
+    // the classification excludes.
+    mockReads();
+    renderPage({
+      ...DATA,
+      cost: { ...DATA.cost, byProviderBilled: { groq: 2.5 } },
+    } as DashboardData);
+    await screen.findByText('Task Summary');
+
+    expect(screen.getByText(/Cost by Provider \(billed, evidence-backed\)/)).toBeTruthy();
+  });
+
+  it('says so when the server predates the split, instead of passing the recorded total off as billed', async () => {
+    mockReads();
+    renderPage(); // DATA carries only `byProvider`
+    await screen.findByText('Task Summary');
+
+    expect(screen.getByText(/Cost by Provider \(recorded, not evidence-filtered\)/)).toBeTruthy();
+  });
 });
 
 describe('Overview — Quick Actions', () => {

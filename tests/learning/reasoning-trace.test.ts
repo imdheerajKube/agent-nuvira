@@ -27,6 +27,7 @@ const {
   recordTurnReport,
   traceOutcomeSucceeded,
   degradedCallsFromTraces,
+  routingFidelityFromTraces,
   MAX_TRACES,
 } = await import('../../src/learning/reasoning-trace.js');
 
@@ -642,5 +643,67 @@ describe('reasoning-trace — recorded turn report (E-trace)', () => {
     const id = beginTrace({ goal: 'g', source: 'chat' });
     recordTurnReport(undefined, report);
     expect(getTrace(id)!.turnReport).toEqual(report);
+  });
+});
+
+describe('routingFidelityFromTraces — did the PICK survive to the wire?', () => {
+  /**
+   * Two different questions get conflated whenever routing is described:
+   * accuracy ("was that the right model?") and fidelity ("did the decision and
+   * the request agree?"). Only fidelity is arithmetic on the trace — and it is
+   * the one that answers "did the router's choice actually get used?", which is
+   * what a reader of the routing analysis means.
+   */
+  it('counts a step as matched when the served pair IS the decided pair', () => {
+    const f = routingFidelityFromTraces([
+      { id: 't1', steps: [{ provider: 'groq', model: 'openai/gpt-oss-120b', routing: { provider: 'groq', model: 'openai/gpt-oss-120b' } }] },
+    ]);
+    expect(f).toMatchObject({ decided: 1, matched: 1, substituted: 0, repairedInPlace: 0, substitutions: [] });
+    expect(f.fidelity).toBe(1);
+  });
+
+  it('counts a substitution — including one flagged by substitutedFor', () => {
+    const f = routingFidelityFromTraces([
+      {
+        id: 't2',
+        steps: [
+          // Different pair on the wire.
+          { provider: 'local', model: 'tiny', routing: { provider: 'gemini', model: 'gemini-3.1-flash-lite' } },
+          // Same pair, but the walk says it replaced an earlier decision.
+          { provider: 'groq', model: 'a', routing: { provider: 'groq', model: 'a', substitutedFor: 'gemini/gemini-3.1-flash-lite' } },
+        ],
+      },
+    ]);
+    expect(f.decided).toBe(2);
+    // A flagged repair that LANDED on the decided pair is not a pair change: the
+    // wire still agrees, so it counts as matched and is reported separately.
+    expect(f.matched).toBe(1);
+    expect(f.repairedInPlace).toBe(1);
+    expect(f.substituted).toBe(1);
+    expect(f.fidelity).toBe(0.5);
+    expect(f.substitutions).toEqual([
+      { decided: 'gemini/gemini-3.1-flash-lite', served: 'local/tiny', steps: 1 },
+    ]);
+  });
+
+  it('ignores steps with no router decision (pinned/manual calls) and provider-level rows', () => {
+    const f = routingFidelityFromTraces([
+      {
+        id: 't3',
+        steps: [
+          { provider: 'groq', model: 'pinned' }, // user pin — no decision to measure
+          { provider: 'groq', model: 'x', routing: { provider: 'gemini' } }, // provider-level only
+          { provider: 'groq', model: 'y', routing: { provider: 'groq', model: 'y' } },
+        ],
+      },
+    ]);
+    expect(f.decided).toBe(1);
+    expect(f.matched).toBe(1);
+  });
+
+  it('reports no fidelity (rather than 0) when nothing was auto-routed', () => {
+    const f = routingFidelityFromTraces([{ id: 't4', steps: [{ provider: 'groq', model: 'pinned' }] }]);
+    expect(f.decided).toBe(0);
+    expect(f.fidelity).toBeUndefined();
   });
 });

@@ -31,6 +31,7 @@ import type {
   ToolCapabilityDeclaration,
 } from '../learning/capability-types.js';
 import { machineFactsCapability } from '../learning/machine-facts.js';
+import { triggerLine } from '../learning/skill-index.js';
 
 type ToolLike = {
   name: string;
@@ -212,7 +213,12 @@ export function capabilityFromSkill(skill: { id?: string; name: string; descript
     kind: 'skill',
     ref: id,
     name: skill.name,
-    oneLiner: String(skill.description ?? '').split(/(?<=\.)\s/)[0]?.trim() || `The ${skill.name} skill.`,
+    // P2 — the trigger clause, not the first sentence. A description is written
+    // for a marketplace card ("Build a component library…"); the trigger is what
+    // says WHEN to reach for it ("Use when…"). Keeping only the first sentence
+    // dropped the trigger for every skill that leads with a summary — including
+    // `design-system`, whose own search hit then failed to mention design systems.
+    oneLiner: triggerLine(String(skill.description ?? ''), 160) || `The ${skill.name} skill.`,
     // A skill is METHODOLOGY: loading it changes nothing until its steps run, and
     // those steps carry their own effect classes. So the envelope is local-state,
     // and NO grant category is claimed — loading a skill is not gated, so there is

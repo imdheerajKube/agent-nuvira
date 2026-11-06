@@ -37,6 +37,7 @@ import { formatCount } from '../utils/format.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
+import type { SpendBreakdown } from '../utils/spend.js';
 import { getQuotaLedger } from './quota-ledger.js';
 import { getModelRegistry } from './model-registry.js';
 import { telemetryOrigin } from './model-registry.js';
@@ -52,6 +53,7 @@ import {
   getPricingContext,
   setPricingContext,
   resetPricingContextCache,
+  spendFromTotals,
   type CostTotals,
   type PricingContext,
 } from './cost-classification.js';
@@ -711,17 +713,47 @@ export function costSince(since: number): { costUsd: number; tokens: number; req
 }
 
 /**
+ * The spend SHAPE lives in `utils/spend.ts` (a pure module, so the dashboard can
+ * import the same rules), and is re-exported here because the ledger is where a
+ * caller expects to find it: `costSinceSplit(...).spend` is one of these.
+ */
+export type { SpendBreakdown } from '../utils/spend.js';
+export { addSpend, zeroSpend } from '../utils/spend.js';
+
+/**
  * The full, provenance-carrying view of a window — for callers that must not
  * conflate an estimate with a bill. `attributed` is what `costSince` returns.
+ *
+ * Every bucket is named with its call count as well as its dollars, because a
+ * display surface needs to say which is which: a turn that hit a local model and an
+ * undeclared paid provider is not described by any single total. `unverifiedProviders`
+ * names the providers whose tier is undeclared, so the remedy is one command rather
+ * than a hunt. (`billedUsd` is still exact + list-priced-on-a-declared-tier only —
+ * nothing here changes what counts as spend.)
  */
 export function costSinceSplit(since: number): {
   attributed: { costUsd: number; tokens: number; requests: number };
   billedUsd: number;
+  /** The exact, provider-stated part of `billedUsd`. */
+  billedReportedUsd: number;
+  billedReportedCalls: number;
+  /** The list-priced part of `billedUsd` — an estimate of money owed. */
+  billedListedUsd: number;
+  billedListedCalls: number;
   unverifiedListedUsd: number;
+  unverifiedCalls: number;
+  unverifiedProviders: string[];
   notBilledValueUsd: number;
+  freeCalls: number;
   unpricedCalls: number;
+  /** The whole window as ONE display-ready object (see {@link SpendBreakdown}). */
+  spend: SpendBreakdown;
 } {
   const totals = classifyEntries(readCosts().entries.filter((e) => e.timestamp >= since));
+  // ONE mapping to the display object (`cost-classification.spendFromTotals`), so
+  // this window and the dashboard's per-call rows cannot describe the same ledger
+  // differently.
+  const spend = spendFromTotals(totals);
   return {
     // The window's BILLED figure, and nothing else — so the invariant a reader
     // relies on holds: the window equals the sum of its rows' `costUsd`. A row
@@ -734,9 +766,17 @@ export function costSinceSplit(since: number): {
       requests: totals.requests,
     },
     billedUsd: totals.billedUsd,
+    billedReportedUsd: totals.billedReportedUsd,
+    billedReportedCalls: totals.billedReportedCalls,
+    billedListedUsd: totals.billedListedUsd,
+    billedListedCalls: totals.billedListedCalls,
     unverifiedListedUsd: totals.unverifiedListedUsd,
+    unverifiedCalls: totals.unverifiedListedCalls,
+    unverifiedProviders: spend.unverifiedProviders,
     notBilledValueUsd: totals.notBilledValueUsd,
+    freeCalls: totals.notBilledValueCalls,
     unpricedCalls: totals.unpricedCalls,
+    spend,
   };
 }
 

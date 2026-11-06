@@ -1454,6 +1454,18 @@ export interface ModelBreadthReport {
   poolSize?: number;
   /** Providers with at least one eligible model. */
   poolProviders?: number;
+  /**
+   * Of `poolSize`, how many are VERIFIED and callable right now.
+   *
+   * WHY THE POOL NEEDS A SPLIT. `poolSize` is what the router CONSIDERS, which
+   * includes every listed-but-never-tried model — on this machine 436 against
+   * 18 verified. A report that says "436 were eligible" and "waiting is not the
+   * fix" off that number is describing a catalog, not availability. The
+   * routing-gap sentence is therefore decided on THIS count when it is known.
+   */
+  poolRoutable?: number;
+  /** Of `poolSize`, how many have never been proven (the sweep's backlog). */
+  poolNeverTried?: number;
 }
 
 /**
@@ -1532,6 +1544,8 @@ export function modelBreadthReport(mark: number, configManager?: ConfigManager):
     parked,
     poolSize: pool.models,
     poolProviders: pool.providers,
+    poolRoutable: pool.routable,
+    poolNeverTried: pool.neverTried,
     ...(nextFreeInMs !== undefined ? { nextFreeInMs } : {}),
   };
 }
@@ -1588,6 +1602,16 @@ export function renderModelBreadthReport(
   // rather than asserting a shortage we did not check.
   const poolMeasured = typeof report.poolSize === 'number';
   const emptyPool = poolMeasured && poolSize === 0;
+  // Callable pairs, when the producer measured the split. Falls back to the
+  // whole considered pool so a hand-built report keeps its old meaning.
+  const poolCallable = typeof report.poolRoutable === 'number' ? report.poolRoutable : poolSize;
+  const poolSplitKnown = typeof report.poolRoutable === 'number';
+  const poolBreakdown = poolSplitKnown
+    ? ` (${formatCount(report.poolRoutable!)} verified and callable${typeof report.poolNeverTried === 'number' ? `, ${formatCount(report.poolNeverTried)} never tried` : ''})`
+    : '';
+  // "callable" only when the split was MEASURED — a hand-built report carries
+  // the considered pool, and relabelling that as callable would overstate it.
+  const poolNoun = poolSplitKnown ? 'callable' : 'eligible';
   const nothingTried = tried.length === 0 && skipped.length === 0;
   // Nothing concrete to say → keep the caller's existing (already actionable)
   // error line rather than printing an empty report. A ruled-out pair DOES
@@ -1644,7 +1668,7 @@ export function renderModelBreadthReport(
   if (poolMeasured && !emptyPool) {
     lines.push('');
     lines.push(
-      `Pool at the time: ${formatCount(poolSize)} eligible model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'}.`,
+      `Pool at the time: ${formatCount(poolSize)} eligible model${poolSize === 1 ? '' : 's'} across ${poolProviders} provider${poolProviders === 1 ? '' : 's'}${poolBreakdown}.`,
     );
   }
 
@@ -1654,11 +1678,13 @@ export function renderModelBreadthReport(
   // and verified) sat unused. This only overrides the WAIT framing: when some
   // model was tried and other eligible models remain, the honest next step is an
   // immediate retry that routes to a different model, not "wait".
-  const modelsRemain = poolMeasured && tried.length > 0 && poolSize > tried.length;
+  // Decided on CALLABLE pairs when measured: "N other models remain" must not
+  // be asserted from a catalog count that includes never-tried rows.
+  const modelsRemain = poolMeasured && tried.length > 0 && poolCallable > tried.length;
   const offerLine = ((): string => {
     if (report.nextFreeInMs !== undefined) {
       if (modelsRemain) {
-        return `Note: ${formatCount(poolSize)} model${poolSize === 1 ? '' : 's'} were eligible but only ${tried.length} ${tried.length === 1 ? 'was' : 'were'} tried — so waiting is not the fix. ` +
+        return `Note: ${formatCount(poolCallable)} model${poolCallable === 1 ? '' : 's'} were ${poolNoun} but only ${tried.length} ${tried.length === 1 ? 'was' : 'were'} tried — so waiting is not the fix. ` +
           'Want me to retry now and route to one of the untried models? Reply *yes* and I will run it.';
       }
       // `nextFreeInMs` is computed from ACTIVE exclusions with an expiry, so a

@@ -4,12 +4,13 @@ import {
   MODES,
   PALETTES,
   PALETTE_LABELS,
+  effectiveMode,
   type FontScale,
   type Mode,
 } from '../theme';
 import { resetTheme, setTheme, useTheme } from '../useTheme';
 
-const MODE_LABELS: Record<Mode, string> = { light: 'Light', dark: 'Dark' };
+const MODE_LABELS: Record<Mode, string> = { light: 'Light', dark: 'Dark', system: 'System' };
 const SCALE_LABELS: Record<FontScale, string> = {
   100: '100%',
   112: '112%',
@@ -77,10 +78,20 @@ export default function ThemeSwitcher() {
     (selected ?? panelRef.current?.querySelector<HTMLElement>('input'))?.focus();
   }, [open]);
 
+  // "System" alone would leave a screen-reader user unable to tell which colours
+  // are on screen, so the resolved mode is announced alongside the choice.
+  const modeName =
+    theme.mode === 'system'
+      ? `system (${MODE_LABELS[effectiveMode(theme.mode)].toLowerCase()})`
+      : MODE_LABELS[theme.mode].toLowerCase();
+
   const announcement =
-    `${PALETTE_LABELS[theme.palette]} palette, ${MODE_LABELS[theme.mode].toLowerCase()} mode, ` +
+    `${PALETTE_LABELS[theme.palette]} palette, ${modeName} mode, ` +
     `text size ${SCALE_LABELS[theme.fontScale]}` +
-    (theme.a11y ? ', accessibility mode on' : '');
+    (theme.a11y ? ', accessibility mode on' : '') +
+    (theme.glass ? ', glass mode on' : '') +
+    (theme.compact ? ', compact layout on' : '') +
+    (theme.motion ? '' : ', animation effects off');
 
   return (
     <div
@@ -178,6 +189,59 @@ export default function ThemeSwitcher() {
                 A larger size turns on accessibility mode, which is what defines it.
               </p>
             )}
+          </fieldset>
+
+          {/* THREE SWITCHES, so a real group: a fieldset + legend is what makes
+              a screen reader announce "Effects" before each one, the same reason
+              the radios above are grouped. */}
+          <fieldset className="theme-group">
+            <legend className="theme-group-label">Effects</legend>
+
+            <label className="theme-switch">
+              <input
+                type="checkbox"
+                checked={theme.glass}
+                onChange={(event) => setTheme({ glass: event.target.checked })}
+              />
+              <span className="theme-switch-track" aria-hidden="true" />
+              <span className="theme-option-label">Glass mode</span>
+            </label>
+            <p className="theme-hint">
+              Semi-transparent panels over a blurred background. Off restores the solid
+              surfaces, which cost the least to draw.
+            </p>
+
+            <label className="theme-switch">
+              <input
+                type="checkbox"
+                checked={theme.compact}
+                onChange={(event) => setTheme({ compact: event.target.checked })}
+              />
+              <span className="theme-switch-track" aria-hidden="true" />
+              <span className="theme-option-label">Compact layout</span>
+            </label>
+            <p className="theme-hint">
+              Tighter spacing and smaller controls, so more rows fit on one screen. Text
+              size is unchanged.
+            </p>
+
+            <label className="theme-switch">
+              <input
+                type="checkbox"
+                checked={theme.motion}
+                // Accessibility mode already removes motion, so the switch is shown
+                // off and inert rather than offered and then ignored.
+                disabled={theme.a11y}
+                onChange={(event) => setTheme({ motion: event.target.checked })}
+              />
+              <span className="theme-switch-track" aria-hidden="true" />
+              <span className="theme-option-label">Animation effects</span>
+            </label>
+            <p className="theme-hint">
+              {theme.a11y
+                ? 'Accessibility mode keeps motion off, which is part of what it promises.'
+                : 'Hover transitions, fades and loading animations. Off makes every state change instant.'}
+            </p>
           </fieldset>
 
           <div className="theme-group">

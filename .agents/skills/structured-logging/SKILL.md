@@ -169,4 +169,3 @@ LOG_LEVEL=warn node app.js  # Should not see info/debug logs
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('structured-logging', 'references/guide.md')`.

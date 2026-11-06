@@ -202,4 +202,3 @@ gh api repos/{owner}/{repo}/environments
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('github-actions', 'references/ci-cd-patterns.md')`.

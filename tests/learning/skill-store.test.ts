@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { SkillStore, getSkillStore, resetSkillStore } from '../../src/learning/skill-store.js';
 import type { Skill } from '../../src/learning/skill-types.js';
+import { ALL_BUNDLED_SKILLS } from '../../src/skills/bundled-skills.js';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -360,10 +361,12 @@ describe('SkillStore', () => {
       expect(match!.name).toBe('website-deploy');
     });
 
-    it('P5 — seeds all 153 bundled skills (Phase 3 + new skills)', () => {
+    it('P5 — seeds every bundled skill (count is the bundle, not a magic number)', () => {
       const fresh = new SkillStore();
       const names = fresh.getAll().map((s) => s.name).sort();
-      expect(names.length).toBe(153);
+      // Asserting the bundle's own length keeps this honest through a merge:
+      // the previous hard-coded 153 failed the moment two duplicates were merged.
+      expect(names.length).toBe(ALL_BUNDLED_SKILLS.length);
       expect(names).toContain('website-deploy');
       expect(names).toContain('solidity');
       expect(names).toContain('powershell-automation');

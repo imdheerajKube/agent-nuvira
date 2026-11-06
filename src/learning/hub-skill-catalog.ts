@@ -7,9 +7,16 @@
  * result is immediately matchable + injectable — no recompilation needed
  * (skills-hub bridge parity).
  *
- * Sources (both scanned, deduped by name — the project root wins):
+ * Sources (all scanned, deduped by name in PRECEDENCE order — see
+ * `skillRoots()`, first wins):
  *   - `<project>/.agents/skills/<name>/SKILL.md`   (hub install target)
+ *   - `<project>/.claude/skills/<name>/SKILL.md`   (P3 — external, read-only)
  *   - `~/.nuvira/skills/<name>/SKILL.md`             (user-level skills)
+ *   - `~/.claude/skills/<name>/SKILL.md`             (P3 — external, read-only)
+ *
+ * Reading the `.claude` roots is the parity win: a skill already installed for
+ * Claude Code is the same open SKILL.md format, so it works here with no import
+ * step — and nuvira never writes to those directories.
  *
  * Security/gating:
  *   - Skill names are validated with `^[a-z0-9-]+$` before any read (the same
@@ -32,8 +39,14 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 
 import { ConfigManager } from '../config/manager.js';
+import { findProjectConfig } from '../team/config.js';
 import { getSkillStore } from './skill-store.js';
 import { logger } from '../utils/logger.js';
+import {
+  hasObligations,
+  parseObligations,
+  type SkillObligations,
+} from './skill-obligations.js';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -47,8 +60,16 @@ export interface HubCatalogSkill {
   description: string;
   /** The full SKILL.md body (frontmatter stripped) — injected on match. */
   body: string;
-  /** Root the skill was found in: 'project' | 'home'. */
+  /** Scope the skill was found in: 'project' | 'home'. */
   root: 'project' | 'home';
+  /**
+   * P3 — who owns the root: nuvira's own (`.agents/skills`, `~/.nuvira/skills`)
+   * or an EXTERNAL tool's (`.claude/skills`). External skills are read-only
+   * input: nuvira never writes there, and the dashboard badges them.
+   */
+  origin: SkillOrigin;
+  /** Absolute directory of the skill (for read_file on its siblings). */
+  dir: string;
   /** P6c — `platforms:` — skill hidden on incompatible OS (e.g. [macos, linux]). */
   platforms?: string[];
   /** P6c — `requires_toolsets:` — skill visible only when ALL named toolsets exist. */
@@ -59,6 +80,12 @@ export interface HubCatalogSkill {
   config?: Record<string, string>;
   /** P6c — `required_environment_variables:` — env var NAMES (values never read/printed). */
   requiredEnvVars?: string[];
+  /**
+   * P6 — `obligations:` — what "used" means for this skill. A LOADED skill with
+   * obligations is binding: the finish gate refuses an unqualified completion
+   * claim while one is unmet. Absent = advisory (the old behaviour).
+   */
+  obligations?: SkillObligations;
 }
 
 /** The skill-guidance payload handed to the planner (Level 1 on match). */
@@ -73,6 +100,45 @@ export interface HubSkillMatch {
 // ─── Constants ──────────────────────────────────────────────────────────────
 
 const SKILL_NAME_RE = /^[a-z0-9-]+$/;
+
+/** Who owns a skills root. `external` roots are read-only for nuvira. */
+export type SkillOrigin = 'nuvira' | 'external';
+
+/** One skills root in precedence order. */
+export interface SkillRootSpec {
+  /** 'project' (the workspace) or 'home' (the user). */
+  scope: 'project' | 'home';
+  origin: SkillOrigin;
+  /** Absolute directory. */
+  dir: string;
+}
+
+/**
+ * P3 — the read-only roots, in PRECEDENCE order (first wins on a name clash).
+ *
+ *   1. <project>/.agents/skills   nuvira    the install target
+ *   2. <project>/.claude/skills   external  read-only: skills Claude already has
+ *   3. ~/.nuvira/skills           nuvira    user-level
+ *   4. ~/.claude/skills           external  read-only
+ *
+ * The order is deliberate: a project pin beats a user-wide copy, and nuvira's
+ * own root beats an external one at the SAME scope (so a skill the user
+ * installed for nuvira is not silently shadowed by a `.claude` copy). Without a
+ * pinned order, which copy of `design-system` wins would depend on directory
+ * read order — i.e. on nothing.
+ *
+ * Reading `.claude/skills` is what makes "the skills I already installed for
+ * Claude just work": the format is the same open SKILL.md standard, so there is
+ * nothing to import. Nothing is ever WRITTEN to those roots.
+ */
+export function skillRoots(projectRoot = process.cwd(), home = homedir()): SkillRootSpec[] {
+  return [
+    { scope: 'project', origin: 'nuvira', dir: join(projectRoot, '.agents', 'skills') },
+    { scope: 'project', origin: 'external', dir: join(projectRoot, '.claude', 'skills') },
+    { scope: 'home', origin: 'nuvira', dir: join(home, '.nuvira', 'skills') },
+    { scope: 'home', origin: 'external', dir: join(home, '.claude', 'skills') },
+  ];
+}
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -185,7 +251,8 @@ function stripFrontmatter(markdown: string): string {
  * Scan a single root for `<name>/SKILL.md` directories. Never throws — a
  * missing root or a corrupt file simply contributes nothing.
  */
-function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
+function scanRoot(spec: SkillRootSpec): HubCatalogSkill[] {
+  const { dir } = spec;
   try {
     if (!existsSync(dir)) return [];
     const out: HubCatalogSkill[] = [];
@@ -204,7 +271,9 @@ function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
           name: fm.name || entry.name,
           description: fm.description || 'No description in SKILL.md frontmatter.',
           body: stripFrontmatter(markdown),
-          root,
+          root: spec.scope,
+          origin: spec.origin,
+          dir: join(dir, entry.name),
         };
         // P6c — carry the depth fields when declared (undefined = no gate).
         if (fm.platforms && fm.platforms.length > 0) skill.platforms = fm.platforms;
@@ -212,6 +281,10 @@ function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
         if (fm.fallbackForToolsets && fm.fallbackForToolsets.length > 0) skill.fallbackForToolsets = fm.fallbackForToolsets;
         if (fm.config && Object.keys(fm.config).length > 0) skill.config = fm.config;
         if (fm.requiredEnvVars && fm.requiredEnvVars.length > 0) skill.requiredEnvVars = fm.requiredEnvVars;
+        // P6 — obligations (parsed separately: it is a nested map, which the
+        // YAML-lite frontmatter reader above deliberately does not model).
+        const obligations = parseObligations(markdown);
+        if (hasObligations(obligations)) skill.obligations = obligations;
         out.push(skill);
       } catch {
         // A corrupt SKILL.md is skipped — never breaks the catalog.
@@ -229,14 +302,10 @@ function scanRoot(root: 'project' | 'home', dir: string): HubCatalogSkill[] {
  * copy). Never throws.
  */
 export function readHubCatalog(projectRoot = process.cwd(), home = homedir()): HubCatalogSkill[] {
-  const roots = [
-    { root: 'project' as const, dir: join(projectRoot, '.agents', 'skills') },
-    { root: 'home' as const, dir: join(home, '.nuvira', 'skills') },
-  ];
   const seen = new Set<string>();
   const merged: HubCatalogSkill[] = [];
-  for (const { root, dir } of roots) {
-    for (const skill of scanRoot(root, dir)) {
+  for (const spec of skillRoots(projectRoot, home)) {
+    for (const skill of scanRoot(spec)) {
       if (seen.has(skill.id)) continue;
       seen.add(skill.id);
       merged.push(skill);
@@ -246,14 +315,101 @@ export function readHubCatalog(projectRoot = process.cwd(), home = homedir()): H
 }
 
 /** Read the `skills.disabled` exclusion list from buffconfig (never throws). */
-export function readDisabledSkills(cm?: ConfigManager): string[] {
+export function readDisabledSkills(cm?: ConfigManager, cwd = process.cwd()): string[] {
+  return readSkillPolicy(cm, cwd).disabled;
+}
+
+/**
+ * The GLOBAL `skills.disabled[]` only (no project merge).
+ *
+ * The Agent Hub toggle WRITES this list, so it must read the same list: reading
+ * the merged policy would fold a project's own exclusions into the machine-wide
+ * config the next time any toggle was pressed.
+ */
+export function readGlobalDisabledSkills(cm?: ConfigManager): string[] {
   try {
     const cfg = cm?.getAll?.();
     const disabled = cfg?.skills?.disabled;
-    return Array.isArray(disabled) ? disabled.filter((d): d is string => typeof d === 'string') : [];
+    return Array.isArray(disabled)
+      ? disabled.filter((d): d is string => typeof d === 'string').map((d) => d.toLowerCase())
+      : [];
   } catch {
     return [];
   }
+}
+
+/**
+ * The effective skill policy for a directory.
+ *
+ * Global (`skills.disabled[]` in buffconfig) is the operator's machine-wide
+ * decision. A PROJECT can narrow it in its own `.nuviraconfig.json` /
+ * `buffconfig.json` / `.nuvira/config.json`:
+ *
+ *   - `skills.disabled[]` — adds to the global list (a repo that must not use a
+ *     skill the machine allows);
+ *   - `skills.enabled[]`  — an ALLOWLIST: when non-empty, every skill it does
+ *     not name is excluded FOR THIS PROJECT. This is the "project A uses the
+ *     api-design skill, project B must not" case, which previously could only
+ *     be expressed by where the skill was installed — and `disabled[]` is
+ *     machine-wide, so editing it for one repo silently changed the others.
+ *
+ * Project `enabled` wins over global `enabled` (the narrower scope speaks last);
+ * disabled lists UNION, so neither scope can re-enable what the other excluded.
+ * Best-effort: an unreadable/broken config contributes nothing rather than
+ * throwing into a turn.
+ */
+export interface SkillPolicy {
+  disabled: string[];
+  enabled: string[];
+}
+
+export function readSkillPolicy(cm?: ConfigManager, cwd = process.cwd()): SkillPolicy {
+  let disabled: string[] = [];
+  let enabled: string[] = [];
+  try {
+    const cfg = cm?.getAll?.();
+    const list = cfg?.skills?.disabled;
+    if (Array.isArray(list)) {
+      disabled = list.filter((d): d is string => typeof d === 'string').map((d) => d.toLowerCase());
+    }
+    const allow = (cfg?.skills as { enabled?: unknown } | undefined)?.enabled;
+    if (Array.isArray(allow)) {
+      enabled = allow.filter((d): d is string => typeof d === 'string').map((d) => d.toLowerCase());
+    }
+  } catch {
+    /* a broken user config must not gate anything */
+  }
+  try {
+    const project = findProjectConfig(cwd) as { skills?: { disabled?: unknown; enabled?: unknown } } | null;
+    const projectDisabled = project?.skills?.disabled;
+    if (Array.isArray(projectDisabled)) {
+      for (const id of projectDisabled) {
+        if (typeof id !== 'string') continue;
+        const name = id.toLowerCase();
+        if (!disabled.includes(name)) disabled.push(name);
+      }
+    }
+    const projectEnabled = project?.skills?.enabled;
+    if (Array.isArray(projectEnabled)) {
+      enabled = projectEnabled.filter((d): d is string => typeof d === 'string').map((d) => d.toLowerCase());
+    }
+  } catch {
+    /* a broken project config must not gate anything */
+  }
+  return { disabled, enabled };
+}
+
+/**
+ * Is this skill id usable under the policy? Both spellings are checked, because
+ * a compiled skill's store id is `skill-<name>` while its hub id is `<name>` and
+ * an operator (or a repo) writes whichever they saw in the Agent Hub.
+ */
+export function skillPolicyAllows(id: string, policy: SkillPolicy): boolean {
+  const name = id.toLowerCase();
+  const aliases = [name, name.replace(/^skill-/, ''), name.startsWith('skill-') ? name : `skill-${name}`];
+  if (aliases.some((a) => policy.disabled.includes(a))) return false;
+  if (policy.enabled.length === 0) return true;
+  return aliases.some((a) => policy.enabled.includes(a));
 }
 
 /**
@@ -295,8 +451,9 @@ export function setSkillEnabled(
     throw new Error(`Unknown skill '${id}' — run \`nuvira skills list\` to see known skills.`);
   }
   // Whole-list semantics (empty is meaningful): enable removes the id,
-  // disable appends it — other entries are never clobbered.
-  const current = readDisabledSkills(cm);
+  // disable appends it — other entries are never clobbered. GLOBAL list only:
+  // a project's own exclusions are not this command's to rewrite.
+  const current = readGlobalDisabledSkills(cm);
   const next = enabled
     ? current.filter((d) => d !== id)
     : current.includes(id) ? current : [...current, id];
@@ -378,10 +535,10 @@ export function listMatchableHubSkills(
   platform = process.platform,
   presentToolsets?: Set<string>,
 ): HubCatalogSkill[] {
-  const disabled = new Set(readDisabledSkills(cm));
+  const policy = readSkillPolicy(cm, projectRoot);
   const present = presentToolsets ?? enabledToolsetNames(cm);
   return readHubCatalog(projectRoot, home).filter(
-    (s) => !disabled.has(s.id) && platformAllows(s, platform) && toolsetAllows(s, present),
+    (s) => skillPolicyAllows(s.id, policy) && platformAllows(s, platform) && toolsetAllows(s, present),
   );
 }
 

@@ -50,6 +50,21 @@ describe('requiredArtifactsFor', () => {
     expect(ids).toEqual(['todo', 'progress', 'issues', 'changelog', 'readme', 'unit-tests', 'integration-tests', 'e2e-tests']);
   });
 
+  it('does not turn a flow description ("works end to end") into e2e tests', () => {
+    // Measured 2026-11-05: the audit ask's architecture section said "How the app
+    // works end to end: entry point to synthesis", and this detector read it as a
+    // demand for an e2e suite. The turn then built 292 lines of tests instead of
+    // the three report sections it was missing.
+    const assess = [
+      'Assess this repository and write docs/ASSESSMENT.md.',
+      '1. Architecture. How the app works end to end: entry point to synthesis.',
+      '2. Test assessment. What the suite covers well and what it does not.',
+    ].join('\n');
+    expect(requiredArtifactsFor(assess).map((r) => r.id)).not.toContain('e2e-tests');
+    // The explicit form is still a requirement.
+    expect(requiredArtifactsFor('Build it, and add end-to-end tests.').map((r) => r.id)).toContain('e2e-tests');
+  });
+
   it('ignores an ask that only mentions an artifact it does not ask to create', () => {
     // A review/explain ask names the README but must not be handed a todo list.
     expect(requiredArtifactsFor('Explain the README to me.')).toEqual([]);

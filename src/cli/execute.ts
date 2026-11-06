@@ -66,7 +66,7 @@ import {
   measureUnattendedProgress,
   scheduleFromPendingWork,
 } from '../learning/unattended-progress.js';
-import { costSince } from '../learning/cost-tracker.js';
+import { costSinceSplit } from '../learning/cost-tracker.js';
 
 /**
  * Enterprise G11 — how many continuation batches one CLI run may execute.
@@ -99,6 +99,13 @@ type OrchestrationResult = NonNullable<PipelineToolResult['result']>;
 interface ExecuteOptions {
   provider?: string;
   model?: string;
+  /**
+   * Skills the user PINNED for this run (`--skill`, repeatable). Their
+   * methodology is placed in the prompt of whichever engine runs — the loop
+   * arm directly, the pipeline arm via the planner's skill guidance — so the
+   * flag means the same thing on both. Absent = nothing pinned.
+   */
+  skill?: string[];
   plannerModel?: string;
   gathererModel?: string;
   writerModel?: string;
@@ -416,6 +423,10 @@ export class ExecuteCommand extends BaseCommand {
       // which is how a surface with no command line asks for it.
       .option('--worktree', 'Run the goal in its own git worktree of the project and report the diff against the base commit. Refuses rather than running unisolated when the directory cannot be isolated (also asked for by NUVIRA_ISOLATE=1)')
       .option('--keep-worktree', 'Keep the isolated worktree after the run instead of removing it')
+      .option(
+        '--skill <name...>',
+        'Pin a skill for this run — its methodology is placed in the prompt (repeatable: --skill api-design --skill api-testing)',
+      )
       .option('--checkpoint-list', 'List saved checkpoints and exit', false)
       .option('--json-events', 'Emit machine-readable NDJSON pipeline events on stdout (no human board)', false)
       .addHelpText(
@@ -457,6 +468,7 @@ export class ExecuteCommand extends BaseCommand {
         jsonEvents?: boolean;
         engine?: string;
         planMode?: string;
+        skill?: string[];
       }) => {
         // commander passes raw strings; the union narrowing happens in
         // runSingleGoal's dispatch (an unknown value degrades to 'auto' via
@@ -1967,6 +1979,7 @@ export class ExecuteCommand extends BaseCommand {
       const result = await runLoopExecutor(goal, this.configManager, {
         provider,
         model,
+        ...(options.skill && options.skill.length > 0 ? { skills: options.skill } : {}),
         ...live.overrides,
         // WS5 (#27) — the command's own flags. `--resume` means the SAME run
         // here as it does on the pipeline arm: the last run of this ask in this
@@ -2232,6 +2245,10 @@ export class ExecuteCommand extends BaseCommand {
         repairMode: options.repairMode as 'auto' | 'prompt' | 'off' | undefined,
         repairFallbackModels: options.repairFallbackModels?.split(',').map((m: string) => m.trim()).filter(Boolean),
         autoRouteModels: options.autoRoute || undefined,
+        // A pin reaches the pipeline through the planner's skill guidance (see
+        // OrchestratorOptions.pinnedSkills) — same names, same block builder as
+        // the loop arm, so the two engines cannot disagree about what a pin is.
+        ...(options.skill && options.skill.length > 0 ? { pinnedSkills: options.skill } : {}),
         // Resolved explicitly (default true): the orchestrator's own default is
         // tool-calling ON (audit W3), and passing the boolean keeps `--no-tool-calling`
         // authoritative over it from the CLI.
@@ -2325,11 +2342,14 @@ export class ExecuteCommand extends BaseCommand {
                     error: batch.error ?? batch.summary ?? 'batch failed',
                   };
                 }
-                const economy = costSince(startedAt);
+                // The whole breakdown travels with the batch: a batch whose
+                // provider has no declared billing tier contributes 0 to the
+                // evidence-backed bill, and passing only that number made a paid
+                // run display as `$0.00000` per batch.
+                const economy = costSinceSplit(startedAt);
                 const envelope = {
                   durationMs: Date.now() - startedAt,
-                  costUsd: economy.costUsd,
-                  tokens: economy.tokens,
+                  spend: economy.spend,
                 };
                 const measured = measureUnattendedProgress(batchJob);
                 // "The batch ran" is not "the work moved". A failed batch that

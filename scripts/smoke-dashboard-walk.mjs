@@ -27,9 +27,19 @@
  * this dashboard polls its API forever, so Chrome never goes idle and the dump
  * hangs until it is killed.
  *
+ * The same walk also measures the two newest surfaces — the ⌘K palette and chat
+ * focus mode — because both are about things only a real engine can answer:
+ * whether a palette's composited row still clears 4.5:1 in EVERY palette, and
+ * whether the focused shell actually gives its height back to the conversation.
+ * Those are visual-regression checks in measured form (geometry and computed
+ * contrast), not screenshot baselines: pixel goldens across OS font rendering
+ * fail for reasons that have nothing to do with this dashboard, and a failing
+ * baseline teaches people to re-record instead of to look.
+ *
  * Usage:
  *   node scripts/smoke-dashboard-walk.mjs
  *   node scripts/smoke-dashboard-walk.mjs --themes enterprise:light,contrast:dark
+ *   node scripts/smoke-dashboard-walk.mjs --themes all --surfaces-only
  *   node scripts/smoke-dashboard-walk.mjs --width 800
  *   node scripts/smoke-dashboard-walk.mjs --require-chrome   # missing browser = failure
  *
@@ -55,6 +65,9 @@ const THEME_STORAGE_KEY = 'nuvira.dashboard.theme';
 
 /** Palette/mode pairs walked by default — one light, one dark, plus two others. */
 const DEFAULT_THEMES = ['enterprise:light', 'enterprise:dark', 'contrast:dark', 'pastel:light'];
+
+/** Every palette the stylesheet ships. `--themes all` covers all fourteen. */
+const ALL_PALETTES = ['enterprise', 'neutral', 'pastel', 'executive', 'contrast', 'premium', 'premium-amoled'];
 
 /** A walk that finds fewer routes than this is broken, not "all clear". */
 const MIN_ROUTES = 20;
@@ -268,25 +281,184 @@ function pageFacts() {
   };
 }
 
+/**
+ * Read any CSS colour back as an RGBA quad, through a 1x1 canvas.
+ *
+ * getComputedStyle can return "color(srgb ...)" for color-mix(), and parsing
+ * three colour syntaxes by hand is how a colour audit starts disagreeing with the
+ * engine it is auditing. Painting the string and reading the pixel makes the
+ * BROWSER the parser.
+ */
+function rgbaOf(color) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, 1, 1);
+  ctx.fillStyle = color;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  return { r: d[0], g: d[1], b: d[2], a: d[3] / 255 };
+}
+
+/** Paint foreground over background and return the composited RGB. */
+function over(fg, bg) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1;
+  canvas.height = 1;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, 1, 1);
+  ctx.fillStyle = fg;
+  ctx.fillRect(0, 0, 1, 1);
+  const d = ctx.getImageData(0, 0, 1, 1).data;
+  return { r: d[0], g: d[1], b: d[2] };
+}
+
+function luminance(c) {
+  const channel = function (v) {
+    const s = v / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * channel(c.r) + 0.7152 * channel(c.g) + 0.0722 * channel(c.b);
+}
+
+function ratio(a, b) {
+  const hi = Math.max(luminance(a), luminance(b));
+  const lo = Math.min(luminance(a), luminance(b));
+  return Math.round(((hi + 0.05) / (lo + 0.05)) * 100) / 100;
+}
+
+/**
+ * The ⌘K palette, measured in the theme this walk booted into.
+ *
+ * The row background is an accent MIX over the dialog, so its effective colour
+ * depends on both tokens; contrast is therefore computed on the composite, not on
+ * either declared value. That is the check a screenshot baseline cannot make
+ * meaningful across fourteen palettes.
+ */
+async function checkPalette() {
+  const out = { opened: false };
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+  await sleep(300);
+  const dialog = document.querySelector('.palette');
+  if (!dialog) return out;
+
+  out.opened = true;
+  const surface = getComputedStyle(dialog);
+  const bg = surface.backgroundColor;
+  const bgOpaque = rgbaOf(bg);
+  const labelEl = dialog.querySelector('.palette-option-label');
+  const label = labelEl ? getComputedStyle(labelEl).color : null;
+  const activeRow = dialog.querySelector('.palette-option-active');
+  const activeBg = activeRow ? getComputedStyle(activeRow).backgroundColor : null;
+
+  out.bg = bg;
+  out.opaque = bgOpaque.a >= 0.99;
+  out.baseContrast = label ? ratio(over(label, bg), over(bg, 'white')) : null;
+  out.activeContrast = label && activeBg
+    ? ratio(over(label, activeBg), over(activeBg, bg))
+    : null;
+  out.optionCount = dialog.querySelectorAll('.palette-option').length;
+  out.ariaModal = dialog.getAttribute('aria-modal');
+  out.focusInInput = document.activeElement === dialog.querySelector('.palette-input');
+  out.radius = parseFloat(surface.borderRadius) || 0;
+  out.hasShadow = surface.boxShadow !== 'none';
+  out.overflowX = document.documentElement.scrollWidth > document.documentElement.clientWidth;
+
+  // Filter and pick, because a palette that cannot navigate is a styled list.
+  const input = dialog.querySelector('.palette-input');
+  if (input) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
+    setter.call(input, 'gateway');
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    await sleep(160);
+    out.filteredOptions = dialog.querySelectorAll('.palette-option').length;
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    await sleep(400);
+    out.navigatedTo = location.pathname;
+    out.closedAfterPick = !document.querySelector('.palette');
+
+    // Escape must close without moving: dispatched on the input, where a user's
+    // keystroke actually originates (the dialog itself never holds focus).
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true }));
+    await sleep(220);
+    out.reopened = !!document.querySelector('.palette');
+    const reopenedInput = document.querySelector('.palette-input');
+    if (reopenedInput) {
+      reopenedInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      await sleep(180);
+    }
+    out.closedOnEsc = !document.querySelector('.palette');
+    out.pathAfterEsc = location.pathname;
+  }
+
+  return out;
+}
+
+/**
+ * Chat focus mode, measured as geometry: the chrome is gone, the content column
+ * is the viewport, and the documented way out actually works.
+ */
+async function checkChatFocus() {
+  const out = { found: false };
+  const chatLink = [...document.querySelectorAll('.nav-link, .primary-link')]
+    .find(function (a) { return a.getAttribute('href') === '/chat'; });
+  if (!chatLink) return out;
+  chatLink.click();
+  await sleep(600);
+
+  const button = document.querySelector('.chat-focus-btn');
+  if (!button) return out;
+  out.found = true;
+  button.click();
+  await sleep(350);
+
+  const root = document.documentElement;
+  const topbar = document.querySelector('.topbar');
+  const nav = document.querySelector('.nav');
+  const main = document.querySelector('.main');
+  out.attr = root.getAttribute('data-chat-focus');
+  out.topbarDisplay = topbar ? getComputedStyle(topbar).display : null;
+  out.navDisplay = nav ? getComputedStyle(nav).display : null;
+  out.mainHeight = Math.round(main.getBoundingClientRect().height);
+  out.mainWidth = Math.round(main.getBoundingClientRect().width);
+  out.viewportHeight = innerHeight;
+  out.viewportWidth = innerWidth;
+  out.mainPadding = getComputedStyle(main).padding;
+  out.overflowX = root.scrollWidth > root.clientWidth;
+  out.exitLabel = (button.textContent || '').trim();
+
+  button.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await sleep(250);
+  out.attrAfterEsc = root.getAttribute('data-chat-focus');
+  out.topbarAfterEsc = topbar ? getComputedStyle(topbar).display : null;
+  return out;
+}
+
 (async () => {
   await sleep(1800);
 
   // Start wherever the app landed, then visit every destination the rail and the
   // top bar link to — driven by the links themselves, so a page with no link is
-  // a page this walk cannot miss.
+  // a page this walk cannot miss. --surfaces-only skips this (the surface
+  // checks below never depend on a route having been visited), which is what
+  // makes a 14-theme palette/focus sweep cheap enough to run on every change.
   const routes = [...document.querySelectorAll('.nav-link, .primary-link')]
     .map((a) => a.getAttribute('href'))
     .filter((h, i, arr) => h && arr.indexOf(h) === i);
   const results = [];
 
-  for (const route of routes) {
-    const link = [...document.querySelectorAll('.nav-link, .primary-link')]
-      .find((a) => a.getAttribute('href') === route);
-    if (!link) continue;
-    link.click();
-    // Long enough for a failing fetch and its state to settle.
-    await sleep(650);
-    results.push(pageFacts());
+  if (!__SURFACES_ONLY__) {
+    for (const route of routes) {
+      const link = [...document.querySelectorAll('.nav-link, .primary-link')]
+        .find((a) => a.getAttribute('href') === route);
+      if (!link) continue;
+      link.click();
+      // Long enough for a failing fetch and its state to settle.
+      await sleep(650);
+      results.push(pageFacts());
+    }
   }
 
   // Keyboard layer, on whatever page we finished on.
@@ -319,17 +491,30 @@ function pageFacts() {
   await sleep(400);
   keyboard.navAfterChord = location.pathname;
 
-  beacon('done', { results: results, keyboard: keyboard, viewport: { w: innerWidth, h: innerHeight } });
+  const surfaces = {
+    palette: await checkPalette(),
+    focus: await checkChatFocus(),
+    errors: window.__errs.slice(),
+  };
+
+  beacon('done', {
+    results: results,
+    keyboard: keyboard,
+    surfaces: surfaces,
+    surfacesOnly: __SURFACES_ONLY__,
+    viewport: { w: innerWidth, h: innerHeight },
+  });
 })();
 </script>
 `;
 
 /** Start a static server for `public/`, injecting the harness into index.html. */
-function startServer(theme, mode) {
+function startServer(theme, mode, surfacesOnly = false) {
   const harness = HARNESS
     .replace(/__STORAGE_KEY__/g, THEME_STORAGE_KEY)
     .replace(/__THEME__/g, theme)
-    .replace(/__MODE__/g, mode);
+    .replace(/__MODE__/g, mode)
+    .replace(/__SURFACES_ONLY__/g, surfacesOnly ? 'true' : 'false');
 
   let resolveSummary;
   const summaryPromise = new Promise((r) => {
@@ -369,8 +554,8 @@ function startServer(theme, mode) {
 }
 
 /** Walk one theme. Resolves the parsed page summary, or null on timeout. */
-async function walkTheme({ theme, mode, chromePath, width }) {
-  const { server, summaryPromise } = startServer(theme, mode);
+async function walkTheme({ theme, mode, chromePath, width, surfacesOnly = false }) {
+  const { server, summaryPromise } = startServer(theme, mode, surfacesOnly);
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
 
@@ -427,18 +612,24 @@ async function walkTheme({ theme, mode, chromePath, width }) {
 export function judge(summary, theme, mode) {
   const bad = [];
   const label = `${theme}/${mode}`;
+  // A surfaces-only sweep renders exactly one route; the route-level checks
+  // below would be vacuous there, and "walked 0 routes" is not a failure of the
+  // palette or of focus mode.
+  const surfacesOnly = summary.surfacesOnly === true;
 
-  if (summary.results.length < MIN_ROUTES) {
+  if (!surfacesOnly && summary.results.length < MIN_ROUTES) {
     bad.push(`${label}: only walked ${summary.results.length} routes (expected >= ${MIN_ROUTES})`);
   }
 
   // The theme actually applied. This is the check the old harness lacked.
-  const offTheme = summary.results.filter((r) => r.palette !== theme || r.mode !== mode);
+  const offTheme = surfacesOnly
+    ? []
+    : summary.results.filter((r) => r.palette !== theme || r.mode !== mode);
   for (const r of offTheme.slice(0, 3)) {
     bad.push(`${label}: ${r.path} rendered ${r.palette}/${r.mode}, not ${theme}/${mode}`);
   }
 
-  for (const r of summary.results) {
+  for (const r of surfacesOnly ? [] : summary.results) {
     if (r.errors.length) bad.push(`${r.path}: ${r.errors.length} uncaught error(s) — ${r.errors[0]}`);
     if (r.h1Count !== 1) bad.push(`${r.path}: ${r.h1Count} h1 element(s) inside .main`);
     if (r.firstHeadingLevel !== 1) bad.push(`${r.path}: the page's first heading is h${r.firstHeadingLevel}`);
@@ -474,8 +665,10 @@ export function judge(summary, theme, mode) {
 
   // One canvas, one chrome and one rail colour for the whole app in a theme. A
   // page that forgets to inherit the surfaces shows up here as a second triple.
-  const pairs = new Set(summary.results.map((r) => `${r.bodyBg}|${r.chromeBg}|${r.railBg}`));
-  if (pairs.size !== 1) bad.push(`${label}: pages disagree about the theme surfaces: ${[...pairs].join(' / ')}`);
+  if (!surfacesOnly) {
+    const pairs = new Set(summary.results.map((r) => `${r.bodyBg}|${r.chromeBg}|${r.railBg}`));
+    if (pairs.size !== 1) bad.push(`${label}: pages disagree about the theme surfaces: ${[...pairs].join(' / ')}`);
+  }
 
   // The rail is a SECOND surface, not the top bar repeated. Painting both from
   // the same token is the regression the dedicated --sidebar-* family exists to
@@ -486,7 +679,7 @@ export function judge(summary, theme, mode) {
   // legibility, so its rail stays pure black and is separated from the bar by
   // its border and its pills instead of by a tint. Exempting it here rather than
   // tinting it in the stylesheet keeps the exception in one visible place.
-  if (theme !== 'contrast') {
+  if (!surfacesOnly && theme !== 'contrast') {
     const sameAsBar = summary.results.filter((r) => r.railBg && r.railBg === r.chromeBg);
     if (sameAsBar.length) {
       bad.push(`${label}: the rail is painted the same as the top bar (${sameAsBar[0].railBg})`);
@@ -495,27 +688,91 @@ export function judge(summary, theme, mode) {
 
   // A nav pill the user cannot see is not a nav pill. Both the fill and the
   // weight change carry the "you are here" state, so both are checked.
-  const pills = summary.results.map((r) => ({ path: r.path, bg: r.railActiveBg, weight: r.railActiveWeight }));
-  const invisible = pills.filter((p) => p.bg && p.bg === summary.results[0].railBg);
-  if (invisible.length) bad.push(`${label}: ${invisible[0].path} has an active pill with no fill`);
-  if (!pills.some((p) => p.weight && Number(p.weight) >= 600)) {
-    bad.push(`${label}: no active nav pill is emphasised`);
+  if (!surfacesOnly) {
+    const pills = summary.results.map((r) => ({ path: r.path, bg: r.railActiveBg, weight: r.railActiveWeight }));
+    const invisible = pills.filter((p) => p.bg && p.bg === summary.results[0].railBg);
+    if (invisible.length) bad.push(`${label}: ${invisible[0].path} has an active pill with no fill`);
+    if (!pills.some((p) => p.weight && Number(p.weight) >= 600)) {
+      bad.push(`${label}: no active nav pill is emphasised`);
+    }
+  }
+
+  // ─── the palette, measured on its composited pixels ──────────────────────
+  const s = summary.surfaces || {};
+  const p = s.palette;
+  if (!p || !p.opened) {
+    bad.push(`${label}: the ⌘K palette did not open`);
+  } else {
+    if (p.optionCount < 25) bad.push(`${label}: the palette listed ${p.optionCount} options`);
+    if (!p.opaque) bad.push(`${label}: the palette surface is translucent (${p.bg})`);
+    if (p.baseContrast !== null && p.baseContrast < 4.5) {
+      bad.push(`${label}: palette label contrast is ${p.baseContrast}:1 on ${p.bg}`);
+    }
+    if (p.activeContrast !== null && p.activeContrast < 4.5) {
+      bad.push(`${label}: the highlighted palette row's label is ${p.activeContrast}:1`);
+    }
+    if (!p.focusInInput) bad.push(`${label}: opening the palette did not focus its input`);
+    if (p.ariaModal !== 'true') bad.push(`${label}: the palette is not aria-modal`);
+    if (!(p.radius >= 8)) bad.push(`${label}: the palette's corners are ${p.radius}px`);
+    if (!p.hasShadow) bad.push(`${label}: the palette has no elevation`);
+    if (p.overflowX) bad.push(`${label}: the palette made the page scroll horizontally`);
+    if (p.filteredOptions !== 1) bad.push(`${label}: filtering to "gateway" left ${p.filteredOptions} options`);
+    if (p.navigatedTo !== '/gateway') bad.push(`${label}: palette Enter went to ${p.navigatedTo}`);
+    if (!p.closedAfterPick) bad.push(`${label}: the palette stayed open after a choice`);
+    if (!p.reopened) bad.push(`${label}: the palette did not reopen with the chord`);
+    if (!p.closedOnEsc) bad.push(`${label}: Escape did not close the palette`);
+    if (p.pathAfterEsc && p.pathAfterEsc !== '/gateway') {
+      bad.push(`${label}: Escape moved the page to ${p.pathAfterEsc}`);
+    }
+  }
+
+  // ─── chat focus mode, measured as geometry ───────────────────────────────
+  const f = s.focus;
+  if (!f || !f.found) {
+    bad.push(`${label}: chat focus mode control was not found`);
+  } else {
+    if (f.attr !== 'on') bad.push(`${label}: focus mode did not set data-chat-focus=on`);
+    if (f.topbarDisplay !== 'none') bad.push(`${label}: the top bar is still ${f.topbarDisplay} in focus mode`);
+    if (f.navDisplay !== 'none') bad.push(`${label}: the rail is still ${f.navDisplay} in focus mode`);
+    if (Math.abs((f.mainHeight || 0) - (f.viewportHeight || 0)) > 1) {
+      bad.push(`${label}: focus mode's main is ${f.mainHeight}px of a ${f.viewportHeight}px window`);
+    }
+    if (Math.abs((f.mainWidth || 0) - (f.viewportWidth || 0)) > 1) {
+      bad.push(`${label}: focus mode's main is ${f.mainWidth}px of a ${f.viewportWidth}px window`);
+    }
+    if (f.mainPadding !== '0px') bad.push(`${label}: focus mode kept ${f.mainPadding} of page padding`);
+    if (f.overflowX) bad.push(`${label}: focus mode scrolls horizontally`);
+    if (!/exit focus/i.test(f.exitLabel || '')) {
+      bad.push(`${label}: the focus control does not say how to leave ("${f.exitLabel}")`);
+    }
+    if (f.attrAfterEsc !== 'off') bad.push(`${label}: Escape did not leave focus mode`);
+    if (f.topbarAfterEsc === 'none') bad.push(`${label}: the top bar did not come back after Escape`);
+  }
+  if (s.errors && s.errors.length) {
+    bad.push(`${label}: ${s.errors.length} uncaught error(s) during the surface checks — ${s.errors[0]}`);
   }
 
   return bad;
 }
 
 async function main() {
-  const themes = (arg('themes', DEFAULT_THEMES.join(',')) || '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((s) => {
-      const [palette, mode] = s.split(':');
-      return { theme: palette, mode: mode || 'dark' };
-    });
+  const requested = (arg('themes', DEFAULT_THEMES.join(',')) || '').trim();
+  const themes = requested === 'all'
+    ? ALL_PALETTES.flatMap((palette) => [
+        { theme: palette, mode: 'light' },
+        { theme: palette, mode: 'dark' },
+      ])
+    : requested
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .map((s) => {
+          const [palette, mode] = s.split(':');
+          return { theme: palette, mode: mode || 'dark' };
+        });
   const width = Number(arg('width', '1440'));
   const requireChrome = process.argv.includes('--require-chrome');
+  const surfacesOnly = process.argv.includes('--surfaces-only');
 
   if (!existsSync(join(PUBLIC_DIR, 'index.html'))) {
     console.error(`smoke: no built bundle at ${PUBLIC_DIR}. Run: npm run build:dashboard`);
@@ -535,8 +792,8 @@ async function main() {
 
   const failures = [];
   for (const { theme, mode } of themes) {
-    process.stdout.write(`smoke: walking ${theme}/${mode} …`);
-    const summary = await walkTheme({ theme, mode, chromePath, width });
+    process.stdout.write(`smoke: ${surfacesOnly ? 'surfaces' : 'walking'} ${theme}/${mode} …`);
+    const summary = await walkTheme({ theme, mode, chromePath, width, surfacesOnly });
     if (!summary) {
       console.log(' no summary (page never reported)');
       failures.push(`${theme}/${mode}: the page never reported — no route rendered`);

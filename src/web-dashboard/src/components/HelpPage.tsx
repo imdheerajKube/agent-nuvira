@@ -109,8 +109,9 @@ export default function HelpPage() {
       <section className="help-section">
         <h2 className="section-title">Appearance &amp; accessibility</h2>
         <p className="help-body">
-          <strong>Appearance</strong> in the top bar offers {PALETTES.length} palettes in light and dark, plus a text
-          size and an accessibility mode. Your choice is remembered in this browser only — nothing is sent anywhere.
+          <strong>Appearance</strong> in the top bar offers {PALETTES.length} palettes, a light or dark mode (or
+          following your system), a text size, a glass effect, a compact layout and an accessibility mode. Your choice
+          is remembered in this browser only — nothing is sent anywhere.
         </p>
         <dl className="help-anatomy">
           <dt>Palette</dt>
@@ -120,8 +121,26 @@ export default function HelpPage() {
           </dd>
           <dt>Mode</dt>
           <dd>
-            {MODES.map((mode) => mode.charAt(0).toUpperCase() + mode.slice(1)).join(' or ')}. &ldquo;Reset to system
-            default&rdquo; goes back to what your operating system asks for.
+            {MODES.map((mode) => mode.charAt(0).toUpperCase() + mode.slice(1)).join(' · ')}. <strong>System</strong>{' '}
+            keeps following your operating system — it switches with the machine instead of freezing whichever mode it
+            had when you chose, and &ldquo;Reset to system default&rdquo; returns to it.
+          </dd>
+          <dt>Glass mode</dt>
+          <dd>
+            Frosted, semi-transparent panels over a softly tinted backdrop, in the Windows 11 / Fluent style. Off is
+            the plain solid surface, which costs the least to draw — pick it on an older machine or when you want the
+            text to sit on one flat colour.
+          </dd>
+          <dt>Compact layout</dt>
+          <dd>
+            Tighter spacing and smaller controls so more fits on one screen. It changes the space around text, never the
+            text size, and accessibility mode still wins on click-target size if both are on.
+          </dd>
+          <dt>Animation effects</dt>
+          <dd>
+            Hover transitions, fades and loading animations. Off makes every state change instant; your operating
+            system's own &ldquo;reduce motion&rdquo; setting is honoured either way, and accessibility mode turns this
+            off for you.
           </dd>
           <dt>Text size</dt>
           <dd>

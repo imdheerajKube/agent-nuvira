@@ -12,7 +12,7 @@
  * - Garbage collection for low-quality/expired skills
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, unlinkSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, renameSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { envBuff, resolveNuviraDataPath } from '../config/paths.js';
 
@@ -43,6 +43,9 @@ import { logger } from '../utils/logger.js';
 function skillsDir(): string {
   return envBuff('SKILLS_DIR') || resolveNuviraDataPath('skills');
 }
+
+/** Where a retired (no longer bundled) skill file is archived. */
+const RETIRED_DIR = '.retired';
 
 function indexPath(): string {
   return join(skillsDir(), 'index.json');
@@ -166,7 +169,60 @@ export class SkillStore {
       this.save(toSave);
       seeded++;
     }
+    this.lastRetired = this.retireDeletedBundledSkills();
     return seeded;
+  }
+
+  /** Skills retired by the last seeding pass (ids), for the caller to report. */
+  lastRetired: string[] = [];
+
+  /**
+   * Retire first-party skills the bundle no longer ships.
+   *
+   * WHY (measured 2026-11-03). Merging duplicate skills deleted them from the
+   * bundle, but seeding only ever ADDS. On any machine that had run an earlier
+   * build, `~/.nuvira/skills` still held `skill-api-creation`, `skill-cron-setup`
+   * and the other six twins — measured: 148 hub skills + 8 stale compiled ones —
+   * so the catalog listed BOTH halves of every merged pair while a fresh install
+   * listed neither. A merge that only takes effect on new installs is not a
+   * merge.
+   *
+   * The file is MOVED to `skills/.retired/<id>.json`, never deleted: seeding
+   * deliberately preserves user edits to a seeded skill, and those edits are the
+   * user's data. Retirement takes it out of the catalog; restoring it is a `mv`.
+   *
+   * Only skills this store seeded are eligible — `sourceTrajectoryIds` carries
+   * `'bundled'` — so learned, hub-installed and user-authored skills are never
+   * touched, whatever is deleted from the bundle.
+   */
+  retireDeletedBundledSkills(): string[] {
+    const keep = new Set(BUNDLED_SKILLS.map((s) => s.id));
+    const retired: string[] = [];
+    for (const entry of [...this.index.skills]) {
+      if (keep.has(entry.id)) continue;
+      const skill = this.get(entry.id);
+      if (!skill) continue;
+      const fromBundle = Array.isArray(skill.sourceTrajectoryIds) && skill.sourceTrajectoryIds.includes('bundled');
+      if (!fromBundle) continue;
+      const src = skillFilePath(entry.id);
+      const destDir = join(skillsDir(), RETIRED_DIR);
+      try {
+        ensureDir();
+        mkdirSync(destDir, { recursive: true });
+        renameSync(src, join(destDir, `${entry.id.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`));
+      } catch {
+        // A file that cannot be moved stays in the catalog rather than being
+        // silently dropped from the index and left on disk (a half-retire).
+        continue;
+      }
+      this.index.skills = this.index.skills.filter((s) => s.id !== entry.id);
+      retired.push(entry.id);
+    }
+    if (retired.length > 0) {
+      this.saveIndex();
+      logger.info(`Retired ${retired.length} skill(s) the bundle no longer ships: ${retired.join(', ')} (archived under ${RETIRED_DIR}/, restore with mv)`);
+    }
+    return retired;
   }
 
   // ── Public API ──────────────────────────────────────────────────────────

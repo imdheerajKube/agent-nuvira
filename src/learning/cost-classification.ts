@@ -40,6 +40,7 @@
  */
 
 import { ConfigManager } from '../config/manager.js';
+import type { SpendBreakdown } from '../utils/spend.js';
 import {
   asBillingTier,
   resolveCallCost,
@@ -422,4 +423,41 @@ export function classifyEntries(
   totals.notBilledValueUsd = round6(totals.notBilledValueUsd);
   totals.recordedTotalUsd = round6(totals.recordedTotalUsd);
   return totals;
+}
+
+/**
+ * The classified totals as the DISPLAY-READY spend object (`utils/spend.ts`).
+ *
+ * ONE mapping, because four surfaces describe the same money — the CLI turn line,
+ * the interactive console, the unattended batch table and the dashboard's cost
+ * page and turn card. Each used to assemble its own object from these totals, which
+ * is exactly how a bucket ends up present on one surface and dropped on another;
+ * the formatter can only be trusted if it is handed the whole breakdown.
+ *
+ * `unverifiedProviders` is derived from the roll-up unless the caller knows it
+ * already (a single call has exactly one). The names matter: they turn "some of
+ * this money has no evidence" into the one command that fixes it.
+ */
+export function spendFromTotals(
+  totals: CostTotals,
+  opts: { unverifiedProviders?: string[] } = {},
+): SpendBreakdown {
+  const unverifiedProviders = opts.unverifiedProviders ?? Object.entries(totals.byProvider)
+    .filter(([, t]) => t.unverifiedCalls > 0)
+    .map(([provider]) => provider)
+    .sort();
+  return {
+    tokens: totals.tokens,
+    calls: totals.requests,
+    reportedCalls: totals.billedReportedCalls,
+    exactUsd: totals.billedReportedUsd,
+    listedCalls: totals.billedListedCalls,
+    estimatedUsd: totals.billedListedUsd,
+    unverifiedCalls: totals.unverifiedListedCalls,
+    unverifiedUsd: totals.unverifiedListedUsd,
+    unverifiedProviders,
+    freeCalls: totals.notBilledValueCalls,
+    freeValueUsd: totals.notBilledValueUsd,
+    unpricedCalls: totals.unpricedCalls,
+  };
 }

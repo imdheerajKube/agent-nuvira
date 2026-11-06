@@ -204,6 +204,18 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     cliEquivalent: 'NUVIRA_WORK_DIGEST=all|max|off',
   },
   {
+    name: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS',
+    label: 'Enforce skill obligations',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'asks',
+    description:
+      'Refuse a `verified: true` finish while a skill LOADED this turn declares work that is not done — a checklist to read, a validator to run, a file to produce, a green test run — instead of only reporting it. An unqualified `verified:false` ending is never refused. The declaration, the evidence and the unmet-gap report run either way; this switch gates only the refusal, which is why it is off by default until it has been measured on a task where a skill actually loads.',
+    unsetMeans:
+      'Obligations are advisory: the gaps are shown to the model and carried into the answer, but an ending is never refused.',
+    cliEquivalent: 'NUVIRA_ENFORCE_SKILL_OBLIGATIONS=1 (no CLI flag yet)',
+  },
+  {
     name: 'NUVIRA_STRICT_MODEL',
     label: 'Refuse model substitution',
     group: 'turn',

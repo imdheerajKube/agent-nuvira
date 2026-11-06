@@ -124,4 +124,3 @@ curl --cert client.pem --key client-key.pem https://example.com
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('ssl-cert', 'references/guide.md')`.

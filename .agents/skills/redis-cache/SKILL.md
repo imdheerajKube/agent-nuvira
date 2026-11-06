@@ -160,4 +160,3 @@ redis-cli ZRANGEBYSCORE ratelimit:user1 0 $(date +%s)
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('redis-cache', 'references/guide.md')`.

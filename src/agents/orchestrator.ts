@@ -170,6 +170,17 @@ export interface OrchestratorOptions {
   provider?: string;
   /** Model override (default: from provider config) */
   model?: string;
+  /**
+   * Skills the user PINNED for this run (`nuvira execute --skill`).
+   *
+   * The pipeline's default is model-driven discovery: the planner is handed the
+   * catalogue and picks. A pin is the opposite contract — the user NAMED the
+   * skill, so its methodology is injected as `skillGuidance` before planning and
+   * the planner plans WITH it rather than being invited to select it. Built by
+   * the same `skill-pin.ts` block the chat and loop surfaces use, so one pin
+   * means one thing on every engine. Absent = nothing pinned.
+   */
+  pinnedSkills?: string[];
   /** Whether to write files to disk (false = dry-run) */
   dryRun?: boolean;
   /** Enable verbose logging */
@@ -1191,6 +1202,45 @@ export class Orchestrator {
     // (by name) that fits, and the writer can load one in full with
     // skill_view(name). The disabled gate still applies at catalog build time.
     // Best-effort — a skill-store failure must never break planning.
+    try {
+      // Pinned skills FIRST and in their own try: a named skill is the user's
+      // instruction, so it must not be lost because the catalogue builder (a
+      // discovery aid) happened to fail. `skillGuidance` is what the planner and
+      // writers already render as methodology.
+      const explicitNames = options.pinnedSkills ?? [];
+      let requestedNames: string[] = [];
+      try {
+        const [{ collectSkillEntries }, { detectRequestedSkillNames }] = await Promise.all([
+          import('../tools/loop-skill-hint.js'),
+          import('../learning/skill-request.js'),
+        ]);
+        const entries = await collectSkillEntries(this.configManager, { projectRoot: process.cwd() });
+        requestedNames = detectRequestedSkillNames(goal, entries.map((entry) => entry.name));
+      } catch {
+        requestedNames = []; // best-effort — request detection must never break planning
+      }
+      const pinnedNames = Array.from(new Set([...explicitNames, ...requestedNames]));
+      if (pinnedNames.length > 0) {
+        const { buildPinnedSkillsForTurn, describePinnedResolution } = await import('../learning/skill-pin.js');
+        const pinned = await buildPinnedSkillsForTurn(pinnedNames, { cwd: process.cwd() });
+        if (pinned.block) {
+          vault.setMeta('skillGuidance', {
+            name: pinned.resolution.pins.map((p) => p.name).join(', '),
+            description: 'Named by the user for this run — check relevance before applying.',
+            steps: [],
+            body: pinned.block,
+          });
+          this.eventBus.emit(EventNames.ORCHESTRATOR_AGENT_UPDATE, {
+            agentType: 'orchestrator',
+            stage: 'skill',
+            message: `🧩 Using the skill${pinned.resolution.pins.length === 1 ? '' : 's'} you named: ${describePinnedResolution(pinned.resolution)}`,
+          }, 'orchestrator');
+        }
+      }
+    } catch {
+      /* a pin must never break the pipeline */
+    }
+
     try {
       const { buildConfiguredSkillHint } = await import('../tools/loop-skill-hint.js');
       // `skill-view` tail: the pipeline's load path is the writer's skill_view,

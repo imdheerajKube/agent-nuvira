@@ -38,7 +38,7 @@ import { getTool, type ToolContext, type FollowupSuggestion } from '../../src/to
 import { RUN_TERMINAL_INCOMPLETE_PREFIX } from '../../src/tools/run-terminal.js';
 import { countWords } from '../../src/learning/long-form.js';
 import { requestAuthorizesWrites } from '../../src/learning/autonomy-policy.js';
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -2778,6 +2778,106 @@ describe('tool loop — project prerequisite pre-flight (D2.2)', () => {
  * model, and only fall back to the old bounded ending when the caller says
  * there is genuinely nothing else.
  */
+/**
+ * EVIDENCE BEFORE ROTATION — an empty step is diagnosed, not just counted.
+ *
+ * Measured shape: `deepseek-v4-pro` returned `content: ''` with a long
+ * `reasoning_content` and `finish_reason: 'length'`. The old loop read that as
+ * "the provider returned nothing", spent its one retry, and handed the turn to
+ * something weaker. A model cut at its output cap was WORKING; an empty with no
+ * explanation needs a probe, not a guess.
+ */
+describe('tool loop — empty-completion diagnosis before rotation', () => {
+  it('re-asks the SAME pair when the step was cut at the output cap', async () => {
+    const onEvent = vi.fn();
+    const onTraceEvent = vi.fn();
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      if (n <= 2) {
+        return {
+          content: '',
+          toolCalls: [],
+          reasoningContent: 'thinking…'.repeat(400),
+          finishReason: 'length',
+          requestedMaxTokens: 4096,
+          usage: { promptTokens: 900, completionTokens: 4096 },
+        };
+      }
+      return { content: 'answered after more room', toolCalls: [] };
+    });
+    const requestModelSwitch = vi.fn(async () => true);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), onEvent, requestModelSwitch },
+      onTraceEvent,
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('answered after more room');
+    // The cap-truncated step did not condemn the model.
+    expect(requestModelSwitch).not.toHaveBeenCalled();
+    expect(result.modelHandoffs).toBeUndefined();
+    expect(n).toBe(3);
+    // Named as budget exhaustion, not as a provider outage.
+    expect(onEvent.mock.calls.some((c) => /output budget|more output room/i.test(String(c[0])))).toBe(true);
+    const events = onTraceEvent.mock.calls.map((c) => c[0] as LoopTraceEvent);
+    expect(events.some((e) => /output cap/i.test(e.summary ?? ''))).toBe(true);
+  });
+
+  it('probes an unexplained empty and keeps the pair when the probe is answered', async () => {
+    let n = 0;
+    const callModel = vi.fn(async (): Promise<StepResponse> => {
+      n += 1;
+      return n === 1 ? { content: '', toolCalls: [] } : { content: 'alive and answering', toolCalls: [] };
+    });
+    const assessServedPair = vi.fn(async () => 'alive' as const);
+    const requestModelSwitch = vi.fn(async () => true);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), assessServedPair, requestModelSwitch },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('alive and answering');
+    expect(assessServedPair).toHaveBeenCalledTimes(1);
+    expect(requestModelSwitch).not.toHaveBeenCalled();
+  });
+
+  it('rotates immediately, without patience, when the probe proves the pair cannot serve', async () => {
+    let model = 'A';
+    const callModel = vi.fn(async (): Promise<StepResponse> =>
+      model === 'A' ? { content: '', toolCalls: [] } : { content: 'B answered it.', toolCalls: [] },
+    );
+    const assessServedPair = vi.fn(async () => 'unavailable' as const);
+    const requestModelSwitch = vi.fn(async () => {
+      model = 'B';
+      return true;
+    });
+    const emptyResponsePatienceMs = vi.fn(() => [5_000, 10_000] as const);
+
+    const result = await runToolLoop({
+      messages: [{ role: 'user', content: 'hi' }],
+      context: ctx,
+      deps: { callModel, executeTool: vi.fn(), assessServedPair, requestModelSwitch, emptyResponsePatienceMs },
+      maxSteps: 30,
+      maxContinuations: 0,
+    });
+
+    expect(result.content).toBe('B answered it.');
+    expect(assessServedPair).toHaveBeenCalledTimes(1);
+    // The probe answered the question patience exists to ask, so it was never spent.
+    expect(emptyResponsePatienceMs).not.toHaveBeenCalled();
+    expect(requestModelSwitch).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('tool loop — mid-turn model handoff (P2)', () => {
   it('hands off to a different model after a model answers with nothing twice', async () => {
     const onTraceEvent = vi.fn();
@@ -4027,5 +4127,184 @@ describe('a delivered answer is never deleted, and a short poem is not file work
     expect(deps.callModel).toHaveBeenCalledTimes(1);
     expect(result.content).toBe(shortPoem);
     expect(result.undeliveredArtifact).toBeFalsy();
+  });
+});
+
+/**
+ * A WHOLE TURN that delivers one document — through the loop, the real tools, and
+ * one shared ToolContext, which is exactly how a live turn is wired
+ * (`deps.executeTool(name, args, ctx)` with a single per-turn context).
+ *
+ * WHY THIS IS A LOOP TEST, not another tool test. The defect it guards
+ * (trace-1793853385112-sf2exl) lived BETWEEN two correct tools: `write_file`
+ * created the report, and the very next `write_file` to the same path was
+ * refused as state-changing. The unit tests pin each tool's ruling; only a turn
+ * proves the rulings compose — that the run remembers its own output across
+ * steps, so a document can be built in sections instead of abandoned.
+ */
+describe('tool loop — one turn builds a complete document in sections', () => {
+  it('creates, appends and edits one file with no confirmation refusal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuvira-loop-report-'));
+    const ASK = 'assess this project and write the findings to a report file';
+    const turnCtx: ToolContext = {
+      configManager: {},
+      cwd: root,
+      writesAuthorized: requestAuthorizesWrites(ASK),
+      authorizationRequest: ASK,
+    };
+
+    // Every tool result the loop fed back to the model, in order.
+    const results: string[] = [];
+    const deps = mockDeps(
+      [
+        {
+          content: 'Writing the report.',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'write_file',
+              arguments: {
+                path: 'AUDIT_CROSSCHECK.md',
+                content: '# Cross-check\n\n## 1. Verdict\nNuvira found the worse defect.\n',
+              },
+            },
+          ],
+        },
+        {
+          content: 'Adding the confirmed claims.',
+          toolCalls: [
+            {
+              id: 'c2',
+              name: 'write_file',
+              arguments: {
+                path: 'AUDIT_CROSSCHECK.md',
+                mode: 'append',
+                content: '\n## 2. Confirmed\nEleven claims verified by execution.\n',
+              },
+            },
+          ],
+        },
+        {
+          content: 'Recording the refutation.',
+          toolCalls: [
+            {
+              id: 'c3',
+              name: 'edit_file',
+              arguments: {
+                path: 'AUDIT_CROSSCHECK.md',
+                old_string: '## 2. Confirmed\nEleven claims verified by execution.',
+                new_string:
+                  '## 2. Confirmed\nEleven claims verified by execution.\n\n## 3. Refuted\nNone of them were refuted.',
+              },
+            },
+          ],
+        },
+        {
+          content: 'Cross-check written to AUDIT_CROSSCHECK.md with all three sections.',
+          toolCalls: [],
+        },
+      ],
+      async (name, args) => {
+        const result = await realExecute(name, args, turnCtx);
+        results.push(result);
+        return result;
+      },
+    );
+
+    try {
+      const result = await runToolLoop({
+        messages: [{ role: 'user', content: ASK }],
+        context: turnCtx,
+        deps,
+        tools: ['write_file', 'edit_file'],
+        // The advisory gates are orthogonal to this test and covered elsewhere;
+        // with them on, a mutation spends a bounded nudge step on top of the
+        // scripted turn, which would make the step accounting below depend on
+        // gate policy rather than on the tools composing.
+        requirePlan: false,
+        requireVerification: false,
+        requireDeliverable: false,
+        requireAction: false,
+        requireCompletion: false,
+        requireSelfReview: false,
+        selfReviewWhenUnchanged: false,
+        requireDocsAudit: false,
+      });
+
+      // Three tool calls actually RAN — none was refused for confirmation.
+      expect(results).toHaveLength(3);
+      for (const r of results) expect(r).not.toContain('state-changing — NOT applied');
+      expect(results[0]).toContain("created 'AUDIT_CROSSCHECK.md'");
+      expect(results[1]).toContain("appended to 'AUDIT_CROSSCHECK.md'");
+      expect(results[2]).toContain("applied to 'AUDIT_CROSSCHECK.md'");
+
+      // ONE file, every section — the deliverable the user asked for.
+      const onDisk = readFileSync(join(root, 'AUDIT_CROSSCHECK.md'), 'utf-8');
+      expect(onDisk).toContain('## 1. Verdict');
+      expect(onDisk).toContain('## 2. Confirmed');
+      expect(onDisk).toContain('## 3. Refuted');
+
+      // A write is not an ending: the turn finishes on the model's answer.
+      expect(result.content).toContain('all three sections');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('still refuses the FIRST write when the request never asked for files', async () => {
+    // The other side of the same coin, at turn level: the memory of "our own
+    // output" must not manufacture authorization that the request never gave.
+    const root = mkdtempSync(join(tmpdir(), 'nuvira-loop-refuse-'));
+    const turnCtx: ToolContext = {
+      configManager: {},
+      cwd: root,
+      writesAuthorized: requestAuthorizesWrites('what does the routing do?'),
+      authorizationRequest: 'what does the routing do?',
+    };
+    const results: string[] = [];
+    const deps = mockDeps(
+      [
+        {
+          content: 'Writing a report.',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'write_file',
+              arguments: { path: 'REPORT.md', content: '# Report\n' },
+            },
+          ],
+        },
+        { content: 'I can write that report if you want it.', toolCalls: [] },
+      ],
+      async (name, args) => {
+        const result = await realExecute(name, args, turnCtx);
+        results.push(result);
+        return result;
+      },
+    );
+
+    try {
+      await runToolLoop({
+        messages: [{ role: 'user', content: 'what does the routing do?' }],
+        context: turnCtx,
+        deps,
+        tools: ['write_file'],
+        requirePlan: false,
+        requireVerification: false,
+        requireDeliverable: false,
+        requireAction: false,
+        requireCompletion: false,
+        requireSelfReview: false,
+        selfReviewWhenUnchanged: false,
+        requireDocsAudit: false,
+      });
+
+      expect(results[0]).toContain('state-changing — NOT applied');
+      // Nothing was written — a refusal that still writes is the defect this
+      // whole convention exists to prevent.
+      expect(existsSync(join(root, 'REPORT.md'))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

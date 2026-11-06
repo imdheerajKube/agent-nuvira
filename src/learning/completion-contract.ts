@@ -23,6 +23,8 @@
  * filesystem.
  */
 
+import { describeShapeGaps, type DeliverableShape } from './deliverable-shape.js';
+
 export interface CompletionClaim {
   /** One line: what was delivered. Required — an unstated deliverable is not a claim. */
   summary?: string;
@@ -69,6 +71,14 @@ export interface CompletionEvidence {
    */
   namedDeliverables?: readonly { path: string; exists: boolean }[];
   /**
+   * Structural completeness of the report the request enumerated (see
+   * `deliverable-shape.ts`). A file that exists is not yet the deliverable: the
+   * measured 2026-11-05 audit wrote the file with 2 of the 5 required sections and
+   * zero citations, and `finish` accepted it because existence was the only fact
+   * anyone checked.
+   */
+  deliverableShape?: DeliverableShape;
+  /**
    * A runnable entry point this turn wrote while no followable README exists.
    * Measured: all three agents on the same prompt wrote docs and none wrote a
    * README, so "the project is done" is not true of a project nobody can start.
@@ -101,6 +111,8 @@ export interface TurnLedgerSnapshot {
   unboundModules: string[];
   /** See {@link CompletionEvidence.namedDeliverables}. */
   namedDeliverables?: { path: string; exists: boolean }[];
+  /** See {@link CompletionEvidence.deliverableShape}. */
+  deliverableShape?: DeliverableShape;
   /** See {@link CompletionEvidence.quickstart}. */
   quickstart?: { entry: string };
   /** See {@link CompletionEvidence.production}. */
@@ -173,11 +185,15 @@ export function judgeCompletion(claim: CompletionClaim, evidence: CompletionEvid
 
   const unbound = evidence.unboundModules ?? [];
   const warnings: string[] = [];
+  // The report's SHAPE, when the request enumerated it. A file that exists is not
+  // the deliverable the ask described (see `deliverable-shape.ts`).
+  const shapeGaps = evidence.deliverableShape ? describeShapeGaps(evidence.deliverableShape) : [];
   if (claim.verified !== false) {
     // A path the request named is the deliverable, not a suggestion (see
     // `namedDeliverables`). Named before the advisory rows on purpose: this is the
     // one gap that is a fact about the ask itself.
     const missingNamed = (evidence.namedDeliverables ?? []).filter((entry) => !entry.exists);
+    for (const gap of shapeGaps) problems.push(gap);
     for (const entry of process.env.NUVIRA_NO_NAMED_REFUSAL === '1' ? [] : missingNamed.slice(0, 4)) {
       problems.push(
         `\`${entry.path}\` is named in the request and does not exist — write it (real content, not a placeholder), or call finish with \`verified:false\` and say in \`unmet\` that it is missing`,
@@ -230,10 +246,19 @@ export function judgeCompletion(claim: CompletionClaim, evidence: CompletionEvid
       }
       if (unbound.length > 3) warnings.push(`…and ${unbound.length - 3} more module(s) with no test found by static analysis`);
     }
-  } else if (!Array.isArray(claim.unmet) || claim.unmet.filter((u) => String(u).trim()).length === 0) {
-    // A legal ending, but it has to say what is missing: `verified: false` with an
-    // empty list is indistinguishable from a shrug, and the caller renders that list.
-    problems.push('verified:false must list what is NOT done in `unmet` — otherwise the user cannot tell what is missing');
+  } else {
+    // `verified:false` is still the honest ending. What it may not do is omit a
+    // shape gap it neither fixed nor stated: a report with 2 of 5 enumerated
+    // sections is not made complete by calling it incomplete in general terms.
+    const stated = (claim.unmet ?? []).join(' ').toLowerCase();
+    const acknowledged =
+      stated.includes('section') || stated.includes('citation') || stated.includes('limitation');
+    if (!acknowledged) for (const gap of shapeGaps) problems.push(gap);
+    if (!Array.isArray(claim.unmet) || claim.unmet.filter((u) => String(u).trim()).length === 0) {
+      // A legal ending, but it has to say what is missing: `verified: false` with an
+      // empty list is indistinguishable from a shrug, and the caller renders that list.
+      problems.push('verified:false must list what is NOT done in `unmet` — otherwise the user cannot tell what is missing');
+    }
   }
 
   const accepted = problems.length === 0;
@@ -252,6 +277,33 @@ export function judgeCompletion(claim: CompletionClaim, evidence: CompletionEvid
           .join(', ')
       : `${problems.length} contradiction(s) between the claim and the turn's evidence`,
   };
+}
+
+/**
+ * How many close-out facts are still outstanding, as one number a BUDGET can read.
+ *
+ * WHY THIS EXISTS (measured 2026-11-06, the RAG benchmark). The step budget asked
+ * the requirement ledger whether work remained, while the close-out gate also
+ * counts files the ask named and sections the report owes. Those two sets are not
+ * the same: the turn ended at its 50-step budget announcing "2 requirement(s) the
+ * ask named are still unmet" — because the budget could not see the two facts the
+ * gate could. A budget that measures a different ledger than the one the user is
+ * judged by will always stop at the wrong moment.
+ *
+ * Deliberately narrow: only facts an artifact or a command can settle. Advisory
+ * predictions (`unboundModules`), a prefix of a pre-existing red suite and pure
+ * prose are not work — counting them would extend turns that can never finish.
+ */
+export function outstandingCloseoutFacts(
+  snapshot: Pick<
+    TurnLedgerSnapshot,
+    'unmet' | 'redChecks' | 'namedDeliverables' | 'deliverableShape'
+  >,
+): number {
+  const shapeGaps = snapshot.deliverableShape ? describeShapeGaps(snapshot.deliverableShape).length : 0;
+  const namedMissing = (snapshot.namedDeliverables ?? []).filter((entry) => !entry.exists).length;
+  const liveReds = snapshot.redChecks.filter((check) => !check.preExisting).length;
+  return snapshot.unmet.length + liveReds + namedMissing + shapeGaps;
 }
 
 /**

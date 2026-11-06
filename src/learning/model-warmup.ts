@@ -27,6 +27,8 @@
 
 import { getModelRegistry, type ModelRegistryEntry } from './model-registry.js';
 import { spotCheckModel, refreshModelRegistry } from '../inference/model-probe.js';
+import { isNonChatModel } from '../inference/model-catalog.js';
+import { estimateModelCapability } from './model-capability.js';
 import { detectCredentialChange } from './credential-fingerprint.js';
 import {
   acquireDutyLease,
@@ -353,6 +355,20 @@ function isServable(provider: string, configManager: ConfigManager): boolean {
  * provider that already wins every pick changes nothing about how the agent
  * behaves. Unservable providers are excluded outright, so a cycle can never
  * spend its whole budget on something that cannot answer.
+ *
+ * WITHIN a provider the budget follows USEFULNESS, not the id's alphabetical
+ * position. Two rules, both measured on this machine's action log:
+ *   1. NEVER a non-chat model. The sweep used to verify `openai/gpt-oss-safeguard-20b`
+ *      and `meta-llama/llama-prompt-guard-2-22m` — both content-safety
+ *      classifiers, both unservable — spending free-tier probes and inflating
+ *      the "verified" count that every health ranking reads. `isNonChatModel`
+ *      is the same classifier the probe, registry and router use, so the four
+ *      cannot drift.
+ *   2. STRONGEST CHAT MODELS FIRST. A probe is one token, and the registry gap
+ *      this sweep exists to close is that strong models stay unverified while
+ *      cheap ones get proven, so the router then substitutes DOWN. Spending the
+ *      budget on the most capable listed model is the same rule
+ *      `rankProbeCandidates` already applies to a full refresh.
  */
 export function selectExplorationCandidates(
   registry: ReturnType<typeof getModelRegistry>,
@@ -361,7 +377,7 @@ export function selectExplorationCandidates(
   limit: number,
 ): WarmupCandidate[] {
   if (limit <= 0) return [];
-  const rows: Array<WarmupCandidate & { verifiedInProvider: number }> = [];
+  const rows: Array<WarmupCandidate & { verifiedInProvider: number; capability: number }> = [];
 
   const exploreThrottleMs = warmupConfig().exploreThrottleMs;
   for (const provider of registry.getTrackedProviders()) {
@@ -371,15 +387,26 @@ export function selectExplorationCandidates(
       if (entry.status !== 'unverified') continue;
       // The config sentinel is not a model id (same guard the router uses).
       if (!entry.model || entry.model === 'default') continue;
+      // A classifier / embedding / speech / image model can never serve a chat
+      // turn, so proving it buys nothing the router can route to.
+      if (isNonChatModel(entry.model)) continue;
       if (entry.quotaParkedUntil > now) continue;
       if (now - (entry.lastProbedAt ?? 0) < exploreThrottleMs) continue;
-      rows.push({ provider, model: entry.model, priority: -verifiedInProvider, verifiedInProvider });
+      rows.push({
+        provider,
+        model: entry.model,
+        priority: -verifiedInProvider,
+        verifiedInProvider,
+        capability: estimateModelCapability(entry.model),
+      });
     }
   }
 
   rows.sort(
     (a, b) =>
       a.verifiedInProvider - b.verifiedInProvider ||
+      // Strongest chat model first inside the provider (rule 2 above).
+      b.capability - a.capability ||
       a.provider.localeCompare(b.provider) ||
       a.model.localeCompare(b.model),
   );

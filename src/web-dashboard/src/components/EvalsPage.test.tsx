@@ -87,6 +87,33 @@ describe('EvalsPage', () => {
     expect(screen.getByText('72%')).toBeTruthy();
   });
 
+  it('says the cost is an estimate, and shows a dash when a run recorded none', async () => {
+    mockAuthed();
+    // An older run carries no `totalCostUsd`. It used to render `$0.0000` — the
+    // page's own "free" claim about a run nobody priced.
+    const unpriced = {
+      ...DATA,
+      evals: {
+        ...(DATA.evals as NonNullable<DashboardData['evals']>),
+        runs: [
+          {
+            ...(DATA.evals as NonNullable<DashboardData['evals']>).runs[0],
+            summary: {
+              ...(DATA.evals as NonNullable<DashboardData['evals']>).runs[0].summary,
+              totalCostUsd: undefined,
+            },
+          },
+        ],
+      },
+    } as unknown as DashboardData;
+    render(<EvalsPage data={unpriced} />);
+
+    await waitFor(() => expect(screen.getByText('groq')).toBeTruthy());
+    expect(screen.getByText('Cost (est.)')).toBeTruthy();
+    expect(screen.queryByText('$0.0000')).toBeNull();
+    expect(screen.getAllByText('—').length).toBeGreaterThanOrEqual(1);
+  });
+
   it('a preset button starts the right eval task with the eval timeout', async () => {
     mockAuthed();
     mockRunApi();

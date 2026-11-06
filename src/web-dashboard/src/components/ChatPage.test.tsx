@@ -7,9 +7,11 @@
  */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import ChatPage, { capabilityModeFromValue } from './ChatPage';
 import { dashboardAPI, setAdminToken } from '../api';
+import { __resetChatFocusForTests } from '../chat-focus';
+import { __resetChatCommandsForTests, requestChatCommand } from '../chat-commands';
 import type { TraceFinding } from '../types';
 
 function mockAuthed(role: 'admin' | 'operator' | 'viewer' = 'admin', authenticated = true) {
@@ -59,6 +61,10 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   setAdminToken(null);
+  // Module-level stores outlive cleanup(), so the focus mode is reset here or
+  // it would hide the shell for the next test in this file.
+  __resetChatFocusForTests();
+  __resetChatCommandsForTests();
 });
 
 describe('capabilityModeFromValue — the toggle mirrors the server parse', () => {
@@ -584,6 +590,51 @@ describe('ChatPage', () => {
     expect(screen.getByText(/groq \/ llama-3.3-70b/)).toBeTruthy();
   });
 
+  it('`/skill <name>` pins a skill for the following turns, shows a chip, and sends it with the turn', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+
+    // The command is consumed by the page — it is never sent as a message.
+    fireEvent.change(box, { target: { value: '/skill API-Design, api-testing' } });
+    fireEvent.submit(box.closest('form')!);
+    expect(send).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.getAllByText(/api-design/).length).toBeGreaterThan(0));
+
+    fireEvent.change(box, { target: { value: 'build the API' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    // The two pinned names ride with the turn — the server resolves them and the
+    // engine loads each methodology, so this is the GUI half of `--skill`.
+    expect(send.mock.calls[0][1]).toBe('build the API');
+    const opts = send.mock.calls[0][2] as { skills?: string[] };
+    expect(opts.skills).toEqual(['api-design', 'api-testing']);
+  });
+
+  it('`/skill` with no name clears the pins, so the next turn carries none', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    const send = mockChatSend(OK_RESPONSE);
+    render(<ChatPage />);
+    const box = await screen.findByPlaceholderText(/Message the agent/);
+
+    fireEvent.change(box, { target: { value: '/skill api-design' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(screen.getAllByText(/api-design/).length).toBeGreaterThan(0));
+
+    fireEvent.change(box, { target: { value: '/skill' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(screen.queryAllByText(/api-design/)).toHaveLength(0));
+
+    fireEvent.change(box, { target: { value: 'just chat' } });
+    fireEvent.submit(box.closest('form')!);
+    await waitFor(() => expect(send).toHaveBeenCalled());
+    const opts = send.mock.calls[0][2] as { skills?: string[] };
+    expect(opts.skills).toBeUndefined();
+  });
+
   it('clicking a followup chip sends its prompt as the next message', async () => {
     mockAuthed('admin');
     mockChatStream();
@@ -997,6 +1048,61 @@ describe('ChatPage', () => {
     expect(screen.getAllByText(/2\/2 steps/).length).toBeGreaterThan(0);
     // …and the changed file, straight off the report.
     expect(screen.getByText(/1 file changed/)).toBeTruthy();
+    // No `cost` on the report = the ledger recorded nothing, which is NOT the
+    // same as free — so the card must not print a dollar at all.
+    expect(screen.queryByTestId('turn-spend')).toBeNull();
+  });
+
+  it('E — the turn card prints the whole spend breakdown, each bucket naming its evidence', async () => {
+    mockAuthed('admin');
+    mockChatStream();
+    mockChatSend({
+      ...OK_RESPONSE,
+      turnReport: {
+        goal: 'fix add in math.js',
+        planned: false,
+        steps: [],
+        stepCounts: { done: 0, blocked: 0, pending: 0, running: 0, total: 0 },
+        toolCalls: ['edit_file'],
+        successfulToolCalls: ['edit_file'],
+        mutations: 1,
+        changedPaths: ['math.js'],
+        verification: 'verified',
+        flags: {},
+        // One provider-billed call, two list-priced calls on an account whose
+        // tier was never declared — the common fresh-install shape.
+        cost: {
+          tokens: 12_345,
+          calls: 3,
+          reportedCalls: 1,
+          exactUsd: 0.001,
+          listedCalls: 0,
+          estimatedUsd: 0,
+          unverifiedCalls: 2,
+          unverifiedUsd: 0.0034,
+          unverifiedProviders: ['deepseek'],
+          freeCalls: 0,
+          freeValueUsd: 0,
+          unpricedCalls: 0,
+        },
+        summary: '1 file(s) changed · verification: verified',
+      },
+    });
+    render(<ChatPage />);
+    await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
+
+    fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'fix add' } });
+    fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
+
+    await waitFor(() => expect(screen.getByTestId('turn-spend')).toBeTruthy());
+    const line = screen.getByTestId('turn-spend').textContent ?? '';
+    // The billed figure is exact; the undeclared-tier figure is an estimate AND
+    // comes with the one command that would make it exact.
+    expect(line).toContain('$0.001000 exact');
+    expect(line).toContain('~$0.003400 unverified');
+    expect(line).toContain('12.3K tok');
+    expect(line).toContain('3 calls');
+    expect(line).toContain('declare providers.deepseek.billingTier');
   });
 
   it('E — an unverified report renders UNVERIFIED with the honesty flag chips', async () => {
@@ -2011,5 +2117,123 @@ describe('Cluster G — the temporary (scratch) workspace', () => {
 
     await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/named-app'));
     expect(screen.queryByTestId('chat-scratch-notice')).toBeNull();
+  });
+});
+
+/**
+ * Focus mode is a bridge between this page and the shell, and the failure that
+ * matters is a one-way door: a mode that hides the navigation with no control
+ * left to leave it. So the tests drive the control, the keyboard and the
+ * attribute together.
+ */
+describe('ChatPage — focus mode', () => {
+  const focusAttr = () => document.documentElement.getAttribute('data-chat-focus');
+  const focusButton = () => screen.getByRole('button', { name: /focus/i });
+
+  it('gives the conversation the window and gives it back', async () => {
+    mockAuthed();
+    mockChatStream();
+    render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message the agent/);
+
+    expect(focusAttr()).toBe('off');
+    fireEvent.click(focusButton());
+    expect(focusAttr()).toBe('on');
+    expect(focusButton().getAttribute('aria-pressed')).toBe('true');
+    expect(focusButton().textContent).toMatch(/exit focus/i);
+
+    fireEvent.click(focusButton());
+    expect(focusAttr()).toBe('off');
+    expect(focusButton().textContent).toMatch(/^⤢ Focus$/);
+  });
+
+  it('leaves on Escape, and puts focus back on the control', async () => {
+    mockAuthed();
+    mockChatStream();
+    render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message the agent/);
+
+    fireEvent.click(focusButton());
+    expect(focusAttr()).toBe('on');
+
+    fireEvent.keyDown(focusButton(), { key: 'Escape' });
+    expect(focusAttr()).toBe('off');
+    // The exit must not drop focus onto <body>: the next Tab would start over
+    // from the top of the document.
+    expect(document.activeElement).toBe(focusButton());
+  });
+
+  it('toggles with `f` while reading, and never while typing', async () => {
+    mockAuthed();
+    mockChatStream();
+    render(<ChatPage />);
+
+    const composer = await screen.findByPlaceholderText(/Message the agent/);
+    fireEvent.keyDown(composer, { key: 'f' });
+    expect(focusAttr()).toBe('off');
+
+    const heading = screen.getByText(/Say anything/);
+    fireEvent.keyDown(heading, { key: 'f' });
+    expect(focusAttr()).toBe('on');
+  });
+});
+
+/**
+ * The palette's chat actions arrive through the command queue. What matters is
+ * that the page, not the shell, enforces the rules: a folder request opens the
+ * input the page already has, and a new-chat request that arrives BEFORE the
+ * page mounts must prevent the resume rather than run after it.
+ */
+describe('ChatPage — palette commands', () => {
+  it('focuses the project path input for an attach request', async () => {
+    mockAuthed();
+    mockChatStream();
+    render(<ChatPage />);
+    const input = await screen.findByPlaceholderText(/or type a path/);
+
+    act(() => requestChatCommand('attach-project'));
+    expect(document.activeElement).toBe(input);
+  });
+
+  it('does not resume the stored session when a new chat was requested before mount', async () => {
+    mockAuthed();
+    mockChatStream();
+    const getSession = vi.spyOn(dashboardAPI, 'getChatSession').mockResolvedValue({
+      title: 'earlier chat',
+      updatedAt: 1,
+      busy: false,
+      turns: [{ role: 'user' as const, content: 'the conversation to replace' }],
+    });
+
+    requestChatCommand('new-chat');
+    render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message the agent/);
+    await waitFor(() => expect(getSession).not.toHaveBeenCalled());
+    expect(screen.queryByText('the conversation to replace')).toBeNull();
+  });
+
+  it('opens the history as a drawer in focus mode, and Escape closes it before the mode', async () => {
+    mockAuthed();
+    mockChatStream();
+    render(<ChatPage />);
+    await screen.findByPlaceholderText(/Message the agent/);
+
+    fireEvent.click(screen.getByRole('button', { name: /focus/i }));
+    // Entering focus collapses history to the rail, so the drawer starts shut.
+    expect(screen.queryByLabelText(/close conversation history/i)).toBeNull();
+
+    fireEvent.click(screen.getByTitle('Show history'));
+    const scrim = screen.getByRole('button', { name: /close conversation history/i });
+    expect(scrim).toBeDefined();
+
+    // Escape from inside the drawer closes the drawer, not focus mode.
+    const newChatButton = screen.getByTitle('New chat');
+    fireEvent.keyDown(newChatButton, { key: 'Escape' });
+    expect(document.documentElement.getAttribute('data-chat-focus')).toBe('on');
+    expect(screen.queryByLabelText(/close conversation history/i)).toBeNull();
+
+    // A second Escape, now that the drawer is gone, leaves focus mode.
+    fireEvent.keyDown(screen.getByRole('button', { name: /focus/i }), { key: 'Escape' });
+    expect(document.documentElement.getAttribute('data-chat-focus')).toBe('off');
   });
 });

@@ -74,16 +74,75 @@ describe('write_file — authorized creation needs no round trip', () => {
     expect(result).toContain('state-changing — NOT applied');
   });
 
-  it('still refuses to OVERWRITE existing content the request asked for', async () => {
+  /**
+   * The run's OWN output is recoverable — measured (trace-1793853385112-sf2exl):
+   * an assessment turn created its report and could not add the next section, so
+   * the deliverable on disk stopped at §1. The gate was asking about USER data it
+   * was not being shown; these two cases are what separates them.
+   */
+  it('overwrites a file THIS RUN wrote (unchanged) without a round trip', async () => {
     const existing = join(root, 'kharig-nights.md');
     const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
-    // The first write creates it (authorized) …
     await callWriteFile({ path: 'kharig-nights.md', content: 'first draft' }, ctx);
-    // … and the second must NOT silently replace it — a re-run cannot recover it.
-    const second = await callWriteFile({ path: 'kharig-nights.md', content: 'overwritten' }, ctx);
 
-    expect(second).toContain('state-changing — NOT applied');
-    expect(readFileSync(existing, 'utf-8')).toBe('first draft');
+    const second = await callWriteFile({ path: 'kharig-nights.md', content: 'second draft' }, ctx);
+
+    expect(second).toContain("overwrote 'kharig-nights.md'");
+    expect(second).toContain('Applied without asking');
+    expect(readFileSync(existing, 'utf-8')).toBe('second draft');
+  });
+
+  it('still refuses to overwrite content this run did NOT write', async () => {
+    const existing = join(root, 'kharig-nights.md');
+    writeFileSync(existing, 'content a person wrote', 'utf-8');
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+
+    const result = await callWriteFile({ path: 'kharig-nights.md', content: 'overwritten' }, ctx);
+
+    expect(result).toContain('state-changing — NOT applied');
+    expect(readFileSync(existing, 'utf-8')).toBe('content a person wrote');
+  });
+
+  it('asks again when the file changed after this run wrote it', async () => {
+    const target = join(root, 'report.md');
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+    await callWriteFile({ path: 'report.md', content: 'our section' }, ctx);
+    // Someone else edits it → the recorded bytes no longer match the file.
+    writeFileSync(target, 'our section, plus a human note', 'utf-8');
+
+    const result = await callWriteFile({ path: 'report.md', content: 'replaced' }, ctx);
+
+    expect(result).toContain('state-changing — NOT applied');
+    expect(readFileSync(target, 'utf-8')).toBe('our section, plus a human note');
+  });
+
+  /**
+   * APPEND — the affordance built for a document larger than one model output.
+   * It was gated the moment the file existed, i.e. exactly when section two
+   * needed it, which is why a long deliverable got abandoned instead of grown.
+   */
+  it('appends section two to the report it just created, without confirm', async () => {
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+    await callWriteFile({ path: 'report.md', content: '# Report\n\n## 1. Summary\n' }, ctx);
+    const second = await callWriteFile(
+      { path: 'report.md', mode: 'append', content: '\n## 2. Findings\nDetails.\n' },
+      ctx,
+    );
+
+    expect(second).toContain("appended to 'report.md'");
+    expect(readFileSync(join(root, 'report.md'), 'utf-8')).toBe(
+      '# Report\n\n## 1. Summary\n\n## 2. Findings\nDetails.\n',
+    );
+  });
+
+  it('refuses to append to a pre-existing file nobody mentioned', async () => {
+    writeFileSync(join(root, 'README.md'), 'existing readme', 'utf-8');
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+
+    const result = await callWriteFile({ path: 'README.md', mode: 'append', content: '\nmore' }, ctx);
+
+    expect(result).toContain('state-changing — NOT applied');
+    expect(readFileSync(join(root, 'README.md'), 'utf-8')).toBe('existing readme');
   });
 
   it('honours an explicit confirm:true as before', async () => {
@@ -320,5 +379,107 @@ describe('write_file — a whole-file replace needs the path to be NAMED', () =>
 
     expect(result).toContain("overwrote 'index.html'");
     expect(readFileSync(join(root, 'index.html'), 'utf-8')).toBe('<p>new</p>');
+  });
+});
+
+/**
+ * `edit_file` on the run's OWN document.
+ *
+ * Measured (trace-1793853385112-sf2exl): the turn that created a report could
+ * not finish it — `edit_file` came back "rewriting 396% of 'AUDIT_CROSSCHECK.md'
+ * replaces too much of what already exists to assume it". True of a user's file;
+ * false of the run's own output, which is the case that actually happened.
+ */
+describe('edit_file — finishing the document this run wrote', () => {
+  async function callEditFile(args: Record<string, unknown>, ctx: ToolContext): Promise<string> {
+    const tool = getTool('edit_file');
+    if (!tool) throw new Error('edit_file not registered');
+    return tool.run(args, ctx);
+  }
+
+  it('applies a near-total rewrite of a file this run wrote', async () => {
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+    await callWriteFile({ path: 'AUDIT.md', content: '# Audit\n\n## 1. Summary\nplaceholder\n' }, ctx);
+
+    const result = await callEditFile(
+      {
+        path: 'AUDIT.md',
+        old_string: '## 1. Summary\nplaceholder',
+        new_string: '## 1. Summary\n\nReal finding.\n\n## 2. Findings\n\nMore.\n\n## 3. Verdict\n\nShip it.',
+      },
+      ctx,
+    );
+
+    expect(result).toContain("applied to 'AUDIT.md'");
+    expect(readFileSync(join(root, 'AUDIT.md'), 'utf-8')).toContain('## 3. Verdict');
+  });
+
+  it('still refuses a near-total rewrite of a file this run did not write', async () => {
+    writeFileSync(join(root, 'AUDIT.md'), '# Audit\n\n## 1. Summary\nplaceholder\n', 'utf-8');
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(STORY_ASK) };
+
+    const result = await callEditFile(
+      {
+        path: 'AUDIT.md',
+        old_string: '## 1. Summary\nplaceholder',
+        new_string: '## 1. Summary\n\nReal finding.\n\n## 2. Findings\n\nMore.\n\n## 3. Verdict\n\nShip it.',
+      },
+      ctx,
+    );
+
+    expect(result).toContain('state-changing — NOT applied');
+    expect(readFileSync(join(root, 'AUDIT.md'), 'utf-8')).toContain('placeholder');
+  });
+});
+
+/**
+ * THE INCIDENT, reproduced end-to-end through the real tools.
+ *
+ * `trace-1793853385112-sf2exl` asked "assess this project". The turn created its
+ * report, then could not add §2 (the path existed) and could not rewrite it
+ * (396% of the file), because the prompt forbids asking for work the request
+ * already ordered. The deliverable ended as a §1 fragment — while a complete
+ * document was one append away.
+ *
+ * This is the whole sequence a real assessment turn needs, with the real
+ * authorization verdict derived from the real words the user typed.
+ */
+describe('regression — an assessment turn finishes its own report', () => {
+  // The live message was long (the user pasted Claude's verdict into it), which is
+  // what made `requestAuthorizesWrites` true there. Named explicitly here so the
+  // test pins the SEQUENCE, not the phrasing luck of one paste.
+  const ASK = 'assess this project and write the findings to a report file';
+
+  it('creates, appends and edits one report without a single refusal', async () => {
+    const ctx: ToolContext = { configManager: {}, cwd: root, writesAuthorized: auth(ASK) };
+    const report = join(root, 'AUDIT_CROSSCHECK.md');
+
+    const created = await callWriteFile({ path: 'AUDIT_CROSSCHECK.md', content: '# Cross-check\n\n## 1. Verdict\n' }, ctx);
+    expect(created).toContain("created 'AUDIT_CROSSCHECK.md'");
+
+    const appended = await callWriteFile(
+      { path: 'AUDIT_CROSSCHECK.md', mode: 'append', content: '\n## 2. Confirmed\n\nEleven claims checked.\n' },
+      ctx,
+    );
+    expect(appended).toContain("appended to 'AUDIT_CROSSCHECK.md'");
+
+    const editTool = getTool('edit_file');
+    if (!editTool) throw new Error('edit_file not registered');
+    const edited = await editTool.run(
+      {
+        path: 'AUDIT_CROSSCHECK.md',
+        old_string: '## 2. Confirmed\n\nEleven claims checked.',
+        new_string: '## 2. Confirmed\n\nEleven claims checked, none refuted.\n\n## 3. Refuted\n\nNone.',
+      },
+      ctx,
+    );
+    expect(edited).toContain("applied to 'AUDIT_CROSSCHECK.md'");
+
+    // ONE file, every section — not a fragment plus two orphans.
+    const final = readFileSync(report, 'utf-8');
+    expect(final).toContain('## 1. Verdict');
+    expect(final).toContain('## 2. Confirmed');
+    expect(final).toContain('## 3. Refuted');
+    expect(final).toContain('Eleven claims checked, none refuted.');
   });
 });

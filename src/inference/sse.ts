@@ -108,7 +108,7 @@ export function streamIdleTimeoutMs(): number {
  * directly; `onIdle` then aborts the request so the socket is released rather than
  * left open behind a rejected promise.
  */
-async function readWithIdleGuard(
+export async function readWithIdleGuard(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   idleMs: number,
   onIdle: () => void,

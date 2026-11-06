@@ -698,10 +698,10 @@ export const apiDesignSkill: Skill = {
   id: BUNDLED_SKILL_ID_API_DESIGN,
   name: 'api-design',
   description:
-    'Design and implement a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes, and write integration tests. Use when the goal asks to create an API, design endpoints, build a REST service, or scaffold an HTTP backend.',
+    'Design, implement and deploy a REST API: gather requirements, design endpoints with proper HTTP methods/status codes, produce an OpenAPI spec, implement routes with auth and rate limiting, write integration tests, and ship it. Use when the goal asks to create an API, scaffold a backend service, design endpoints, or build a REST service.',
   version: '2.0.0',
   goalPattern:
-    'API design REST endpoint route HTTP backend server create implement OpenAPI swagger',
+    'API design REST endpoint route HTTP backend server create build implement deploy scaffold OpenAPI swagger',
   // Hermes-style: detailed when-to-use sections
   whenToUse: [
     'User wants to create a REST API for a web application',
@@ -2214,88 +2214,6 @@ export const searchSetupSkill: Skill = {
   lastUsedAt: BUNDLED_CREATED_AT,
 };
 
-/** ─── email-setup ─── */
-export const emailSetupSkill: Skill = {
-  id: 'skill-email-setup',
-  name: 'email-setup',
-  description: 'Set up transactional email: design responsive HTML templates, configure SMTP/API delivery (SendGrid, Resend, Mailgun, Postmark), and build email sending functions. Use when the goal asks to send emails, build email templates, or configure email delivery.',
-  version: '1.0.0',
-  goalPattern: 'email send template smtp resend sendgrid mailgun postmark newsletter transactional email',
-  steps: [
-    {
-      agentType: 'analyst',
-      dependsOn: [],
-      description: 'Choose the email provider and create an account. Install the SDK (e.g. resend, @sendgrid/mail). Set up env vars for API keys.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-1'],
-      description: 'Design HTML email templates: create responsive templates for transactional emails (welcome, password reset, notifications). Use tables for email client compatibility.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-2'],
-      description: 'Build the send function: wrap the provider SDK with a typed send() function that handles from/to/subject/template/variables. Add retry logic for transient failures.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-3'],
-      description: 'Test end-to-end: send a test email, verify delivery, check spam score, and validate that links and tracking work. Test with multiple email clients.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-4'],
-      description: 'Add webhook handlers for delivery events (delivered, opened, clicked, bounced). Log events for analytics and monitoring.',
-    },
-  ],
-  parameters: [
-    { name: 'provider', description: 'Email provider', type: 'choice', required: false, options: ['resend', 'sendgrid', 'mailgun', 'postmark', 'smtp', 'auto'], defaultValue: 'auto' },
-  ],
-  tags: ['email', 'smtp', 'template', 'transactional', 'sendgrid', 'resend', 'delivery'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
-/** ─── payment-setup ─── */
-export const paymentSetupSkill: Skill = {
-  id: 'skill-payment-setup',
-  name: 'payment-setup',
-  description: 'Integrate payment processing with Stripe: implement checkout, subscriptions, webhooks, and invoice handling. Use when the goal asks to add payments, billing, subscriptions, or checkout to an app.',
-  version: '1.0.0',
-  goalPattern: 'payment stripe checkout subscription billing invoice payment processing recurring charge',
-  steps: [
-    {
-      agentType: 'analyst',
-      dependsOn: [],
-      description: 'Set up Stripe: create an account, install the SDK, configure API keys (test + live), and define products/prices in the Stripe dashboard.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-1'],
-      description: 'Implement checkout: create a checkout session endpoint, handle success/cancel redirects, and store the session ID for reconciliation.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-2'],
-      description: 'Handle webhooks: register endpoint for checkout.session.completed, invoice.paid, subscription.deleted events. Verify webhook signatures for security.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-3'],
-      description: 'Implement subscriptions: create pricing tables, handle plan changes (upgrade/downgrade), proration, and cancellation flows.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-4'],
-      description: 'Test end-to-end: use Stripe test cards, verify webhook delivery, test failure scenarios (declined cards, failed payments), and validate receipt emails.',
-    },
-  ],
-  parameters: [
-    { name: 'mode', description: 'Integration mode', type: 'choice', required: false, options: ['checkout', 'subscriptions', 'invoices', 'full'], defaultValue: 'full' },
-  ],
-  tags: ['payment', 'stripe', 'checkout', 'subscription', 'billing', 'webhooks'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
 /** ─── auth-setup ─── */
 export const authSetupSkill: Skill = {
   id: 'skill-auth-setup',
@@ -2330,88 +2248,6 @@ export const authSetupSkill: Skill = {
     { name: 'strategy', description: 'Auth strategy', type: 'choice', required: false, options: ['oauth2', 'magic-link', 'jwt', 'session', 'rbac', 'auto'], defaultValue: 'auto' },
   ],
   tags: ['auth', 'login', 'oauth', 'jwt', 'session', 'rbac', 'security'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
-/** ─── monitoring-setup ─── */
-export const monitoringSetupSkill: Skill = {
-  id: 'skill-monitoring-setup',
-  name: 'monitoring-setup',
-  description: 'Set up application monitoring: structured logging, metrics collection, alerting rules, and health checks. Use when the goal asks to add logging, monitoring, observability, or alerting.',
-  version: '1.0.0',
-  goalPattern: 'monitoring logging metrics alerting observability health check prometheus grafana datadog structured logs',
-  steps: [
-    {
-      agentType: 'analyst',
-      dependsOn: [],
-      description: 'Choose the monitoring stack: logging (Pino, Winston, structured JSON), metrics (Prometheus, OpenTelemetry), and dashboards (Grafana, Datadog).',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-1'],
-      description: 'Add structured logging: instrument all key code paths with log levels (debug, info, warn, error). Include request ID, user ID, and duration for every request.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-2'],
-      description: 'Add metrics: instrument HTTP requests (latency, status codes), business metrics (signups, orders), and system metrics (memory, CPU, event loop lag).',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-3'],
-      description: 'Create alerting rules: define alerts for error rate spikes, latency degradation, high memory usage, and dependency failures.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-4'],
-      description: 'Build a health-check endpoint: verify DB, cache, and external service connectivity. Add readiness and liveness probes.',
-    },
-  ],
-  parameters: [
-    { name: 'stack', description: 'Monitoring stack', type: 'choice', required: false, options: ['pino', 'winston', 'opentelemetry', 'datadog', 'auto'], defaultValue: 'auto' },
-  ],
-  tags: ['monitoring', 'logging', 'metrics', 'alerting', 'observability', 'health-check'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
-/** ─── backup-recovery ─── */
-export const backupRecoverySkill: Skill = {
-  id: 'skill-backup-recovery',
-  name: 'backup-recovery',
-  description: 'Design and implement backup and disaster recovery: automated database backups, point-in-time recovery, S3 snapshots, and runbook documentation. Use when the goal asks to set up backups, recovery, or disaster resilience.',
-  version: '1.0.0',
-  goalPattern: 'backup recovery disaster recovery database backup restore snapshots runbook resilience',
-  steps: [
-    {
-      agentType: 'analyst',
-      dependsOn: [],
-      description: 'Audit current state: identify all data stores (DB, file storage, cache), their backup capabilities, and current RPO/RTO targets.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-1'],
-      description: 'Design backup strategy: define frequency (continuous, hourly, daily), retention policy, storage location (S3, GCS, separate region), and encryption.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-2'],
-      description: 'Implement automated backups: write cron jobs or scheduled tasks for database dumps, file snapshots, and configuration backups. Verify checksums.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-3'],
-      description: 'Test recovery: perform a full restore to an isolated environment, verify data integrity, measure recovery time.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-4'],
-      description: 'Write a disaster recovery runbook: step-by-step recovery procedures, contact list, escalation path, and post-mortem template.',
-    },
-  ],
-  parameters: [
-    { name: 'scope', description: 'Backup scope', type: 'choice', required: false, options: ['database', 'full-stack', 'incremental', 'point-in-time'], defaultValue: 'full-stack' },
-  ],
-  tags: ['backup', 'recovery', 'disaster-recovery', 'resilience', 'runbook', 'rpo', 'rto'],
   sourceTrajectoryIds: ['bundled'],
   qualityScore: 0.9,
   usageCount: 0,
@@ -2665,47 +2501,6 @@ export const legalComplianceSkill: Skill = {
   lastUsedAt: BUNDLED_CREATED_AT,
 };
 
-/** ─── cron-setup ─── */
-export const cronSetupSkill: Skill = {
-  id: 'skill-cron-setup',
-  name: 'cron-setup',
-  description: 'Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to schedule tasks, set up cron jobs, or automate periodic work.',
-  version: '1.0.0',
-  goalPattern: 'cron schedule task periodic timer interval report cleanup sync automation scheduled',
-  steps: [
-    {
-      agentType: 'analyst',
-      dependsOn: [],
-      description: 'Define the schedule: determine frequency (every minute, hourly, daily, weekly), timezone, and whether the job needs to run on a specific server or distributed.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-1'],
-      description: 'Choose the scheduler: node-cron, bull/bullmq, system crontab, or cloud scheduler (Cloud Functions, Lambda, GitHub Actions).',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-2'],
-      description: 'Implement the job: write the task logic with proper error handling, idempotency (safe to re-run), and logging. Include a heartbeat.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-3'],
-      description: 'Add monitoring: log start/end, duration, and outcome. Set up alerts for missed runs or excessive duration.',
-    },
-    {
-      agentType: 'analyst', dependsOn: ['step-4'],
-      description: 'Test the schedule: run the job manually, verify it handles failures gracefully, and document the job for future maintainers.',
-    },
-  ],
-  parameters: [
-    { name: 'scheduler', description: 'Scheduler', type: 'choice', required: false, options: ['node-cron', 'bullmq', 'crontab', 'github-actions', 'auto'], defaultValue: 'auto' },
-  ],
-  tags: ['cron', 'schedule', 'automation', 'periodic', 'timer', 'jobs'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
 /** ─── image-optimize ─── */
 export const imageOptimizeSkill: Skill = {
   id: 'skill-image-optimize',
@@ -2768,28 +2563,6 @@ export const cacheSetupSkill: Skill = {
     { name: 'backend', description: 'Cache backend', type: 'choice', required: false, options: ['redis', 'memcached', 'memory', 'auto'], defaultValue: 'auto' },
   ],
   tags: ['cache', 'redis', 'memcached', 'performance', 'caching', 'speed'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
-};
-
-/** ─── queue-setup ─── */
-export const queueSetupSkill: Skill = {
-  id: 'skill-queue-setup',
-  name: 'queue-setup',
-  description: 'Set up message queues: BullMQ, RabbitMQ, or SQS for background jobs, task processing, and event-driven architecture. Use when the goal asks to add background jobs, task queues, or async processing.',
-  version: '1.0.0',
-  goalPattern: 'queue job background worker bullmq rabbitmq sqs async processing task',
-  steps: [
-    { agentType: 'analyst', dependsOn: [], description: 'Identify job types: email sending, image processing, data sync, report generation. Choose the queue backend.' },
-    { agentType: 'analyst', dependsOn: ['step-0'], description: 'Set up the queue: install the library, configure Redis/connection, define job schemas with TypeScript types.' },
-    { agentType: 'analyst', dependsOn: ['step-1'], description: 'Implement producers: add enqueue functions with retry logic, priority, delays, and deduplication.' },
-    { agentType: 'analyst', dependsOn: ['step-2'], description: 'Implement consumers: write worker processors with concurrency limits, error handling, and dead-letter queues.' },
-    { agentType: 'analyst', dependsOn: ['step-3'], description: 'Add monitoring: dashboard for queue depth, processing times, failures. Set up alerts for stuck jobs.' },
-  ],
-  parameters: [
-    { name: 'backend', description: 'Queue backend', type: 'choice', required: false, options: ['bullmq', 'rabbitmq', 'sqs', 'auto'], defaultValue: 'auto' },
-  ],
-  tags: ['queue', 'job', 'background', 'worker', 'async', 'bullmq', 'rabbitmq'],
   sourceTrajectoryIds: ['bundled'],
   qualityScore: 0.9, usageCount: 0, createdAt: BUNDLED_CREATED_AT, lastUsedAt: BUNDLED_CREATED_AT,
 };
@@ -3205,9 +2978,9 @@ export const githubActionsSkill: Skill = {
 export const prometheusSkill: Skill = {
   id: 'skill-prometheus',
   name: 'prometheus',
-  description: 'Set up Prometheus monitoring and alerting. Use when the goal asks to add metrics collection, dashboards, or alerting rules.',
+  description: 'Set up Prometheus monitoring: metrics, dashboards, alerting rules, plus structured logging and health/readiness endpoints. Use when the goal asks to add monitoring, metrics collection, dashboards, alerting, structured logs, or a health check.',
   version: '1.0.0',
-  goalPattern: 'prometheus monitoring metrics alert grafana dashboard promql',
+  goalPattern: 'prometheus monitoring metrics alert grafana dashboard promql observability logging structured logs health check health-check readiness liveness datadog opentelemetry',
   steps: [
     { agentType: 'analyst', dependsOn: [], description: 'Define key metrics: request rate, error rate, latency percentiles, resource utilization.' },
     { agentType: 'analyst', dependsOn: ['step-0'], description: 'Instrument application with Prometheus client library (counters, histograms, gauges).' },
@@ -3265,9 +3038,9 @@ export const redisCacheSkill: Skill = {
 export const kafkaQueueSkill: Skill = {
   id: 'skill-kafka-queue',
   name: 'kafka-queue',
-  description: 'Set up Kafka message queues. Use when the goal asks to add event streaming, message queues, or async processing with Kafka.',
+  description: 'Set up event streaming and background job queues: Kafka topics/consumer groups, or BullMQ/RabbitMQ/SQS workers. Use when the goal asks to add message queues, event streaming, background jobs, task queues, or async processing.',
   version: '1.0.0',
-  goalPattern: 'kafka message queue event streaming async processing producer consumer',
+  goalPattern: 'kafka message queue event streaming async processing producer consumer background worker bullmq rabbitmq sqs task queue jobs',
   steps: [
     { agentType: 'analyst', dependsOn: [], description: 'Design topic schema and partition strategy. Define producer and consumer groups.' },
     { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement producers with batching, compression, and idempotent writes.' },
@@ -3285,9 +3058,9 @@ export const kafkaQueueSkill: Skill = {
 export const terraformSkill: Skill = {
   id: 'skill-terraform',
   name: 'terraform',
-  description: 'Write Terraform infrastructure-as-code. Use when the goal asks to provision, manage, or version cloud infrastructure.',
+  description: 'Write infrastructure-as-code with Terraform (Pulumi or CloudFormation where the project already uses them): modules, remote state, drift detection, and multi-environment setups. Use when the goal asks to provision, manage, or version cloud infrastructure.',
   version: '1.0.0',
-  goalPattern: 'terraform infrastructure iac provision cloud resource module state',
+  goalPattern: 'terraform infrastructure iac provision cloud resource module state pulumi cloudformation drift multi-environment',
   steps: [
     { agentType: 'analyst', dependsOn: [], description: 'Define infrastructure resources, data sources, and variables. Choose state backend (S3, GCS, TF Cloud).' },
     { agentType: 'analyst', dependsOn: ['step-0'], description: 'Write resource configurations with proper tagging, encryption, and networking.' },
@@ -3365,9 +3138,9 @@ export const dnsSetupSkill: Skill = {
 export const cronJobSkill: Skill = {
   id: 'skill-cron-job',
   name: 'cron-job',
-  description: 'Set up scheduled tasks and cron jobs. Use when the goal asks to automate recurring tasks, schedule jobs, or set up crons.',
+  description: 'Set up scheduled tasks and cron jobs: periodic reports, cleanup jobs, data sync, and monitoring probes. Use when the goal asks to automate recurring tasks, schedule jobs, set up crons, or run work on a timer.',
   version: '1.0.0',
-  goalPattern: 'cron schedule job recurring task automated periodic timer',
+  goalPattern: 'cron schedule job recurring task automated periodic timer interval report cleanup sync jobs',
   steps: [
     { agentType: 'analyst', dependsOn: [], description: 'Define task schedule (cron expression, interval). Identify task dependencies and retry logic.' },
     { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement task with idempotency, timeout handling, and distributed locking.' },
@@ -3385,9 +3158,9 @@ export const cronJobSkill: Skill = {
 export const backupStrategySkill: Skill = {
   id: 'skill-backup-strategy',
   name: 'backup-strategy',
-  description: 'Design and implement backup strategies. Use when the goal asks to set up backups, disaster recovery, or data protection.',
+  description: 'Design and implement backup and disaster recovery: RPO/RTO, automated snapshots, point-in-time restore, retention, and the recovery runbook. Use when the goal asks to set up backups, disaster recovery, a restore procedure, or data protection.',
   version: '1.0.0',
-  goalPattern: 'backup disaster recovery retention snapshot restore data protection',
+  goalPattern: 'backup disaster recovery retention snapshot restore data protection point in time pitr runbook resilience',
   steps: [
     { agentType: 'analyst', dependsOn: [], description: 'Define RPO (Recovery Point Objective) and RTO (Recovery Time Objective). Identify critical data.' },
     { agentType: 'analyst', dependsOn: ['step-0'], description: 'Implement backup strategy: full, incremental, differential. Choose storage (S3, GCS, tape).' },
@@ -3972,117 +3745,6 @@ export const cliToolSkill: Skill = {
  * OpenAPI spec, integration tests, deployment.
  * Extends the existing api-design skill with implementation and deployment.
  */
-export const apiCreationSkill: Skill = {
-  id: 'skill-api-creation',
-  name: 'api-creation',
-  description:
-    'Create a complete API: design endpoints, implement routes, add auth/rate-limiting, write tests, generate OpenAPI docs, and deploy. Use when the goal asks to create an API, build a backend service, or scaffold an HTTP server with routes.',
-  version: '1.0.0',
-  goalPattern:
-    'API create build backend service REST GraphQL HTTP server routes endpoints implement deploy',
-  steps: [
-    {
-      agentType: 'context-gatherer',
-      description: [
-        'Analyze the project and API requirements:',
-        '- Read package.json / pyproject.toml for framework (Express, Fastify, Hono, Flask, FastAPI, Spring Boot)',
-        '- Identify resources (nouns → endpoints) and operations (CRUD)',
-        '- Note auth requirements (API key, JWT, OAuth2)',
-        '- Note database (PostgreSQL, MongoDB, SQLite, in-memory)',
-        '- Note deployment target (local, Docker, cloud)',
-        'Produce: resource list, framework choice, auth strategy, and database plan.',
-      ].join('\n'),
-      dependsOn: [],
-    },
-    {
-      agentType: 'writer',
-      description: [
-        'Implement the API:',
-        '- Set up the project structure (routes/, models/, middleware/, utils/)',
-        '- Implement route handlers for each resource',
-        '- Add input validation (Joi, Zod, Pydantic, express-validator)',
-        '- Add error handling middleware (consistent error response format)',
-        '- Add auth middleware (JWT verification, API key check)',
-        '- Add rate limiting (express-rate-limit, slowapi)',
-        '- Wire everything into the app entry point',
-        'Follow REST conventions: proper HTTP methods, status codes, and response shapes.',
-      ].join('\n'),
-      dependsOn: ['step-0'],
-    },
-    {
-      agentType: 'writer',
-      description: [
-        'Generate OpenAPI/Swagger documentation:',
-        '- Create openapi.yaml or openapi.json with all endpoints',
-        '- Define request/response schemas',
-        '- Add authentication definitions',
-        '- Add example requests and responses',
-        '- Set up Swagger UI (if web framework supports it)',
-        'The spec is the contract — implementation must match it exactly.',
-      ].join('\n'),
-      dependsOn: ['step-1'],
-    },
-    {
-      agentType: 'tester',
-      description: [
-        'Write and run integration tests:',
-        '- Test each endpoint: happy path, error paths (400, 401, 404, 500)',
-        '- Test auth: unauthenticated → 401, unauthorized → 403',
-        '- Test validation: invalid input → 400 with error details',
-        '- Test edge cases: empty body, missing fields, duplicate resources',
-        '- Run the full test suite: `npm test` or `pytest`',
-        'All tests must pass before proceeding.',
-      ].join('\n'),
-      dependsOn: ['step-2'],
-    },
-    {
-      agentType: 'runner',
-      description: [
-        'Set up deployment:',
-        '- Create Dockerfile (multi-stage build)',
-        '- Create docker-compose.yml (if database needed)',
-        '- Add health check endpoint (GET /health)',
-        '- Add environment variable configuration',
-        '- Create a README with API documentation and usage examples',
-        '- Verify the app starts and responds to requests',
-      ].join('\n'),
-      dependsOn: ['step-3'],
-    },
-  ],
-  parameters: [
-    {
-      name: 'framework',
-      description: 'HTTP framework (auto-detected from project)',
-      type: 'choice',
-      required: false,
-      options: ['express', 'fastify', 'hono', 'flask', 'fastapi', 'spring', 'auto'],
-      defaultValue: 'auto',
-    },
-    {
-      name: 'database',
-      description: 'Database to use',
-      type: 'choice',
-      required: false,
-      options: ['postgresql', 'mongodb', 'sqlite', 'mysql', 'in-memory', 'auto'],
-      defaultValue: 'auto',
-    },
-    {
-      name: 'auth',
-      description: 'Authentication method',
-      type: 'choice',
-      required: false,
-      options: ['jwt', 'api-key', 'oauth2', 'session', 'none'],
-      defaultValue: 'jwt',
-    },
-  ],
-  tags: ['api', 'rest', 'backend', 'http', 'server', 'endpoints', 'deploy'],
-  sourceTrajectoryIds: ['bundled'],
-  qualityScore: 0.9,
-  usageCount: 0,
-  createdAt: BUNDLED_CREATED_AT,
-  lastUsedAt: BUNDLED_CREATED_AT,
-};
-
 /** All bundled skills (new first-party skills append here). */
 export const BUNDLED_SKILLS: Skill[] = [
   websiteDeploySkill,
@@ -4106,22 +3768,16 @@ export const BUNDLED_SKILLS: Skill[] = [
   perfTestSkill,
   a11yAuditSkill,
   searchSetupSkill,
-  emailSetupSkill,
-  paymentSetupSkill,
   authSetupSkill,
-  monitoringSetupSkill,
-  backupRecoverySkill,
   schemaDesignSkill,
   i18nSetupSkill,
   graphqlApiSkill,
   gitReleaseSkill,
   designSystemSkill,
   legalComplianceSkill,
-  cronSetupSkill,
   imageOptimizeSkill,
   pdfGenerateSkill,
   cacheSetupSkill,
-  queueSetupSkill,
   rateLimitSkill,
   corsSetupSkill,
   errorTrackingSkill,
@@ -4159,7 +3815,6 @@ export const BUNDLED_SKILLS: Skill[] = [
   cdnSetupSkill,
   gameDevelopmentSkill,
   cliToolSkill,
-  apiCreationSkill,
 ];
 
 // ── Phase 3: 55 additional skills (Hermes parity + Windows + MCP) ──────────

@@ -79,6 +79,7 @@ import { recordActionFailure, type FailureSessionState } from '../learning/failu
 // nothing usable". An empty completion is a FAILURE, not an answer, and must
 // advance the candidate walk instead of being returned to the caller.
 import { assertUsableModelResponse, isUnusableModelResponseError } from '../learning/response-usability.js';
+import { diagnoseEmptyCompletion } from '../learning/empty-completion.js';
 // P6 (fix_model_routing) — the bandit is told about step-level failures too, so
 // an arm that answers with nothing stops being sampled back up.
 import { getRouterBandit } from '../learning/router-bandit.js';
@@ -88,6 +89,8 @@ import {
   classifyFallbackError,
   isRetryableError,
 } from '../learning/provider-fallback.js';
+import { describeFailureKind } from '../learning/exhaustion-report.js';
+import { startWaitProgress } from './ui/wait-progress.js';
 import { resolveThreadBudgetChars } from '../learning/context-budget.js';
 import { resolveTurnBudget } from '../learning/turn-budget.js';
 import { buildLoopProjectContext } from '../tools/loop-project-context.js';
@@ -316,6 +319,14 @@ export interface LoopExecutorOptions {
    * context, mirroring the pipeline arm's skillGuidance injection.
    */
   skipSkillHint?: boolean;
+  /**
+   * Skills the user PINNED for this run (`--skill` on `nuvira execute`). Their
+   * methodology is placed in the system prompt before the model speaks and the
+   * loads are recorded — the same contract as the chat pin, so "use the
+   * api-design skill" behaves identically on both engines. Absent = nothing
+   * pinned; the advisory hint is unaffected.
+   */
+  skills?: string[];
   /** Override the step bound (default 16 — the loop's own default). */
   maxSteps?: number;
   /** Quiet mode: no progress logging (eval arms). */
@@ -899,6 +910,33 @@ export async function runLoopExecutor(
     }
   }
 
+  // Pinned skills — named by the user, so the methodology is in the prompt
+  // rather than left to a model's discretion (see learning/skill-pin.ts).
+  let pinnedSkillsBlock = '';
+  try {
+    const explicitNames = opts.skills ?? [];
+    // Honour a skill the user names in the goal itself, not only `--skill`.
+    // Exact catalog names only; a plain mention is not a request.
+    let requestedNames: string[] = [];
+    try {
+      const [{ collectSkillEntries }, { detectRequestedSkillNames }] = await Promise.all([
+        import('../tools/loop-skill-hint.js'),
+        import('../learning/skill-request.js'),
+      ]);
+      const entries = await collectSkillEntries(configManager, { projectRoot: turnCwd });
+      requestedNames = detectRequestedSkillNames(goal, entries.map((entry) => entry.name));
+    } catch {
+      requestedNames = []; // best-effort — detection must never break the run
+    }
+    const names = Array.from(new Set([...explicitNames, ...requestedNames]));
+    if (names.length > 0) {
+      const { buildPinnedSkillsForTurn } = await import('../learning/skill-pin.js');
+      pinnedSkillsBlock = (await buildPinnedSkillsForTurn(names, { cwd: turnCwd })).block;
+    }
+  } catch {
+    pinnedSkillsBlock = ''; // best-effort — never breaks the run
+  }
+
   // Machine facts — the host stated once (OS / arch / shell / installed package
   // managers). One detection per process; best-effort (a failure injects nothing).
   let machineBlock = '';
@@ -930,7 +968,7 @@ export async function runLoopExecutor(
   }
 
   const head: ToolMessage[] = [
-    { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + machineBlock + skillHint },
+    { role: 'system', content: buildExecuteLoopSystemPrompt(TOOL_CONTRACT_JSON) + machineBlock + skillHint + pinnedSkillsBlock },
     ...(projectContext ? [{ role: 'user' as const, content: `[Project context]\n${projectContext}` }] : []),
   ];
   // The protocol rides in the USER turn, never the system message: the system layer
@@ -989,6 +1027,14 @@ export async function runLoopExecutor(
   };
   /** Candidates that already failed in THIS turn (attempted, but tried last). */
   const failedPairs = new Set<string>();
+  /**
+   * Pairs already given their one larger-budget retry this step. A step that
+   * provably ended at the OUTPUT CAP is re-asked on the SAME pair (the adapter
+   * has learned it needs more room — see inference/output-budget.ts) instead of
+   * being booked as a provider failure and walked away from. Bounded to one per
+   * pair per step, so a genuinely stuck model still fails over.
+   */
+  const budgetRetried = new Set<string>();
   const pairKey = (p: string, m: string): string => `${p}|${m}`;
 
   // `max` asks the routed model to reason harder. Resolved once per turn from
@@ -1090,8 +1136,14 @@ export async function runLoopExecutor(
     // still owed. Seed the next candidate's messages with the just-written
     // hand-off so "another model takes over" also means "and knows what is left".
     let nextMessages = messages;
+    // Position in the walk, for the visible failover line. `walk` can grow (a
+    // pinned run's config fallbacks are appended on the first failure), so the
+    // total is read at print time rather than captured up front.
+    let attemptNo = 0;
     for (const cand of walk) {
       if (abort?.aborted) break;
+      attemptNo += 1;
+      const attemptStartedAt = Date.now();
       const key = pairKey(cand.provider, cand.model);
       try {
         const prov = await resolveAdapter(cand.provider);
@@ -1173,7 +1225,48 @@ export async function runLoopExecutor(
         // answering "which model are you?" about a model that stopped serving
         // it several steps earlier.
         servedRoute = noteServedRoute(servedRoute, servedRouteFrom(route));
-        const resp = await tryOnce(prov, mdl, nextMessages, schemas, abort);
+        // A slow attempt must SAY it is still running (see ui/wait-progress).
+        // `finally` on the promise stops the heartbeat on success or failure.
+        let resp = await tryOnce(prov, mdl, nextMessages, schemas, abort).finally(
+          startWaitProgress(`${cand.provider}/${mdl}`, { enabled: !opts.quiet }),
+        );
+        // ── EVIDENCE BEFORE ROTATION ────────────────────────────────────────
+        // An empty step that carries `finish_reason: 'length'` (or reports its
+        // completion at the cap) is the shape of a reasoning model spending its
+        // whole budget on chain-of-thought, NOT of a dead endpoint. Rotating
+        // there is how a working model is silently replaced by a weaker one.
+        // Re-ask the SAME pair once: the adapter already learned from the
+        // truncated response that this pair needs a larger cap.
+        if (resp.content.trim().length === 0) {
+          // The JSON-fallback transport carries no wire diagnostics; the native
+          // one does. Read them through an optional shape so both transports are
+          // judged by the evidence that actually exists.
+          const evidence = resp as {
+            finishReason?: string;
+            reasoningContent?: string;
+            usage?: { completionTokens: number };
+            requestedMaxTokens?: number;
+          };
+          const verdict = diagnoseEmptyCompletion({
+            finishReason: evidence.finishReason,
+            reasoningChars: evidence.reasoningContent?.length ?? 0,
+            contentChars: 0,
+            completionTokens: evidence.usage?.completionTokens,
+            maxTokens: evidence.requestedMaxTokens,
+          });
+          if (verdict.recommendation === 'retry-same-pair-larger-budget' && !budgetRetried.has(key)) {
+            budgetRetried.add(key);
+            if (!opts.quiet) {
+              logger.info(
+                `   🧠 ${cand.provider}/${mdl}: ${verdict.summary} (${verdict.evidence}). ` +
+                  `Re-asking the SAME model with more output room instead of switching models.`,
+              );
+            }
+            resp = await tryOnce(prov, mdl, nextMessages, schemas, abort).finally(
+              startWaitProgress(`${cand.provider}/${mdl}`, { enabled: !opts.quiet }),
+            );
+          }
+        }
         // ── P1/P2 — AN UNUSABLE RESPONSE IS A FAILURE, NOT AN ANSWER ─────
         // A provider that resolves HTTP 200 with neither answer text nor a tool
         // call used to be returned from here as the step's response: the walk
@@ -1309,12 +1402,19 @@ export async function runLoopExecutor(
           // Best-effort — a hand-off write must never mask the generation error.
         }
         if (!opts.quiet) {
-          logger.debug(
-            qualityKind
-              ? `   \u26A0\uFE0F ${cand.provider} answered with ${
-                  qualityKind === 'reasoning' ? 'its own reasoning' : 'tool-contract confusion'
-                } instead of the task — trying the next loop candidate...`
-              : `   \u26A0\uFE0F ${cand.provider} failed — trying the next loop candidate...`,
+          // Visible at normal verbosity, not only under --debug: a walk that
+          // spends minutes on dead candidates looked exactly like a hang
+          // (measured 2026-11-04; see ui/wait-progress). Name the pair, the
+          // reason, the elapsed time and what is tried next.
+          const kind = qualityKind ? 'quality-rejected' : classifyFallbackError(err);
+          const nextCand = walk[attemptNo];
+          const elapsedSeconds = Math.max(0, (Date.now() - attemptStartedAt) / 1000).toFixed(1);
+          logger.info(
+            `   ⚠️ ${cand.provider}/${cand.model !== 'default' ? cand.model : model} failed ` +
+              `(${describeFailureKind(kind)}) after ${elapsedSeconds}s — ` +
+              (nextCand
+                ? `trying ${nextCand.provider}/${nextCand.model} (${attemptNo + 1} of ${walk.length})`
+                : 'no candidate left'),
           );
         }
       }
@@ -1573,9 +1673,15 @@ export async function runLoopExecutor(
 
     // Phase 4b/4c — a turn that reached a CLEAN end closes its session: the
     // transcript becomes history, so a later reworded re-ask rehydrates nothing
-    // and starts fresh (the work is done). A failed or cancelled turn stays OPEN
-    // on disk and remains resumable. Best-effort.
-    if (session && result.generationFailed !== true && result.cancelled !== true) {
+    // and starts fresh (the work is done). A failed, cancelled OR STEP-BOUNDED
+    // turn stays OPEN: a bounded turn ran out of budget with work still open, and
+    // closing it would erase the only record a `nuvira resume` could continue.
+    if (
+      session &&
+      result.generationFailed !== true &&
+      result.cancelled !== true &&
+      result.bounded !== true
+    ) {
       try {
         session.finish();
       } catch {

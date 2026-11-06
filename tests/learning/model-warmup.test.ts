@@ -147,6 +147,32 @@ describe('selectExplorationCandidates — the models the router cannot see', () 
     expect(selectExplorationCandidates(getModelRegistry(), configManager, Date.now(), 3)).toHaveLength(3);
     expect(selectExplorationCandidates(getModelRegistry(), configManager, Date.now(), 0)).toEqual([]);
   });
+
+  it('never spends a probe on a model that cannot serve a chat turn', () => {
+    // Measured live: the sweep verified `gpt-oss-safeguard-20b` and
+    // `llama-prompt-guard-2-22m` — content-safety classifiers. They inflate the
+    // "verified" count every health ranking reads and can never answer a turn.
+    seed([
+      entry('groq', 'openai/gpt-oss-safeguard-20b', 'unverified', AGED),
+      entry('groq', 'meta-llama/llama-prompt-guard-2-22m', 'unverified', AGED),
+      entry('groq', 'text-embedding-3-small', 'unverified', AGED),
+      entry('groq', 'openai/gpt-oss-120b', 'unverified', AGED),
+    ]);
+    const picked = selectExplorationCandidates(getModelRegistry(), configManager, Date.now(), 5);
+    expect(picked.map((c) => c.model)).toEqual(['openai/gpt-oss-120b']);
+  });
+
+  it('spends the in-provider budget on the STRONGEST listed chat model', () => {
+    // A probe is one token; the gap this sweep closes is that strong models stay
+    // unverified while cheap ones get proven, so the router substitutes DOWN.
+    seed([
+      entry('groq', 'tiny-2b-instruct', 'unverified', AGED),
+      entry('groq', 'openai/gpt-oss-120b', 'unverified', AGED),
+      entry('groq', 'mid-27b-instruct', 'unverified', AGED),
+    ]);
+    const picked = selectExplorationCandidates(getModelRegistry(), configManager, Date.now(), 2);
+    expect(picked.map((c) => c.model)).toEqual(['openai/gpt-oss-120b', 'mid-27b-instruct']);
+  });
 });
 
 describe('runWarmupCycle — exploration runs even with nothing in use', () => {

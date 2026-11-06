@@ -123,7 +123,7 @@ describe('ThemeSwitcher — group semantics', () => {
     // 1 of 5" instead of a bare list of unnamed radios.
     render(<ThemeSwitcher />);
     openPanel();
-    for (const name of [/palette/i, /mode/i, /text size/i]) {
+    for (const name of [/palette/i, /mode/i, /text size/i, /effects/i]) {
       expect(screen.getByRole('group', { name })).toBeTruthy();
     }
   });
@@ -144,6 +144,24 @@ describe('ThemeSwitcher — group semantics', () => {
     const toggle = screen.getByRole('checkbox', { name: /accessibility mode/i }) as HTMLInputElement;
     expect(toggle.checked).toBe(false);
   });
+
+  it('offers Light, Dark AND System as modes', () => {
+    // System is not decoration: it is the only setting that keeps following the
+    // OS after this visit, so it has to be a real option in the group.
+    render(<ThemeSwitcher />);
+    openPanel();
+    for (const name of ['Light', 'Dark', 'System']) {
+      expect(screen.getByRole('radio', { name })).toBeTruthy();
+    }
+  });
+
+  it('exposes the three look switches, with only motion on by default', () => {
+    render(<ThemeSwitcher />);
+    openPanel();
+    expect((screen.getByRole('checkbox', { name: /glass mode/i }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('checkbox', { name: /compact layout/i }) as HTMLInputElement).checked).toBe(false);
+    expect((screen.getByRole('checkbox', { name: /animation effects/i }) as HTMLInputElement).checked).toBe(true);
+  });
 });
 
 describe('ThemeSwitcher — applying and persisting a choice', () => {
@@ -160,6 +178,85 @@ describe('ThemeSwitcher — applying and persisting a choice', () => {
     openPanel();
     fireEvent.click(screen.getByRole('radio', { name: /^Light$/ }));
     expect(html().getAttribute('data-mode')).toBe('light');
+  });
+
+  it('stores `system` and paints whichever mode the OS reports', () => {
+    // The choice and the painted mode are deliberately different things: the
+    // stored value says "keep following it", the attribute is a real scheme.
+    const realMatchMedia = window.matchMedia;
+    Object.defineProperty(window, 'matchMedia', {
+      configurable: true,
+      writable: true,
+      value: (query: string) => ({
+        matches: query.includes('dark'),
+        media: query,
+        onchange: null,
+        addListener: () => {},
+        removeListener: () => {},
+        addEventListener: () => {},
+        removeEventListener: () => {},
+        dispatchEvent: () => false,
+      }),
+    });
+    try {
+      render(<ThemeSwitcher />);
+      openPanel();
+      fireEvent.click(screen.getByRole('radio', { name: /^System$/ }));
+      expect(loadTheme().mode).toBe('system');
+      expect(html().getAttribute('data-mode')).toBe('dark');
+    } finally {
+      Object.defineProperty(window, 'matchMedia', {
+        configurable: true,
+        writable: true,
+        value: realMatchMedia,
+      });
+    }
+  });
+
+  it('turns glass mode on and off on <html>, and remembers it', () => {
+    render(<ThemeSwitcher />);
+    openPanel();
+    const toggle = screen.getByRole('checkbox', { name: /glass mode/i });
+    fireEvent.click(toggle);
+    expect(html().getAttribute('data-glass')).toBe('on');
+    expect(loadTheme().glass).toBe(true);
+    fireEvent.click(toggle);
+    expect(html().getAttribute('data-glass')).toBe('off');
+    expect(loadTheme().glass).toBe(false);
+  });
+
+  it('turns the compact layout on', () => {
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: /compact layout/i }));
+    expect(html().getAttribute('data-compact')).toBe('on');
+    expect(loadTheme().compact).toBe(true);
+  });
+
+  it('turns animation effects off', () => {
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: /animation effects/i }));
+    expect(html().getAttribute('data-motion')).toBe('off');
+    expect(loadTheme().motion).toBe(false);
+  });
+
+  it('shows animation effects as off and inert once accessibility mode is on', () => {
+    // One declaration of "no motion" rather than two that can disagree: the
+    // accessibility switch forces the motion switch off, and the control renders
+    // the state the user is actually in instead of accepting a click that would
+    // be overruled by the stylesheet.
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: /accessibility mode/i }));
+    const motion = screen.getByRole('checkbox', { name: /animation effects/i }) as HTMLInputElement;
+    expect(html().getAttribute('data-motion')).toBe('off');
+    expect(motion.checked).toBe(false);
+    expect(motion.disabled).toBe(true);
+    expect(screen.getByText(/accessibility mode keeps motion off/i)).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('checkbox', { name: /accessibility mode/i }));
+    expect((screen.getByRole('checkbox', { name: /animation effects/i }) as HTMLInputElement).disabled).toBe(false);
   });
 
   it('applies the text size, turning on accessibility mode with it', () => {
@@ -208,6 +305,25 @@ describe('ThemeSwitcher — applying and persisting a choice', () => {
     const status = screen.getByRole('status');
     expect(status.textContent).toMatch(new RegExp(PALETTE_LABELS.executive, 'i'));
     expect(status.textContent).toMatch(/mode/i);
+  });
+
+  it('announces a system mode WITH the colour scheme it resolved to', () => {
+    // "System mode" alone leaves a screen-reader user unable to tell which
+    // colours are on screen, which is the one thing the announcement is for.
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.click(screen.getByRole('radio', { name: /^System$/ }));
+    expect(screen.getByRole('status').textContent).toMatch(/system \((light|dark)\)/i);
+  });
+
+  it('announces glass mode and compact layout when they are on', () => {
+    render(<ThemeSwitcher />);
+    openPanel();
+    fireEvent.click(screen.getByRole('checkbox', { name: /glass mode/i }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /compact layout/i }));
+    const announced = screen.getByRole('status').textContent ?? '';
+    expect(announced).toMatch(/glass mode on/i);
+    expect(announced).toMatch(/compact layout on/i);
   });
 });
 

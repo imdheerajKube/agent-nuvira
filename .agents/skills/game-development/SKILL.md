@@ -2,6 +2,10 @@
 name: game-development
 description: Create a GUI game with graphics, input handling, game logic, and packaging. Use when the goal asks to create, build, or develop a game (board games, card games, puzzle games, 2D games, snake-and-ladder, tic-tac-toe, chess, etc.).
 version: 2.0.0
+# P6 — binding: the build/dependency check must actually run before "done".
+obligations:
+  must_run:
+    - scripts/check_deps.py
 ---
 
 # game-development

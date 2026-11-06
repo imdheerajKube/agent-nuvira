@@ -313,6 +313,7 @@ rather than a name-and-value box:
 |---|---|---|
 | `NUVIRA_ISOLATE` | a turn runs in the project directory | `nuvira chat --worktree` |
 | `NUVIRA_RESUME` | nothing is replayed | `nuvira chat --resume [id]` |
+| `NUVIRA_ENFORCE_SKILL_OBLIGATIONS` | skill obligations are **advisory**: the unmet gaps are shown to the model and carried into the answer, but an ending is never refused. On = a `verified: true` finish is refused while a skill loaded this turn declares work that is not done (a checklist to read, a validator to run, a file to produce, a green test run) | `NUVIRA_ENFORCE_SKILL_OBLIGATIONS=1` (no CLI flag yet) |
 | `NUVIRA_STRICT_MODEL` | a model you NAMED is the only one that serves the run; an unpinned run is substituted with the swap announced | — |
 | `NUVIRA_DEBUG_LOG` | no log is written | — |
 | `NUVIRA_OTEL` | the SDK is never imported | — |

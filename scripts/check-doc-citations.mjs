@@ -63,6 +63,10 @@ export const NOT_A_DOC_CITATION = new Map([
     'BUGS_FOUND.md',
     'the audit report the `BUG-SEEDED` task asks the agent to produce (`docs/BUGS_FOUND.md`), which the named-deliverable gate checks for on disk — an artifact, never a doc this repo ships',
   ],
+  [
+    'AUDIT_CROSSCHECK.md',
+    'the report an ASSESSMENT turn wrote into the project it was auditing, cited by `src/tools/own-writes.ts` and its tests as the measured case for the write gate (trace-1793853385112-sf2exl) — an artifact produced on someone else\'s tree, never a doc this repo ships',
+  ],
 ]);
 
 /**

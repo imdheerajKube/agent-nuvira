@@ -165,6 +165,81 @@ describe('GeminiAdapter', () => {
     });
   });
 
+  /**
+   * A silent Gemini stream must fail as a `timeout`, not park the turn.
+   *
+   * WHY (measured 2026-11-04): a CLI `assess the project` turn routed to
+   * `gemini/gemini-3.1-flash-lite` and sat for over three minutes with zero
+   * steps (trace-1793805158776-vdsc8q, left `in progress`), while the same pair
+   * on the dashboard gave up in ~30 s. The streaming methods took the caller's
+   * signal as their ONLY bound — and a bare CLI abort signal has no deadline — so
+   * headers that arrived and then went quiet held the socket forever. These pin
+   * the bounded behaviour on both streaming paths and the non-streaming call.
+   */
+  describe('timeouts — silence is a timeout, never a hang', () => {
+    const originalIdle = process.env.NUVIRA_STREAM_IDLE_TIMEOUT_MS;
+
+    beforeEach(() => {
+      process.env.NUVIRA_STREAM_IDLE_TIMEOUT_MS = '60';
+    });
+
+    afterEach(() => {
+      if (originalIdle === undefined) delete process.env.NUVIRA_STREAM_IDLE_TIMEOUT_MS;
+      else process.env.NUVIRA_STREAM_IDLE_TIMEOUT_MS = originalIdle;
+    });
+
+    /** Headers arrive, one chunk is sent, the body then never closes. */
+    function stallingBody(chunk: string): ReadableStream<Uint8Array> {
+      const encoder = new TextEncoder();
+      return new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(encoder.encode(chunk));
+          // Deliberately no close(): the connection died mid-response.
+        },
+      });
+    }
+
+    it('generateStream fails a stalled stream as a timeout', async () => {
+      const sse = 'data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: 'partial' }] } }] }) + '\n';
+      mockFetch.mockResolvedValue({ ok: true, body: stallingBody(sse), headers: new Headers() });
+
+      const adapter = new GeminiAdapter(baseConfig);
+      const tokens: string[] = [];
+      await expect(adapter.generateStream('test', undefined, (t) => tokens.push(t))).rejects.toThrow(
+        /stream timeout: no data for 60 ms/,
+      );
+      // What arrived before the stall is still delivered.
+      expect(tokens).toEqual(['partial']);
+    });
+
+    it('generateToolsStream fails a stalled stream as a timeout', async () => {
+      const sse = 'data: ' + JSON.stringify({ candidates: [{ content: { parts: [{ text: 'partial' }] } }] }) + '\n';
+      mockFetch.mockResolvedValue({ ok: true, body: stallingBody(sse), headers: new Headers() });
+
+      const adapter = new GeminiAdapter(baseConfig);
+      await expect(adapter.generateToolsStream([], [], undefined, () => {})).rejects.toThrow(
+        /stream timeout: no data for 60 ms/,
+      );
+    });
+
+    it('bounds the non-streaming call even when the caller passes a bare signal', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ candidates: [{ content: { parts: [{ text: 'ok' }] } }] }),
+      });
+
+      const adapter = new GeminiAdapter(baseConfig);
+      const controller = new AbortController();
+      await adapter.generate('test', { signal: controller.signal });
+
+      const opts = mockFetch.mock.calls[0][1];
+      expect(opts.signal).toBeInstanceOf(AbortSignal);
+      // Ours, not the caller's bare one: the caller's signal is forwarded into
+      // it, but the deadline has to come from the adapter.
+      expect(opts.signal).not.toBe(controller.signal);
+    });
+  });
+
   describe('isAvailable', () => {
     it('should return true when API key is set', async () => {
       const adapter = new GeminiAdapter(baseConfig);

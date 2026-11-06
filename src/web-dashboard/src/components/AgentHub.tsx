@@ -477,6 +477,21 @@ export default function AgentHub() {
   const [marketMsg, setMarketMsg] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
   const [marketBusyName, setMarketBusyName] = useState<string | null>(null);
 
+  // P4 — the routing debugger: what the model actually sees this turn, and the
+  // update path for installed packages (whole-tree comparison on the server).
+  const [routingPreview, setRoutingPreview] = useState<{
+    mode: string;
+    skills: number;
+    chars: number;
+    withTrigger: number;
+    nameOnly: number;
+    index: string;
+    active: string;
+  } | null>(null);
+  const [routingBusy, setRoutingBusy] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [updateBusy, setUpdateBusy] = useState(false);
+
   // P1 — verified contacts (name + contact no): the validated list.
   const [contactNameInput, setContactNameInput] = useState<Record<string, string>>({});
   const [contacts, setContacts] = useState<HubContact[]>([]);
@@ -621,6 +636,53 @@ export default function AgentHub() {
       });
     }
     setMarketBusyName(null);
+  };
+
+  /** P4 — load the exact block the model sees (routing debugger). */
+  const loadRoutingPreview = async () => {
+    setRoutingBusy(true);
+    const d = await dashboardAPI.skillsIndexPreview();
+    setRoutingPreview(d);
+    setRoutingBusy(false);
+    setPreviewOpen(true);
+  };
+
+  /** P4 — update one installed skill (or every one). */
+  const updateSkills = async (name?: string) => {
+    if (!authed) {
+      setMarketMsg({ kind: 'err', text: '🔐 Log in (or set up admin access) to update skills.' });
+      return;
+    }
+    if (!canWrite) {
+      setMarketMsg({ kind: 'err', text: 'Your role cannot update skills — admin or operator only.' });
+      return;
+    }
+    setUpdateBusy(true);
+    setMarketMsg(null);
+    const r = await dashboardAPI.skillsUpdate(name);
+    if (r.ok) {
+      const parts = [
+        r.updated.length > 0 ? `updated: ${r.updated.join(', ')}` : '',
+        r.current.length > 0 && !name ? `already current: ${r.current.length}` : '',
+        r.failed.length > 0 ? `failed: ${r.failed.join('; ')}` : '',
+      ].filter(Boolean);
+      setMarketMsg({
+        kind: 'ok',
+        text: parts.length > 0 ? `♻️ ${parts.join(' · ')}` : '✅ Nothing to update — every installed skill matches its source.',
+      });
+      void refresh();
+    } else {
+      setMarketMsg({ kind: 'err', text: `❌ ${r.error || 'Update failed.'}` });
+    }
+    setUpdateBusy(false);
+  };
+
+  /** P4 — compact byte size for a skill card. */
+  const fmtBytes = (n?: number): string => {
+    if (!n || n <= 0) return '0 B';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} kB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
   };
 
   /** P6d — uninstall a hub skill (removes the dir + provenance). */
@@ -2053,6 +2115,14 @@ export default function AgentHub() {
               <div className="admin-summary-value">{data.skills.hub.length}</div>
               <div className="admin-summary-label">Hub skills (SKILL.md)</div>
             </div>
+            <div className="admin-summary-card">
+              {/* P4 — a single-file install of a multi-file skill used to look
+                  identical to a working one. This makes the difference a number. */}
+              <div className="admin-summary-value">
+                {data.skills.hub.filter((s) => s.installKind === 'package').length}
+              </div>
+              <div className="admin-summary-label">With their files</div>
+            </div>
           </div>
 
           <h2 className="section-subtitle">📚 Compiled skills (SkillStore — matched at plan time)</h2>
@@ -2098,6 +2168,49 @@ export default function AgentHub() {
           )}
 
           <h2 className="section-subtitle">🌍 Hub skills (installed SKILL.md)</h2>
+          <div className="hub-card-actions" style={{ marginBottom: 8 }}>
+            <button
+              type="button"
+              className="hub-mini-btn"
+              disabled={routingBusy}
+              onClick={() => void loadRoutingPreview()}
+            >
+              {routingBusy ? 'Reading…' : previewOpen ? '🔎 Refresh routing preview' : '🔎 What the model sees'}
+            </button>
+            <button
+              type="button"
+              className="hub-mini-btn"
+              disabled={updateBusy || (authed && !canWrite) || data.skills.hub.length === 0}
+              onClick={() => void updateSkills()}
+            >
+              {updateBusy ? 'Updating…' : '♻️ Update all'}
+            </button>
+          </div>
+          {previewOpen ? (
+            <div className="hub-card">
+              <div className="hub-card-top">
+                <div className="hub-card-title">
+                  <span className="hub-card-name">Routing preview</span>
+                  <span className="hub-card-id">
+                    mode {routingPreview?.mode ?? '?'} · {routingPreview?.skills ?? 0} skills ·{' '}
+                    {routingPreview?.chars ?? 0} chars · {routingPreview?.withTrigger ?? 0} with a trigger
+                  </span>
+                </div>
+              </div>
+              <p className="hub-card-desc">
+                This is the exact skill block injected this turn. Every skill is listed by name with the
+                clause that says WHEN it applies — if a skill is missing here, the model cannot choose it.
+              </p>
+              <pre className="hub-artifact-preview" style={{ maxHeight: 320, overflow: 'auto', whiteSpace: 'pre-wrap' }}>
+                {routingPreview?.index || 'No skills visible (empty catalog, or every skill is disabled).'}
+              </pre>
+              {routingPreview && routingPreview.active !== routingPreview.index ? (
+                <p className="admin-hint">
+                  The active mode injects a different block (see config <code>skills.catalogHint</code>).
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           {data.skills.hub.length > 0 ? (
             <div className="hub-session-list">
               {data.skills.hub.map((s) => (
@@ -2105,9 +2218,19 @@ export default function AgentHub() {
                   <div className="hub-card-top">
                     <div className="hub-card-title">
                       <span className="hub-card-name">{s.name}</span>
-                      <span className="hub-card-id">{s.id}</span>
+                      <span className="hub-card-id">
+                        {s.id}{s.version ? ` · v${s.version}` : ''}
+                      </span>
                     </div>
                     <div className="hub-card-actions">
+                      <button
+                        type="button"
+                        className="hub-mini-btn"
+                        disabled={updateBusy || (authed && !canWrite)}
+                        onClick={() => void updateSkills(s.id)}
+                      >
+                        ♻️ Update
+                      </button>
                       <button
                         type="button"
                         className="hub-mini-btn"
@@ -2130,9 +2253,34 @@ export default function AgentHub() {
                   </div>
                   <p className="hub-card-desc">{s.description}</p>
                   <div className="hub-card-tools">
-                    <span className="hub-chip">SKILL.md</span>
+                    {/* P4 — provenance: which root, who owns it, and what shipped. */}
+                    {s.owner === 'external' ? (
+                      <span className="hub-chip">🔗 .claude root (read-only)</span>
+                    ) : (
+                      <span className="hub-chip">{s.rootScope === 'project' ? '📁 project' : '🏠 user'}</span>
+                    )}
+                    {typeof s.fileCount === 'number' ? (
+                      <span className="hub-chip">
+                        {s.installKind === 'package' ? '📦' : '📄'} {s.fileCount} file{s.fileCount === 1 ? '' : 's'}
+                        {typeof s.bytes === 'number' && s.bytes > 0 ? ` · ${fmtBytes(s.bytes)}` : ''}
+                      </span>
+                    ) : null}
+                    {s.installKind === 'single-file' && (s.fileCount ?? 1) <= 1 ? (
+                      <span className="hub-chip">⚠️ files not shipped by its source</span>
+                    ) : null}
                     {!s.enabled ? <span className="hub-chip">disabled</span> : null}
                   </div>
+                  {/* P4 — the trigger line is what routing actually reads. */}
+                  {s.trigger ? (
+                    <div className="hub-card-note">
+                      ↳ model index line: <code>{s.trigger}</code>
+                    </div>
+                  ) : null}
+                  {s.lint && s.lint.length > 0 ? (
+                    <div className="hub-card-note">
+                      ⚠️ description lint: {s.lint.join(', ')} — this weakens skill routing
+                    </div>
+                  ) : null}
                   {rowMsg[s.id] ? <div className="admin-row-msg">{rowMsg[s.id]}</div> : null}
                   {!s.enabled ? <div className="hub-card-note">⛔ Excluded from skill matching — not injected into the planner</div> : null}
                 </div>

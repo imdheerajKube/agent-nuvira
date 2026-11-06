@@ -86,6 +86,23 @@ describe('ConfigCommand set — turn.* wall-clock budget', () => {
     runSet(cmd, 'turn.maxMinutes', '2000');
     expect(saved).toBeNull();
   });
+
+  it('stores the step slice and the absolute guard as numbers', () => {
+    const cmd = makeCommand();
+    runSet(cmd, 'turn.maxSteps', '48');
+    expect(saved?.turn?.maxSteps).toBe(48);
+    runSet(cmd, 'turn.maxTotalSteps', '5000');
+    expect(saved?.turn?.maxTotalSteps).toBe(5000);
+  });
+
+  it('refuses a step budget that is zero, fractional or prose', () => {
+    const cmd = makeCommand();
+    for (const bad of ['0', '2.5', 'soon']) {
+      saved = null;
+      runSet(cmd, 'turn.maxSteps', bad);
+      expect(saved).toBeNull();
+    }
+  });
 });
 
 describe('ConfigCommand set — mcp.* configuration surface', () => {

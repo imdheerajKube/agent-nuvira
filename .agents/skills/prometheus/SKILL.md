@@ -1,6 +1,6 @@
 ---
 name: prometheus
-description: Set up Prometheus monitoring and alerting. Use when the goal asks to add metrics collection, dashboards, or alerting rules.
+description: Set up Prometheus monitoring: metrics, dashboards, alerting rules, plus structured logging and health/readiness endpoints. Use when the goal asks to add monitoring, metrics collection, dashboards, alerting, structured logs, or a health check.
 version: 2.0.0
 whenToUse: Metrics collection, alerting rules, Grafana dashboards, SLI/SLO tracking, capacity monitoring
 whenNotToUse: Log aggregation (use Loki/ELK), distributed tracing (use Jaeger), error tracking (use Sentry)
@@ -12,7 +12,7 @@ Set up Prometheus monitoring and alerting with production patterns.
 
 ## Goal pattern
 
-prometheus monitoring metrics alert grafana dashboard promql
+prometheus monitoring metrics alert grafana dashboard promql observability logging structured logs health check health-check readiness liveness datadog opentelemetry
 
 ## Parameters
 
@@ -224,4 +224,3 @@ curl -s http://localhost:3000/api/search | jq '.[].title'
 
 ## Reference Documents
 
-Load deep-dive content with `skill_view('prometheus', 'references/guide.md')`.
