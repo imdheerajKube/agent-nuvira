@@ -977,13 +977,21 @@ Above the project bar, the **Unfinished work (N)** card lists the same OPEN turn
 as `resume list`, with goal, directory, steps and age. It is the action surface
 for the same engine:
 
-- **Continue** on a row continues exactly that turn (the row's id is sent, so
-  clicking the second row never resumes the first).
-- **Continue all until done** runs every OPEN turn, oldest first.
-- **Stop after [24] hours** sets the deadline for that continuation.
-- Dashboard continuations always run **detached** — the browser request returns
-  immediately with a pid and the log path shown in the card, because a turn that
-  may run for hours must not be tied to an HTTP request or a tab staying open.
+- **Continue** on a row loads that turn into the chat itself: a fresh
+  conversation, the row's folder attached, and its stored ask sent — so the engine
+  rehydrates the same checkpoint and the turn continues where it stopped. The
+  row's own id and goal are what travel, so clicking the second row never resumes
+  the first.
+- **Done** clears one row and **Clear all** clears every listed row. Both REMOVE
+  the stored snapshot, so a turn you no longer need is never listed or continued
+  again.
+- **Continue all until done** runs every OPEN turn, oldest first — the one action
+  that stays detached.
+- **Stop after [24] hours** sets the deadline for that bulk continuation.
+- Bulk continuations run **detached** — that request returns immediately with a
+  pid and the log path shown in the card, because continuing several turns across
+  projects may run for hours and must not be tied to an HTTP request or a tab
+  staying open.
 
 The card is hidden when there is nothing unfinished (or when the dashboard server
 predates this feature), so normal chat is unchanged. Listing and starting are

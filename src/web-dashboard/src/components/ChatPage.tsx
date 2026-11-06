@@ -60,7 +60,7 @@ import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
 // test/build output, deploy URLs) rendered as cards, not raw markdown.
 import { extractArtifacts, type ExtractedArtifacts } from '../artifacts';
-import type { ResumeOutcome, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
+import type { ResumableRun, ResumeOutcome, TraceFinding, TurnReport, WorktreeOutcome } from '../types';
 import { formatCount, formatElapsed, formatSpendFull } from '../format';
 import PageHeader from './PageHeader';
 import ResumeRunsPanel from './ResumeRunsPanel';
@@ -1527,6 +1527,18 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const attachProjectRef = useRef<((path: string) => Promise<void>) | null>(null);
   // P0.1 — a pending ask_user question from the agent (choice card).
   const [pendingQuestion, setPendingQuestion] = useState<PendingQuestion | null>(null);
+  /**
+   * The checkpoint THIS conversation was continued from, when it was started by
+   * the Unfinished work card. Shown as its own banner because a resumed turn is
+   * otherwise invisible: the transcript looks like a brand-new chat that happens
+   * to already know the work, and the user has no way to tell a rehydrated turn
+   * from a cold one — or to tell which stored turn this window belongs to.
+   */
+  const [continuationNotice, setContinuationNotice] = useState<{
+    goal: string;
+    cwd: string;
+    steps: number;
+  } | null>(null);
   const [questionSel, setQuestionSel] = useState<Set<number>>(new Set());
   // C1 — the "type my own answer" field. The agent offers 2–4 choices, but the
   // user's real answer is sometimes none of them; the `custom` value is already
@@ -1656,6 +1668,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     setPasteOffer(null);
     setInput('');
     setRailOpen(true);
+    setContinuationNotice(null);
   }, []);
 
   /** P8 — add an attachment chip (file picker / drag-drop / paste-as-text). */
@@ -2235,7 +2248,20 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   subscribeLiveRef.current = subscribeLive;
 
   const send = useCallback(
-    async (text: string, withAttachments?: AttachmentChip[]) => {
+    async (
+      text: string,
+      withAttachments?: AttachmentChip[],
+      /**
+       * The workspace for THIS turn when it is not (yet) the attached one.
+       *
+       * Continuing unfinished work attaches the folder the turn was working in
+       * and sends in the same tick, so `attachedProject` in this closure is still
+       * the previous value — without this the continuation would be sent
+       * folder-less and refused for "no project". Explicit wins over state here;
+       * every other caller passes nothing and keeps the attached folder.
+       */
+      turn?: { projectPath?: string },
+    ) => {
       const clean = text.trim();
       const chipList = Array.isArray(withAttachments) ? withAttachments : attachments;
       if ((!clean && chipList.length === 0) || busy) return;
@@ -2339,7 +2365,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // a chat whose user turned the lock OFF must SAY so, or the server would
           // hold a pin this client believes it released. `false` is that statement.
           ...(pinnedModel ? { strict: strictPin } : {}),
-          projectPath: attachedProject?.path,
+          projectPath: turn?.projectPath ?? attachedProject?.path,
           // `encoding` rides along so the server knows whether to read the content as
           // text or to decode base64 and extract it (P2).
           attachments: chipList.map((c) => ({
@@ -2504,6 +2530,103 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     // empty list from the render that mounted it — the user's `/skill` chips on
     // screen while the turn carried no pin at all.
     [busy, attachedProject, attachments, isolate, keepWorktree, resume, resumeId, pinnedModel, strictPin, pinnedSkills, commitRecoveredAnswer, recoverFromCeiling],
+  );
+
+  /**
+   * Continuations waiting for the running turn to finish, oldest first.
+   *
+   * A REF, not state: the drain loop reads it across `await`s, and a state
+   * snapshot taken when the loop started would miss a row queued mid-turn. The
+   * composer notice is the visible half; this is the queue itself.
+   */
+  const continueQueueRef = useRef<ResumableRun[]>([]);
+  /** Whether the drain loop is already running (it must never run twice). */
+  const drainingContinuesRef = useRef(false);
+  /** `busy` read synchronously, so the loop can tell "turn over" from "gave up waiting". */
+  const busyRef = useRef(false);
+
+  /**
+   * Continue ONE unfinished turn HERE, in the conversation.
+   *
+   * A resume is a chat turn, so the Chat page — not the panel, and not a spawned
+   * process — owns it: open a fresh conversation, attach the folder that turn was
+   * working in, and send its stored ask. The engine finds the OPEN snapshot by
+   * (ask, folder) — the same deterministic key the row's id came from — and
+   * rehydrates it, so the turn continues its own history instead of starting
+   * cold. The panel's old call spawned `nuvira resume run` and returned a pid and
+   * a log path, leaving this window empty: a continuation the user cannot see is
+   * not a continuation.
+   *
+   * WHY IT RETURNS BEFORE THE TURN ENDS. `send` REFUSES a turn while another one
+   * is answering (`if (... || busy) return;`), so awaiting it mid-turn returned
+   * instantly and the click did nothing at all — the row stayed, the chat stayed
+   * empty, and nothing said why. A continuation the user asked for is not a
+   * request to drop: it queues, says so, and starts the moment the current turn
+   * finishes.
+   */
+  const runContinuation = useCallback(
+    async (run: ResumableRun) => {
+      newChat();
+      setContinuationNotice({ goal: run.goal, cwd: run.cwd, steps: run.steps });
+      await attachProjectRef.current?.(run.cwd);
+      // The folder is passed EXPLICITLY as well: `attachProject` sets state, and
+      // this send runs before React re-renders, so the callback would still hold
+      // the previous conversation's (empty) attachment and the turn would be
+      // refused for "no project folder".
+      await send(run.goal, undefined, { projectPath: run.cwd });
+    },
+    [newChat, send],
+  );
+
+  /**
+   * Drain the continuation queue, one turn at a time.
+   *
+   * Each `runContinuation` awaits its whole turn, so the next queued row starts
+   * on a FINISHED turn rather than alongside it — the server refuses a second
+   * concurrent turn, and two rehydrated conversations interleaved in one window
+   * would be unreadable anyway. A turn that outlived the client's 5-minute POST
+   * ceiling leaves `busy` true; the loop then stops and the `busy` effect below
+   * starts it again when the answer actually lands, so nothing is lost and
+   * nothing is sent into a refusal.
+   */
+  const drainContinues = useCallback(async () => {
+    if (drainingContinuesRef.current) return;
+    // A turn is running: the effect below calls back the moment it ends.
+    if (busy) return;
+    drainingContinuesRef.current = true;
+    try {
+      while (continueQueueRef.current.length > 0) {
+        const next = continueQueueRef.current[0];
+        continueQueueRef.current = continueQueueRef.current.slice(1);
+        await runContinuation(next);
+        if (busyRef.current) return;
+      }
+    } finally {
+      drainingContinuesRef.current = false;
+    }
+  }, [busy, runContinuation]);
+
+  /** `busy` mirrored for the loop, and the trigger that resumes a stalled queue. */
+  useEffect(() => {
+    busyRef.current = busy;
+    if (!busy) void drainContinues();
+  }, [busy, drainContinues]);
+
+  /** Queue a continuation (running now when idle, after the current turn otherwise). */
+  const continueRun = useCallback(
+    (run: ResumableRun) => {
+      continueQueueRef.current = [...continueQueueRef.current, run];
+      if (busy) {
+        const goal = run.goal.length > 60 ? `${run.goal.slice(0, 60)}…` : run.goal;
+        const waiting = continueQueueRef.current.length;
+        setMeta(
+          `↩️ Queued${waiting > 1 ? ` (${waiting} waiting)` : ''} — “${goal}” continues in this chat ` +
+            'as soon as the current turn finishes.',
+        );
+      }
+      void drainContinues();
+    },
+    [busy, drainContinues],
   );
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
@@ -2879,7 +3002,32 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       ) : (
         <>
           {/* The work that outlived its process belongs where work starts. */}
-          <ResumeRunsPanel />
+          <ResumeRunsPanel onContinue={continueRun} />
+          {continuationNotice ? (
+            <div
+              className="chat-project-bar"
+              role="status"
+              aria-label="Resumed from checkpoint"
+            >
+              <div className="chat-project-attached" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
+                <span className="chat-project-icon" aria-hidden="true">↩️</span>
+                <strong>Resumed from its checkpoint</strong>
+                <span className="admin-hint">
+                  Continuing “{continuationNotice.goal}” in {continuationNotice.cwd} from the{' '}
+                  {continuationNotice.steps} step(s) it had already done — this is that same turn, not
+                  a new ask.
+                </span>
+                <button
+                  type="button"
+                  className="admin-mini-btn"
+                  aria-label="Dismiss the resumed-checkpoint notice"
+                  onClick={() => setContinuationNotice(null)}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ) : null}
           <div className="chat-project-bar" ref={projectBarRef}>
             {attachedProject ? (
               <div className="chat-project-attached">

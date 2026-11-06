@@ -8,13 +8,24 @@
  *
  * WHAT IT SHOWS, AND WHY THE ID MATTERS. Every row is one OPEN session snapshot.
  * The row carries the snapshot's own id, goal, directory and step count; the
- * Continue button sends that id back, so the server continues EXACTLY that turn.
- * "Continue all until done" is the only action that spans rows, and it is
- * explicit. Nothing is inferred from "the most recent thing".
+ * Continue button sends that row back to the page, so the conversation continues
+ * EXACTLY that turn. Nothing is inferred from "the most recent thing".
  *
- * WHY IT STARTS DETACHED. A continuation can run for hours; a dashboard request
- * cannot hold that. The server spawns the CLI in its own process and returns a
- * pid + log path, which the panel shows.
+ * CONTINUING IS A CHAT TURN, NOT A DETACHED PROCESS. The first version spawned
+ * `nuvira resume run` in the background and reported a pid, so pressing
+ * "Continue" produced a log path and NOTHING in the conversation — the one place
+ * the work was supposed to continue. The row now hands the turn to the page
+ * (`onContinue`), which opens a conversation, attaches the folder the turn was
+ * working in, and sends the stored ask; the engine rehydrates that same OPEN
+ * snapshot, so the continuation reads like a continuation. The detached spawner
+ * survives only behind the explicit "Continue all until done" bulk action, where
+ * it is labelled as detached.
+ *
+ * DISMISSING IS EXPLICIT. A turn that stopped 31 days ago is often work the user
+ * no longer wants, and a list with no way out is the store's list, not the
+ * user's. "Done" clears one row and "Clear all" clears every listed row; both
+ * REMOVE the snapshot (the same record the continuity store owns), so a cleared
+ * turn never comes back and is never silently continued.
  *
  * Best-effort by design: an older server (no `/api/resume`) or an empty store
  * renders nothing at all, so the chat page is unchanged for users who never
@@ -39,11 +50,20 @@ function shortenPath(p: string): string {
   return parts.slice(-2).join('/') || p;
 }
 
-export default function ResumeRunsPanel() {
+export interface ResumeRunsPanelProps {
+  /**
+   * Load this unfinished turn into the conversation. Given by the Chat page, so
+   * Continue means "continue here" — a panel that spawned its own process is
+   * exactly the behaviour this replaces.
+   */
+  onContinue?: (run: ResumableRun) => Promise<void> | void;
+}
+
+export default function ResumeRunsPanel({ onContinue }: ResumeRunsPanelProps) {
   const [runs, setRuns] = useState<ResumableRun[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
-  /** Deadline in HOURS (the CLI takes minutes; the CLI flag can stay minutes). */
+  /** Deadline in HOURS — it bounds the explicit detached bulk action only. */
   const [hours, setHours] = useState('24');
 
   const refresh = useCallback(async () => {
@@ -60,26 +80,81 @@ export default function ResumeRunsPanel() {
     };
   }, []);
 
-  const start = useCallback(
-    async (input: { id?: string; all?: boolean }) => {
+  /** Continue ONE row in the conversation, not in a background process. */
+  const continueInChat = useCallback(
+    async (run: ResumableRun) => {
+      if (!onContinue) return;
       setBusy(true);
       setNotice(null);
-      const parsed = Number(hours);
-      const deadlineMinutes = Math.max(1, Math.round((Number.isFinite(parsed) && parsed > 0 ? parsed : 24) * 60));
-      const result = await dashboardAPI.startResume({ ...input, deadlineMinutes });
-      if (!result.ok) {
-        setNotice(result.error || 'Could not start the continuation.');
-      } else {
-        setNotice(
-          `Started in the background${result.pid ? ` (pid ${result.pid})` : ''}.` +
-            (result.log ? ` Log: ${result.log}` : ''),
-        );
+      try {
+        await onContinue(run);
+        // The snapshot stays OPEN until the continued turn finishes, so the row
+        // is expected to be here immediately after — the turn closing it is what
+        // removes it. Re-read rather than optimistically drop it.
         await refresh();
+      } finally {
+        setBusy(false);
       }
+    },
+    [onContinue, refresh],
+  );
+
+  /** Clear ONE row: forget the snapshot so it is never listed or continued. */
+  const dismiss = useCallback(
+    async (id: string) => {
+      setBusy(true);
+      setNotice(null);
+      const result = await dashboardAPI.clearContinuity('session', id);
+      if (!result.ok) setNotice(result.error || 'Could not clear that unfinished turn.');
+      await refresh();
       setBusy(false);
     },
-    [hours, refresh],
+    [refresh],
   );
+
+  /** Clear every listed row. One request per row: a refusal must not lie. */
+  const clearAll = useCallback(async () => {
+    const list = runs ?? [];
+    setBusy(true);
+    setNotice(null);
+    let removed = 0;
+    for (const run of list) {
+      const result = await dashboardAPI.clearContinuity('session', run.id);
+      if (result.ok) removed += 1;
+    }
+    await refresh();
+    setNotice(
+      removed > 0
+        ? `Cleared ${removed} unfinished turn${removed === 1 ? '' : 's'} — they will not be listed again.`
+        : 'Nothing was cleared.',
+    );
+    setBusy(false);
+  }, [runs, refresh]);
+
+  /**
+   * The explicit bulk action, still detached: continuing every open turn can run
+   * for hours across several projects, which one chat turn cannot represent.
+   */
+  const startAll = useCallback(async () => {
+    setBusy(true);
+    setNotice(null);
+    const parsed = Number(hours);
+    const deadlineMinutes = Math.max(
+      1,
+      Math.round((Number.isFinite(parsed) && parsed > 0 ? parsed : 24) * 60),
+    );
+    const result = await dashboardAPI.startResume({ all: true, deadlineMinutes });
+    if (!result.ok) {
+      setNotice(result.error || 'Could not start the continuation.');
+    } else {
+      setNotice(
+        `Started in the background${result.pid ? ` (pid ${result.pid})` : ''}.` +
+          (result.log ? ` Log: ${result.log}` : ''),
+      );
+      await refresh();
+    }
+    setBusy(false);
+  }, [hours, refresh]);
 
   // No runs, an unavailable endpoint, or a store that is still loading: render
   // nothing. The panel must not take space from a normal conversation.
@@ -91,8 +166,9 @@ export default function ResumeRunsPanel() {
         <span className="chat-project-icon" aria-hidden="true">↩️</span>
         <strong>Unfinished work ({runs.length})</strong>
         <span className="admin-hint">
-          These turns stopped before finishing (budget, crash or failure). Continuing runs the SAME
-          stored ask from its checkpoint — no new prompt.
+          These turns stopped before finishing (budget, crash or failure). Continue loads the turn
+          into this chat with its folder attached, from its checkpoint — no new prompt. Done clears
+          a turn you no longer need.
         </span>
       </div>
 
@@ -108,17 +184,35 @@ export default function ResumeRunsPanel() {
             <button
               className="admin-refresh-btn"
               type="button"
-              disabled={busy}
+              disabled={busy || !onContinue}
               aria-label={`Continue ${run.goal}`}
-              onClick={() => void start({ id: run.id })}
+              onClick={() => void continueInChat(run)}
             >
               ↩️ Continue
+            </button>
+            <button
+              className="admin-mini-btn"
+              type="button"
+              disabled={busy}
+              aria-label={`Mark ${run.goal} as done`}
+              title="Clear this unfinished turn — it will not be listed or continued again"
+              onClick={() => void dismiss(run.id)}
+            >
+              ✓ Done
             </button>
           </div>
         ))}
       </div>
 
       <div className="admin-row-actions" style={{ padding: '0 0.75rem 0.75rem', alignItems: 'center' }}>
+        <button
+          className="admin-refresh-btn"
+          type="button"
+          disabled={busy}
+          onClick={() => void clearAll()}
+        >
+          🧹 Clear all
+        </button>
         <label className="admin-hint" htmlFor="resume-deadline-hours">
           Stop after
         </label>
@@ -139,7 +233,7 @@ export default function ResumeRunsPanel() {
           className="admin-refresh-btn"
           type="button"
           disabled={busy}
-          onClick={() => void start({ all: true })}
+          onClick={() => void startAll()}
         >
           ▶️ Continue all until done
         </button>
