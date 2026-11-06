@@ -2,7 +2,7 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
-## Unreleased — an empty response is diagnosed, not punished
+## v3.5.15 — an empty response is diagnosed, not punished
 
 `deepseek-v4-flash` / `deepseek-v4-pro` were returning steps with `content: ''`
 while a long `reasoning_content` and `finish_reason: 'length'` sat on the same
