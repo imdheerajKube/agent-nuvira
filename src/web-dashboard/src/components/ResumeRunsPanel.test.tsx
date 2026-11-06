@@ -105,6 +105,34 @@ describe('ResumeRunsPanel', () => {
     await waitFor(() => expect(start).toHaveBeenCalledWith({ all: true, deadlineMinutes: 480 }));
   });
 
+  it('lists QUEUED continuations with a cancel for each one', async () => {
+    vi.spyOn(dashboardAPI, 'fetchResumableRuns').mockResolvedValue(RUNS);
+    const onCancelQueued = vi.fn();
+
+    render(
+      <ResumeRunsPanel
+        onContinue={vi.fn()}
+        queued={[TWO[1]]}
+        onCancelQueued={onCancelQueued}
+      />,
+    );
+    // The header counts what the card is holding: one unfinished row + one queue.
+    await waitFor(() => expect(screen.getByText(/Unfinished work \(2\)/)).toBeTruthy());
+    expect(screen.getByText(/starts when the current turn ends/)).toBeTruthy();
+
+    fireEvent.click(screen.getByLabelText('Cancel queued continuation fix the range off-by-one'));
+    expect(onCancelQueued).toHaveBeenCalledWith('cp-2');
+  });
+
+  it('keeps rendering the queue after every unfinished row is gone', async () => {
+    vi.spyOn(dashboardAPI, 'fetchResumableRuns').mockResolvedValue([]);
+
+    render(<ResumeRunsPanel onContinue={vi.fn()} queued={[TWO[1]]} onCancelQueued={vi.fn()} />);
+    // Without this the card would vanish mid-drain and take the cancel buttons
+    // with it, leaving a continuation the user can neither see nor stop.
+    await waitFor(() => expect(screen.getByText(/Unfinished work \(1\)/)).toBeTruthy());
+  });
+
   it('renders nothing when there is no unfinished work', async () => {
     vi.spyOn(dashboardAPI, 'fetchResumableRuns').mockResolvedValue([]);
     const { container } = render(<ResumeRunsPanel onContinue={vi.fn()} />);

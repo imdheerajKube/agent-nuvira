@@ -57,9 +57,22 @@ export interface ResumeRunsPanelProps {
    * exactly the behaviour this replaces.
    */
   onContinue?: (run: ResumableRun) => Promise<void> | void;
+  /**
+   * Continuations waiting for the running turn to finish, oldest first. Owned by
+   * the Chat page (it is the page's queue), shown here because this card is where
+   * the user started them — a queued row that is invisible is indistinguishable
+   * from a click that did nothing.
+   */
+  queued?: ResumableRun[];
+  /** Drop one WAITING continuation. The running turn is not affected. */
+  onCancelQueued?: (id: string) => void;
 }
 
-export default function ResumeRunsPanel({ onContinue }: ResumeRunsPanelProps) {
+export default function ResumeRunsPanel({
+  onContinue,
+  queued,
+  onCancelQueued,
+}: ResumeRunsPanelProps) {
   const [runs, setRuns] = useState<ResumableRun[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -156,15 +169,20 @@ export default function ResumeRunsPanel({ onContinue }: ResumeRunsPanelProps) {
     setBusy(false);
   }, [hours, refresh]);
 
-  // No runs, an unavailable endpoint, or a store that is still loading: render
-  // nothing. The panel must not take space from a normal conversation.
-  if (!runs || runs.length === 0) return null;
+  // No runs, no queue, an unavailable endpoint, or a store that is still
+  // loading: render nothing. The panel must not take space from a normal
+  // conversation. A NON-EMPTY QUEUE KEEPS IT VISIBLE even after every row is
+  // cleared — otherwise the card would vanish while continuations are still
+  // waiting, and the cancel buttons with it.
+  const hasRuns = !!runs && runs.length > 0;
+  const hasQueued = !!queued && queued.length > 0;
+  if (!hasRuns && !hasQueued) return null;
 
   return (
     <section className="chat-project-bar" aria-label="Unfinished work">
       <div className="chat-project-attached" style={{ flexWrap: 'wrap', gap: '0.5rem' }}>
         <span className="chat-project-icon" aria-hidden="true">↩️</span>
-        <strong>Unfinished work ({runs.length})</strong>
+        <strong>Unfinished work ({(runs?.length ?? 0) + (queued?.length ?? 0)})</strong>
         <span className="admin-hint">
           These turns stopped before finishing (budget, crash or failure). Continue loads the turn
           into this chat with its folder attached, from its checkpoint — no new prompt. Done clears
@@ -172,8 +190,9 @@ export default function ResumeRunsPanel({ onContinue }: ResumeRunsPanelProps) {
         </span>
       </div>
 
+      {hasRuns ? (
       <div className="memory-list" style={{ padding: '0 0.75rem 0.5rem' }}>
-        {runs.map((run) => (
+        {(runs ?? []).map((run) => (
           <div className="memory-item" key={run.id}>
             <span className="memory-project" title={`${run.goal}\nid: ${run.id}`}>
               {run.goal.length > 90 ? `${run.goal.slice(0, 90)}…` : run.goal}
@@ -203,6 +222,36 @@ export default function ResumeRunsPanel({ onContinue }: ResumeRunsPanelProps) {
           </div>
         ))}
       </div>
+      ) : null}
+
+      {hasQueued ? (
+        <div
+          className="memory-list"
+          style={{ padding: '0 0.75rem 0.5rem' }}
+          aria-label="Queued continuations"
+        >
+          {(queued ?? []).map((run) => (
+            <div className="memory-item" key={`queued-${run.id}`}>
+              <span className="memory-project" title={`${run.goal}\nqueued: ${run.id}`}>
+                ⏳ {run.goal.length > 90 ? `${run.goal.slice(0, 90)}…` : run.goal}
+              </span>
+              <span className="memory-count">
+                Queued — starts when the current turn ends
+              </span>
+              <button
+                className="admin-mini-btn"
+                type="button"
+                disabled={busy}
+                aria-label={`Cancel queued continuation ${run.goal}`}
+                title="Remove this continuation from the queue — it is never started"
+                onClick={() => onCancelQueued?.(run.id)}
+              >
+                ✕ Cancel
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
 
       <div className="admin-row-actions" style={{ padding: '0 0.75rem 0.75rem', alignItems: 'center' }}>
         <button

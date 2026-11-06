@@ -1539,6 +1539,15 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     cwd: string;
     steps: number;
   } | null>(null);
+  /**
+   * The continuation queue as RENDERED state.
+   *
+   * `continueQueueRef` is what the drain loop reads (it must survive the awaits);
+   * this mirror is what the Unfinished work card lists, because a queued row the
+   * user cannot see is indistinguishable from a click that did nothing — and one
+   * they cannot remove is a promise they cannot take back.
+   */
+  const [queuedContinues, setQueuedContinues] = useState<ResumableRun[]>([]);
   const [questionSel, setQuestionSel] = useState<Set<number>>(new Set());
   // C1 — the "type my own answer" field. The agent offers 2–4 choices, but the
   // user's real answer is sometimes none of them; the `custom` value is already
@@ -2598,6 +2607,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       while (continueQueueRef.current.length > 0) {
         const next = continueQueueRef.current[0];
         continueQueueRef.current = continueQueueRef.current.slice(1);
+        setQueuedContinues(continueQueueRef.current.slice());
         await runContinuation(next);
         if (busyRef.current) return;
       }
@@ -2616,6 +2626,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const continueRun = useCallback(
     (run: ResumableRun) => {
       continueQueueRef.current = [...continueQueueRef.current, run];
+      setQueuedContinues(continueQueueRef.current.slice());
       if (busy) {
         const goal = run.goal.length > 60 ? `${run.goal.slice(0, 60)}…` : run.goal;
         const waiting = continueQueueRef.current.length;
@@ -2628,6 +2639,20 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     },
     [busy, drainContinues],
   );
+
+  /**
+   * Drop one WAITING continuation.
+   *
+   * Only the queue is touched: a continuation the loop has already taken is the
+   * running turn, and that one is stopped by Cancel, not by deleting it from a
+   * list. Removing it from the ref as well as the mirror is what makes the cancel
+   * real — hiding the row while the loop still holds it would start it anyway.
+   */
+  const cancelQueuedContinue = useCallback((id: string) => {
+    continueQueueRef.current = continueQueueRef.current.filter((run) => run.id !== id);
+    setQueuedContinues(continueQueueRef.current.slice());
+    if (continueQueueRef.current.length === 0) setMeta(null);
+  }, []);
 
   /** P4 — cancel the in-flight turn (aborts the POST; the server cancels it). */
   const cancelTurn = useCallback(() => {
@@ -3002,7 +3027,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       ) : (
         <>
           {/* The work that outlived its process belongs where work starts. */}
-          <ResumeRunsPanel onContinue={continueRun} />
+          <ResumeRunsPanel
+            onContinue={continueRun}
+            queued={queuedContinues}
+            onCancelQueued={cancelQueuedContinue}
+          />
           {continuationNotice ? (
             <div
               className="chat-project-bar"
