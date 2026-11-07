@@ -84,13 +84,28 @@ export function buildMetricTiles(
     // money spent.
     const cost = data.cost;
     const classified = cost.billedUsd !== undefined;
-    tiles.push({
-      key: 'cost',
-      icon: '💰',
-      value: formatCost(classified ? cost.billedUsd! : cost.totalCost),
-      label: classified ? 'Billed' : 'Total Cost',
-      tone: 'danger',
-    });
+    const billed = classified ? cost.billedUsd! : cost.totalCost;
+    // Same rule as the Overview headline: money is the tile when there is money.
+    // With nothing billed (the default install, and every free tier) a "$0.00"
+    // tile is a placeholder, so tokens — recorded regardless of price — carry the
+    // tile instead.
+    tiles.push(
+      billed > 0
+        ? {
+            key: 'cost',
+            icon: '💰',
+            value: formatCost(billed),
+            label: classified ? 'Billed' : 'Total Cost',
+            tone: 'danger',
+          }
+        : {
+            key: 'tokens',
+            icon: '🧮',
+            value: formatNumber(cost.totalTokens),
+            label: 'Tokens Processed',
+            tone: 'danger',
+          },
+    );
   }
 
   return tiles;

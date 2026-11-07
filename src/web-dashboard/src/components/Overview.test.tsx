@@ -211,6 +211,32 @@ describe('Overview — summary cards', () => {
     expect(screen.getByText(/Cost by Provider \(billed, evidence-backed\)/)).toBeTruthy();
   });
 
+  it('plots tokens per provider when nothing is billed, instead of a chart of zeroes', async () => {
+    // The default install bills nothing: every provider is free or a declared
+    // subscription, so the money series is all 0. A landing page that plots that
+    // (and headlines it as "Billed $0.00") tells the user the dashboard is dead.
+    // Tokens are recorded either way, so they carry the same chart.
+    mockReads();
+    renderPage({
+      ...DATA,
+      cost: {
+        ...DATA.cost,
+        totalCost: 0,
+        billedUsd: 0,
+        totalTokens: 4200,
+        byProvider: { groq: 0, gemini: 0 },
+        byProviderTokens: { groq: 3500, gemini: 700 },
+        byProviderCalls: { groq: 2, gemini: 1 },
+      },
+    } as DashboardData);
+    await screen.findByText('Task Summary');
+
+    expect(screen.getByText(/Tokens by Provider/)).toBeTruthy();
+    // The placeholder the chart replaced: a 0 dollar headline on the page.
+    expect(screen.queryByText('Billed')).toBeNull();
+    expect(screen.getByText('Tokens processed')).toBeTruthy();
+  });
+
   it('says so when the server predates the split, instead of passing the recorded total off as billed', async () => {
     mockReads();
     renderPage(); // DATA carries only `byProvider`

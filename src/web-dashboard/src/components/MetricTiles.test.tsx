@@ -48,13 +48,15 @@ describe('buildMetricTiles', () => {
 
   it('drops a tile whose source is absent instead of reporting zero', () => {
     const withoutHub = buildMetricTiles(data(0), null);
-    expect(withoutHub.map((t) => t.key)).toEqual(['cost']);
+    // `data(0)` bills nothing, so the money tile is replaced by the token tile —
+    // the same rule the Overview headline follows (see the dedicated test below).
+    expect(withoutHub.map((t) => t.key)).toEqual(['tokens']);
 
     // No hub and no streamed conversation count: no conversation tile at all.
     expect(withoutHub.find((t) => t.key === 'conversations')).toBeUndefined();
 
     const withHub = buildMetricTiles(data(0), hub());
-    expect(withHub.map((t) => t.key)).toEqual(['tools', 'conversations', 'skills', 'cost']);
+    expect(withHub.map((t) => t.key)).toEqual(['tools', 'conversations', 'skills', 'tokens']);
   });
 
   it('falls back to the streamed count when the hub payload has none', () => {
@@ -74,6 +76,18 @@ describe('buildMetricTiles', () => {
     const tiles = buildMetricTiles(data(0.0000431), hub({ conversations: { total: 2400, recent: [], analytics: {} as never } }));
     expect(tiles.find((t) => t.key === 'conversations')?.value).toBe('2.4K');
     expect(tiles.find((t) => t.key === 'cost')?.value).toBe('$0.000043');
+  });
+
+  it('shows TOKENS instead of a $0.00 money tile when nothing was billed', () => {
+    // The default install bills nothing. A tile reading "$0.00 / Billed" is a
+    // placeholder that makes the band look broken; tokens are recorded either
+    // way, so the tile reports the work instead of the (absent) invoice.
+    const payload = {
+      cost: { totalCost: 0, billedUsd: 0, totalTokens: 4200 },
+    } as unknown as DashboardData;
+    const tile = buildMetricTiles(payload, hub()).find((t) => t.key === 'tokens');
+    expect(tile?.value).toBe('4.2K');
+    expect(tile?.label).toBe('Tokens Processed');
   });
 
   it('shows the BILLED figure, labelled as such, when the server sends the split', () => {

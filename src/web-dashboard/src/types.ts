@@ -299,6 +299,13 @@ export interface CostData {
   recomputedCalls?: number;
   /** Rows tagged test-origin, excluded from every figure above. */
   testOriginCalls?: number;
+  /**
+   * Tokens and calls per provider — the metric that stays informative on a free
+   * tier, where every dollar figure is honestly 0. Optional so an older server
+   * still renders (the Overview chart falls back to the money series).
+   */
+  byProviderTokens?: Record<string, number>;
+  byProviderCalls?: Record<string, number>;
   byProviderBilled?: Record<string, number>;
   byProviderUnverified?: Record<string, number>;
   byProviderValue?: Record<string, number>;

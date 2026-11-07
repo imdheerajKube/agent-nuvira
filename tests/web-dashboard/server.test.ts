@@ -706,6 +706,13 @@ describe('Dashboard Server', () => {
       expect(body.totalCost).toBe(0.004); // 0.0015 + 0.0020 + 0.0005
       expect(body.totalTokens).toBe(4300); // 1500 + 2000 + 800
 
+      // Tokens per provider: the same rows, split by who did the work. This is
+      // the series the Overview plots when no money was billed.
+      expect(body.byProviderTokens.groq).toBe(3500);
+      expect(body.byProviderTokens.gemini).toBe(800);
+      expect(body.byProviderCalls.groq).toBe(2);
+      expect(body.byProviderCalls.gemini).toBe(1);
+
       // byProvider
       expect(body.byProvider).toHaveProperty('groq');
       expect(body.byProvider).toHaveProperty('gemini');

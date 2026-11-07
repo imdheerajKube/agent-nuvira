@@ -2012,8 +2012,11 @@ function readCostData(): Record<string, unknown> {
     return {
       totalRequests: 0,
       totalCost: 0,
+      totalTokens: 0,
       byProvider: {},
       byModel: {},
+      byProviderTokens: {},
+      byProviderCalls: {},
       billedUsd: 0,
       billedReportedUsd: 0,
       billedListedUsd: 0,
@@ -2063,6 +2066,11 @@ function readCostData(): Record<string, unknown> {
 
   const byProvider: Record<string, number> = {};
   const byModel: Record<string, number> = {};
+  // TOKENS per provider. The ledger has always stored `totalTokens` on each call;
+  // it was only ever summed into one number, so the dashboard could chart money
+  // (honestly 0 on a free tier) but not the work that produced it.
+  const byProviderTokens: Record<string, number> = {};
+  const byProviderCalls: Record<string, number> = {};
   const byProviderMeasured: Record<string, number> = {};
   const byProviderReported: Record<string, number> = {};
   let measuredCalls = 0;
@@ -2079,6 +2087,15 @@ function readCostData(): Record<string, unknown> {
     const cost = typeof e.costUsd === 'number' ? e.costUsd : 0;
     if (e.provider) byProvider[e.provider as string] = (byProvider[e.provider as string] || 0) + cost;
     if (e.model) byModel[e.model as string] = (byModel[e.model as string] || 0) + cost;
+    // Same row set as `totalTokens` below (test-origin rows included), so the
+    // chart's bars add up to the tile above it. Money keeps its stricter,
+    // classification-filtered basis; tokens are usage, not a billing claim.
+    const tokens = typeof e.totalTokens === 'number' ? e.totalTokens : 0;
+    if (e.provider) {
+      const provider = e.provider as string;
+      byProviderTokens[provider] = (byProviderTokens[provider] || 0) + tokens;
+      byProviderCalls[provider] = (byProviderCalls[provider] || 0) + 1;
+    }
     // M2.2 wire-token metering split: measured (exact provider-reported
     // usage) vs estimated (length-based) spend.
     if (e.measured === true) {
@@ -2170,6 +2187,8 @@ function readCostData(): Record<string, unknown> {
     totalTokens,
     byProvider,
     byModel,
+    byProviderTokens,
+    byProviderCalls,
     byProviderMeasured,
     byProviderReported,
     measuredCalls,

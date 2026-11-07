@@ -109,15 +109,20 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
 
   const { cost, history, benchmarks, memory, health } = data;
 
+  // `billedUsd` is the evidence-backed figure; `totalCost` is the ledger as
+  // recorded and is only the fallback for an older server. The label follows the
+  // number so neither is mis-described — and when that number is 0 because
+  // nothing was ever billed, the tile shows the token count instead of printing
+  // "$0.00" as though that were the day's result.
+  const billedUsd = cost.billedUsd ?? cost.totalCost;
   const stats = [
-    // `billedUsd` is the evidence-backed figure; `totalCost` is the ledger as
-    // recorded and is only the fallback for an older server. The label follows the
-    // number so neither is mis-described.
-    {
-      icon: '💰',
-      value: formatCost(cost.billedUsd ?? cost.totalCost),
-      label: cost.billedUsd !== undefined ? 'Billed' : 'Total Cost',
-    },
+    billedUsd > 0
+      ? {
+          icon: '💰',
+          value: formatCost(billedUsd),
+          label: cost.billedUsd !== undefined ? 'Billed' : 'Total Cost',
+        }
+      : { icon: '🧮', value: formatNumber(cost.totalTokens), label: 'Tokens processed' },
     { icon: '📞', value: formatNumber(cost.totalRequests), label: 'API Requests' },
     { icon: '🧠', value: formatNumber(memory.total), label: 'Trajectories' },
     { icon: '📝', value: formatNumber(history.total), label: 'Chat Sessions' },
@@ -134,6 +139,19 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
   const providerEntries = Object.entries(billedByProvider ?? cost.byProvider ?? {})
     .map(([name, value]) => ({ name, value }))
     .sort((a, b) => b.value - a.value);
+
+  // TOKENS BY PROVIDER — the headline when no dollar figure is real. On a free
+  // or subscription tier nothing is billed, so a money chart is a column of
+  // zeroes: accurate, and useless as a landing page. Tokens are recorded on every
+  // call whether or not anything was charged, so they answer the same question
+  // (which provider did the work, and how much) with a number that is not 0 by
+  // definition. The money view stays for anyone who has a bill to show.
+  const tokenByProvider = cost.byProviderTokens;
+  const hasTokenBreakdown = tokenByProvider !== undefined && Object.keys(tokenByProvider).length > 0;
+  const tokenEntries = Object.entries(tokenByProvider ?? {})
+    .map(([name, value]) => ({ name, value }))
+    .sort((a, b) => b.value - a.value);
+  const chartEntries = hasTokenBreakdown ? tokenEntries : providerEntries;
 
   // Trajectories by project chart data
   const projectEntries = Object.entries(memory.byFingerprint || {})
@@ -316,29 +334,46 @@ export default function Overview({ data, onRefresh, refreshing = false }: Overvi
       </div>
 
       <h2 className="section-subtitle">
-        💰 Cost by Provider {billedByProvider ? '(billed, evidence-backed)' : '(recorded, not evidence-filtered)'}
+        {hasTokenBreakdown
+          ? '🧮 Tokens by Provider (counted on every call — no billing needed)'
+          : `💰 Cost by Provider ${billedByProvider ? '(billed, evidence-backed)' : '(recorded, not evidence-filtered)'}`}
       </h2>
       <div className="chart-container">
-        {providerEntries.length > 0 ? (
+        {chartEntries.length > 0 ? (
           <ResponsiveContainer width="100%" height={260}>
-            <BarChart data={providerEntries} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
+            <BarChart data={chartEntries} margin={{ top: 20, right: 20, left: 10, bottom: 40 }}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="name" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} tickFormatter={(v) => '$' + v.toFixed(4)} />
+              <YAxis
+                tick={{ fontSize: 11 }}
+                tickFormatter={(v: number) => (hasTokenBreakdown ? formatNumber(v) : '$' + v.toFixed(4))}
+              />
               <Tooltip
                 contentStyle={{ background: 'var(--bg-card)', border: '1px solid var(--border)', borderRadius: 8 }}
                 labelStyle={{ color: 'var(--text-primary)' }}
-                formatter={(value: number) => [formatCost(value), billedByProvider ? 'Billed' : 'Recorded']}
+                // The provider name carries the call count, so a bar's shape is
+                // readable as "how much work" and not just "how many tokens".
+                labelFormatter={(name) => {
+                  const calls = cost.byProviderCalls?.[String(name)];
+                  return calls === undefined ? String(name) : `${name} — ${formatNumber(calls)} calls`;
+                }}
+                formatter={(value: number) =>
+                  hasTokenBreakdown
+                    ? [`${formatNumber(value)} tokens`, 'Tokens']
+                    : [formatCost(value), billedByProvider ? 'Billed' : 'Recorded']
+                }
               />
               <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-                {providerEntries.map((entry) => (
+                {chartEntries.map((entry) => (
                   <Cell key={entry.name} fillOpacity={0.8} style={{ fill: PROVIDER_COLORS[entry.name] || 'var(--accent-blue)' }} />
                 ))}
               </Bar>
             </BarChart>
           </ResponsiveContainer>
         ) : (
-          <div className="empty-state">No cost data yet.</div>
+          <div className="empty-state">
+            {hasTokenBreakdown ? 'No token usage recorded yet.' : 'No cost data yet.'}
+          </div>
         )}
       </div>
 
