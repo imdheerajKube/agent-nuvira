@@ -610,14 +610,17 @@ describe('AgentHub — Subagents live refresh', () => {
 
     // The tab badge counts runs, so it reports the live state without a click.
     expect(fetchHub).toHaveBeenCalledTimes(1);
-    expect(screen.getByText('1/1')).toBeTruthy();
+    expect(screen.getByText('▶ 1/1')).toBeTruthy();
 
     // The child finishes between two ticks.
     fetchHub.mockResolvedValue(finished());
     await act(async () => { await vi.advanceTimersByTimeAsync(5000 + 50); });
 
     expect(fetchHub).toHaveBeenCalledTimes(2);
-    expect(screen.getByText('0/1')).toBeTruthy();
+    // At rest the badge is the run COUNT. The old "0/1" meant "0 running, 1 ever
+    // recorded" but read as "0 of 1 done", and looked like a frozen placeholder
+    // because it never changes until another run happens.
+    expect(screen.getByRole('tab', { name: /Subagents/ }).textContent).toMatch(/Subagents\s*1$/);
 
     // The row itself is updated in place — the point of the poll.
     fireEvent.click(screen.getByRole('tab', { name: /Subagents/ }));

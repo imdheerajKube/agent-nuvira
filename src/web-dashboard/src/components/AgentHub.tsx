@@ -64,6 +64,23 @@ const STATUS_LABEL: Record<string, string> = { pending: '⏳ pending', sent: '�
  */
 const SUBAGENT_POLL_MS = 5000;
 
+/**
+ * The Subagents tab badge.
+ *
+ * `running/total` is rendered ONLY while a run is in flight — that is the one
+ * piece of news the tab has between clicks. At rest the badge is the all-time
+ * run count, because the old `0/1` read as a fraction (0 of 1 done) when it
+ * meant "nothing running, one run ever recorded": two unrelated numbers, and a
+ * value that then sits unchanged for weeks with nothing on screen to explain it.
+ */
+export function subagentsTabBadge(
+  subagents: { total?: number; running?: number } | undefined,
+): string {
+  const total = subagents?.total ?? 0;
+  const running = subagents?.running ?? 0;
+  return running > 0 ? `▶ ${running}/${total}` : String(total);
+}
+
 /** Child-process status → label. A refused run lands on `failed` (with a code). */
 const SUBAGENT_STATUS_LABEL: Record<string, string> = {
   spawning: '⏳ spawning',
@@ -1115,7 +1132,7 @@ export default function AgentHub() {
             : t.id === 'channels' ? (data ? String(data.channels.delivery.total) : '')
             : t.id === 'conversations' ? (data ? String(data.conversations?.total ?? 0) : '')
             : t.id === 'artifacts' ? (data ? String(data.artifacts.totalSessions) : '')
-            : t.id === 'subagents' ? (data ? `${data.subagents?.running ?? 0}/${data.subagents?.total ?? 0}` : '')
+            : t.id === 'subagents' ? (data ? subagentsTabBadge(data.subagents) : '')
             : (data ? `${data.skills.enabled}/${data.skills.total}` : '');
           return (
             <button
@@ -1124,6 +1141,11 @@ export default function AgentHub() {
               aria-selected={tab === t.id}
               className={`hub-tab${tab === t.id ? ' active' : ''}`}
               onClick={() => setTab(t.id)}
+              title={
+                t.id === 'subagents' && data
+                  ? `${data.subagents?.total ?? 0} run${(data.subagents?.total ?? 0) === 1 ? '' : 's'} recorded (all time) · ${data.subagents?.running ?? 0} running now`
+                  : undefined
+              }
             >
               {t.icon} {t.label}
               {count ? <span className="hub-tab-count">{count}</span> : null}
