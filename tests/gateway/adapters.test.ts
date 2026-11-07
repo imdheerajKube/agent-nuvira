@@ -1091,6 +1091,22 @@ describe('smtpOptionsFromEnv', () => {
     expect(opts.port).toBe(465);
   });
 
+  it('treats the blank values the form writes as unset, so FROM still defaults to the user', () => {
+    setEnv('NUVIRA_SMTP_HOST', 'smtp.gmail.com');
+    setEnv('NUVIRA_SMTP_PORT', '');
+    setEnv('NUVIRA_SMTP_USER', 'me@gmail.com');
+    setEnv('NUVIRA_SMTP_PASS', '');
+    setEnv('NUVIRA_SMTP_FROM', '');
+
+    const opts = smtpOptionsFromEnv();
+
+    expect(opts.from).toBe('me@gmail.com');
+    expect(opts.port).toBe(587);
+    expect(opts.pass).toBeUndefined();
+    // An empty FROM must not make a usable relay look unconfigured.
+    expect(new EmailAdapter(opts).configured).toBe(true);
+  });
+
   it('takes the App Password the form now offers, without Gmail\'s cosmetic spaces', () => {
     setEnv('NUVIRA_SMTP_HOST', 'smtp.gmail.com');
     setEnv('NUVIRA_SMTP_USER', 'me@gmail.com');

@@ -1135,9 +1135,13 @@ function splitHostPort(value: string): { host: string; port?: string } {
 
 /** Build the SMTP options from the environment (BUFF_SMTP_*). */
 export function smtpOptionsFromEnv(): SmtpOptions {
-  const split = splitHostPort(envBuff('SMTP_HOST') ?? '');
+  // An EMPTY value means "not set", not a value. The dashboard writes a key for
+  // every field it renders, so leaving From blank stores `NUVIRA_SMTP_FROM=` and
+  // `??` would keep the '' — `from` would be empty, `configured` false, and a
+  // working Gmail setup would look unconfigured after the next restart.
+  const split = splitHostPort((envBuff('SMTP_HOST') ?? '').trim());
   const host = split.host;
-  const rawPort = envBuff('SMTP_PORT') ?? split.port;
+  const rawPort = (envBuff('SMTP_PORT') || split.port || '').trim();
   // 465 is implicit TLS — the ONLY TLS mode this client implements. 587 is
   // plain, and Gmail answers AUTH there with 530 "Must issue a STARTTLS command
   // first", so 587 is not a working Gmail choice no matter the password.
@@ -1146,12 +1150,12 @@ export function smtpOptionsFromEnv(): SmtpOptions {
     host,
     port: rawPort ? parseInt(rawPort, 10) || (secure ? 465 : 587) : secure ? 465 : 587,
     secure,
-    user: envBuff('SMTP_USER') ?? undefined,
+    user: (envBuff('SMTP_USER') ?? '').trim() || undefined,
     // Gmail shows an App Password as four space-separated groups. The spaces are
     // presentational and the value is rejected with them in some flows, so strip
     // whitespace here rather than hand a correct password back as a 535.
     pass: (envBuff('SMTP_PASS') ?? '').replace(/\s+/g, '') || undefined,
-    from: envBuff('SMTP_FROM') ?? envBuff('SMTP_USER') ?? '',
+    from: (envBuff('SMTP_FROM') ?? '').trim() || (envBuff('SMTP_USER') ?? '').trim() || '',
   };
 }
 
