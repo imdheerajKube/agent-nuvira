@@ -295,13 +295,16 @@ Inbound has two options:
 
 ```bash
 agent-nuvira config gateway set email
-# needs: BUFF_SMTP_HOST (e.g. smtp.gmail.com:587) + BUFF_SMTP_USER
-# optional: BUFF_SMTP_PASS (absent = local/trusted relay)
+# needs: NUVIRA_SMTP_HOST (bare host, e.g. smtp.gmail.com) + NUVIRA_SMTP_USER
+# Gmail: NUVIRA_SMTP_PORT=465 + NUVIRA_SMTP_PASS=<16-char App Password>
+#        465 is implicit TLS; 587 would need STARTTLS, which is not implemented
+# optional: NUVIRA_SMTP_FROM (defaults to the user); no PASS = a trusted local relay
 agent-nuvira gateway start
 ```
 
-The gateway can send email via your SMTP relay. (Inbound email reading depends
-on the relay; for most setups this is a notification channel.)
+The gateway can send email via your SMTP relay. Outbound only — reading a
+mailbox would need IMAP, which is deliberately out of scope, so this is a
+notification channel rather than a two-way inbox.
 
 ### 4.6 SMS (Twilio) — send-only
 

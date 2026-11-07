@@ -17,6 +17,7 @@ import {
   createConfiguredAdapters,
   ircSend,
   simplexSend,
+  smtpOptionsFromEnv,
   smtpSend,
   splitIrcMessage,
   stripIrcMarkdown,
@@ -1039,5 +1040,67 @@ describe('createConfiguredAdapters (I6 platforms)', () => {
 
     process.env.SIMPLEX_WS_URL = 'ws://127.0.0.1:5225';
     expect(createConfiguredAdapters().map((a) => a.platform)).toContain('simplex');
+  });
+});
+
+/**
+ * How a Gmail relay's settings actually reach the socket.
+ *
+ * MEASURED defect these pin: the guided setup told the operator to put
+ * `smtp.gmail.com:587` in the HOST var, and `smtpSend` passed that whole string
+ * to `net.connect({ host })` — a DNS failure on a value the product itself
+ * suggested. Separately, 587 is plain here (no STARTTLS), so Gmail rejects AUTH
+ * with 530; 465 is the only TLS mode this client implements.
+ */
+describe('smtpOptionsFromEnv', () => {
+  const backup: Record<string, string | undefined> = {};
+
+  const setEnv = (name: string, value: string | undefined): void => {
+    if (!(name in backup)) backup[name] = process.env[name];
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  };
+
+  afterEach(() => {
+    for (const [k, v] of Object.entries(backup)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    for (const k of Object.keys(backup)) delete backup[k];
+  });
+
+  it('splits a host:port paste instead of resolving it as one hostname', () => {
+    setEnv('NUVIRA_SMTP_HOST', 'smtp.gmail.com:587');
+    setEnv('NUVIRA_SMTP_PORT', undefined);
+    setEnv('NUVIRA_SMTP_SECURE', undefined);
+
+    const opts = smtpOptionsFromEnv();
+
+    expect(opts.host).toBe('smtp.gmail.com');
+    expect(opts.port).toBe(587);
+  });
+
+  it('treats port 465 as implicit TLS, the only working Gmail port here', () => {
+    setEnv('NUVIRA_SMTP_HOST', 'smtp.gmail.com');
+    setEnv('NUVIRA_SMTP_PORT', '465');
+    setEnv('NUVIRA_SMTP_SECURE', undefined);
+
+    const opts = smtpOptionsFromEnv();
+
+    expect(opts.secure).toBe(true);
+    expect(opts.port).toBe(465);
+  });
+
+  it('takes the App Password the form now offers, without Gmail\'s cosmetic spaces', () => {
+    setEnv('NUVIRA_SMTP_HOST', 'smtp.gmail.com');
+    setEnv('NUVIRA_SMTP_USER', 'me@gmail.com');
+    setEnv('NUVIRA_SMTP_PASS', 'abcd efgh ijkl mnop');
+    setEnv('NUVIRA_SMTP_FROM', undefined);
+
+    const opts = smtpOptionsFromEnv();
+
+    expect(opts.pass).toBe('abcdefghijklmnop');
+    // FROM defaults to the user, so a Gmail setup needs no extra field.
+    expect(opts.from).toBe('me@gmail.com');
   });
 });

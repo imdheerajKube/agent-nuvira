@@ -1116,17 +1116,41 @@ export interface SmtpOptions {
   from: string;
 }
 
+/**
+ * Split a `host:port` paste into its two parts.
+ *
+ * The guided setup prompt used to suggest `smtp.gmail.com:587` for the HOST var,
+ * and `netConnect({ host })` cannot resolve that as a hostname — the documented
+ * example produced a DNS failure. Accepting the shape here makes the old advice
+ * harmless instead of a dead end.
+ */
+function splitHostPort(value: string): { host: string; port?: string } {
+  const colon = value.lastIndexOf(':');
+  if (colon === -1) return { host: value };
+  const port = value.slice(colon + 1);
+  // A bare IPv6 literal has several colons and a non-numeric tail — leave it.
+  if (!/^\d+$/.test(port)) return { host: value };
+  return { host: value.slice(0, colon), port };
+}
+
 /** Build the SMTP options from the environment (BUFF_SMTP_*). */
 export function smtpOptionsFromEnv(): SmtpOptions {
-  const host = envBuff('SMTP_HOST') ?? '';
-  const rawPort = envBuff('SMTP_PORT');
+  const split = splitHostPort(envBuff('SMTP_HOST') ?? '');
+  const host = split.host;
+  const rawPort = envBuff('SMTP_PORT') ?? split.port;
+  // 465 is implicit TLS — the ONLY TLS mode this client implements. 587 is
+  // plain, and Gmail answers AUTH there with 530 "Must issue a STARTTLS command
+  // first", so 587 is not a working Gmail choice no matter the password.
   const secure = envBuff('SMTP_SECURE') === 'true' || rawPort === '465';
   return {
     host,
     port: rawPort ? parseInt(rawPort, 10) || (secure ? 465 : 587) : secure ? 465 : 587,
     secure,
     user: envBuff('SMTP_USER') ?? undefined,
-    pass: envBuff('SMTP_PASS') ?? undefined,
+    // Gmail shows an App Password as four space-separated groups. The spaces are
+    // presentational and the value is rejected with them in some flows, so strip
+    // whitespace here rather than hand a correct password back as a 535.
+    pass: (envBuff('SMTP_PASS') ?? '').replace(/\s+/g, '') || undefined,
     from: envBuff('SMTP_FROM') ?? envBuff('SMTP_USER') ?? '',
   };
 }

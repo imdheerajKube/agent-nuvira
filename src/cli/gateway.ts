@@ -727,7 +727,8 @@ export class GatewayCommand {
         name: 'Email (SMTP)',
         steps: [
           'You need an SMTP relay (Gmail, SendGrid, Mailgun, etc.)',
-          'For Gmail: use smtp.gmail.com:587 with an App Password (not your regular password)',
+          'Gmail: host smtp.gmail.com, port 465, your address, and a 16-character App Password (not your Google password)',
+          '587 needs STARTTLS, which this client does not implement — use 465',
           'For SendGrid/Mailgun: get SMTP credentials from their dashboard',
         ],
         vars: platformEnvVarMeta('email'),

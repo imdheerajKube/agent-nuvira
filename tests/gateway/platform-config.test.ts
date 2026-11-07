@@ -195,6 +195,26 @@ describe('additional transport vars are offered without becoming required', () =
     expect(PLATFORM_ENV_VARS.discord).toEqual(['NUVIRA_DISCORD_BOT_TOKEN']);
   });
 
+  it('offers the SMTP password, port and from address for email', () => {
+    // MEASURED defect: the email form asked for exactly two values (host + user)
+    // and no password, so a Gmail relay could be saved — and shown as Active —
+    // while every send failed 535 AUTH. The secret and the port are what make a
+    // hosted relay configurable at all; neither may become REQUIRED, because a
+    // trusted local relay authenticates with nothing.
+    const meta = platformEnvVarMeta('email');
+    expect(meta.map((m) => m.varName)).toEqual([
+      'NUVIRA_SMTP_HOST',
+      'NUVIRA_SMTP_USER',
+      'NUVIRA_SMTP_PORT',
+      'NUVIRA_SMTP_PASS',
+      'NUVIRA_SMTP_FROM',
+    ]);
+    expect(meta.find((m) => m.varName === 'NUVIRA_SMTP_PASS')?.secret).toBe(true);
+    expect(meta.find((m) => m.varName === 'NUVIRA_SMTP_PORT')?.secret).toBe(false);
+    expect(meta.find((m) => m.varName === 'NUVIRA_SMTP_PASS')?.optional).toBe(true);
+    expect(PLATFORM_ENV_VARS.email).toEqual(['NUVIRA_SMTP_HOST', 'NUVIRA_SMTP_USER']);
+  });
+
   it('adds nothing for a platform with no extra transport modes', () => {
     expect(platformConfigVars('telegram')).toEqual(['NUVIRA_TELEGRAM_TOKEN']);
     expect(platformEnvVarMeta('telegram').every((m) => !m.optional)).toBe(true);

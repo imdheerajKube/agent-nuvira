@@ -7469,7 +7469,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       discord: { url: 'https://discord.com/developers/applications', hint: 'Create an application + bot in the Discord Developer Portal, copy the bot token, paste it here, then run `nuvira gateway start`.' },
       slack: { url: 'https://api.slack.com/apps', hint: 'Create a Slack app with Bot Token Scopes, install to workspace, copy the Bot Token, paste it here, then run `nuvira gateway start`.' },
       whatsapp_cloud: { url: 'https://developers.facebook.com/docs/whatsapp/cloud-api/get-started', hint: 'Set up a Meta Cloud API phone number, paste the token + Phone ID here, then run `nuvira gateway start`.' },
-      email: { url: '', hint: 'Enter your SMTP relay host and auth credentials. The agent replies to incoming emails.' },
+      email: { url: '', hint: 'Enter the relay host (bare hostname), port 465 for Gmail, your full address and a 16-character App Password. Outbound only — no inbox reading.' },
       signal: { url: 'https://bbernhard.github.io/signal-cli-rest-api/', hint: 'Run signal-cli-rest-api, register an account, paste the account number here, then run `nuvira gateway start`.' },
       dingtalk: { url: 'https://open.dingtalk.com/', hint: 'Create a custom robot in a DingTalk group, copy the webhook URL, paste it here, then run `nuvira gateway start`.' },
       feishu: { url: 'https://open.feishu.cn/', hint: 'Create a bot in Feishu, copy the webhook URL, paste it here, then run `nuvira gateway start`.' },

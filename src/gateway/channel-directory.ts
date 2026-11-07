@@ -194,6 +194,18 @@ export const PLATFORM_TRANSPORT_ENV_VARS: Partial<Record<Platform, string[]>> = 
   // Socket Mode inbound (xapp-…), outgoing webhook, and Events-API signature
   // verification respectively.
   slack: ['NUVIRA_SLACK_APP_TOKEN', 'NUVIRA_SLACK_WEBHOOK_URL', 'NUVIRA_SLACK_SIGNING_SECRET'],
+  // Where the relay is, who it authenticates as, and who the mail is from.
+  //
+  // MEASURED, and the reason this entry exists: the form asked for exactly two
+  // values — host and user — so a Gmail relay could be saved with NO password.
+  // The adapter then issued AUTH LOGIN with an empty password and Gmail answered
+  // 535, while the dashboard showed the transport as Active. Every relay that
+  // authenticates (Gmail, SendGrid, Mailgun, SES) needs the secret, so offering
+  // only the two that are REQUIRED for a trusted local relay was the bug.
+  // Port belongs here for the same reason: 465 is implicit TLS (the only TLS
+  // mode `smtpSend` implements) and 587 would need STARTTLS, so without a port
+  // field there is no working Gmail configuration to be had from the UI.
+  email: ['NUVIRA_SMTP_PORT', 'NUVIRA_SMTP_PASS', 'NUVIRA_SMTP_FROM'],
 };
 
 /**

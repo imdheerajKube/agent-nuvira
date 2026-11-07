@@ -9,7 +9,7 @@ const GUIDES: Record<string, { icon: string; category: string; steps: string[]; 
   slack: { icon: '💬', category: 'Chat', steps: ['Go to api.slack.com/apps', 'Create New App from scratch', 'Add Bot Token Scopes: chat:write, im:read, im:write', 'Install to workspace', 'Copy the Bot User OAuth Token (xoxb-...)'], testTarget: 'slack:' },
   whatsapp: { icon: '📱', category: 'Chat', steps: ['Run: nuvira whatsapp pair (or from Gateway tab)', 'Scan the QR code with WhatsApp', 'Pairing completes automatically'], testTarget: '' },
   whatsapp_cloud: { icon: '☁️', category: 'Chat', steps: ['Go to developers.facebook.com', 'Set up WhatsApp Cloud API', 'Copy token + Phone ID'], testTarget: 'whatsapp_cloud:' },
-  email: { icon: '📧', category: 'Chat', steps: ['Get SMTP credentials (Gmail, SendGrid, etc.)', 'For Gmail: use App Password at smtp.gmail.com:587', 'Paste SMTP host + user below'], testTarget: '' },
+  email: { icon: '📧', category: 'Chat', steps: ['Get SMTP credentials (Gmail, SendGrid, etc.)', 'Gmail: turn on 2-Step Verification, then create an App Password (16 characters)', 'Host smtp.gmail.com · port 465 · your full Gmail address · the App Password', '587 needs STARTTLS, which is not supported — use 465'], testTarget: '' },
   signal: { icon: '🔒', category: 'Chat', steps: ['Run signal-cli-rest-api Docker container', 'Register a Signal account', 'Paste account number below'], testTarget: '' },
   dingtalk: { icon: '🔔', category: 'Webhooks', steps: ['Open DingTalk and create a group', 'Add custom robot and copy webhook URL', 'Paste URL below'], testTarget: '' },
   feishu: { icon: '🐦', category: 'Webhooks', steps: ['Open Feishu and create a bot', 'Copy webhook URL and paste below'], testTarget: '' },

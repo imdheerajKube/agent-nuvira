@@ -71,8 +71,11 @@ const PROMPTS: Record<string, string> = {
   IRC_SERVER: 'IRC server host (e.g. irc.libera.chat)',
   SIMPLEX_WS_URL: 'SimpleX daemon WebSocket URL (ws://127.0.0.1:5225)',
   HASS_TOKEN: 'Home Assistant long-lived access token',
-  NUVIRA_SMTP_HOST: 'SMTP relay host (e.g. smtp.gmail.com:587)',
-  NUVIRA_SMTP_USER: 'SMTP auth user',
+  NUVIRA_SMTP_HOST: 'SMTP relay host — bare hostname, e.g. smtp.gmail.com',
+  NUVIRA_SMTP_USER: 'SMTP auth user (for Gmail, your full address)',
+  NUVIRA_SMTP_PORT: 'SMTP port — 465 for Gmail (TLS); 587 needs STARTTLS, which is not implemented',
+  NUVIRA_SMTP_PASS: 'SMTP password — Gmail: the 16-character App Password, not your Google password',
+  NUVIRA_SMTP_FROM: 'From address (defaults to the SMTP user)',
   NUVIRA_SIGNAL_ACCOUNT: 'Signal account number (registered with signal-cli-rest-api)',
 };
 

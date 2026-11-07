@@ -126,7 +126,8 @@ export function PlatformConfigSection({ canWrite, sessionExpired, mode = 'grid' 
     email: {
       steps: [
         'You need an SMTP relay (Gmail, SendGrid, Mailgun, etc.)',
-        'For Gmail: use smtp.gmail.com:587 with an App Password',
+        'Gmail: host smtp.gmail.com, port 465, your address, and a 16-character App Password',
+        '587 needs STARTTLS, which is not supported — use 465',
         'For SendGrid/Mailgun: get SMTP credentials from their dashboard',
       ],
       postSetup: [
