@@ -1,0 +1,84 @@
+[Page 1]
+Incident postmortem: checkout outage on 14 March
+
+Summary
+
+The checkout service was unavailable for 18 minutes, from 09:42 to 10:00 UTC. During that window checkout requests failed with HTTP 503, customers could not complete a purchase, and the support queue received 214 messages. No captured payment data was lost. The incident was declared SEV-2 at 09:47 and closed after the rollback and pool recovery were verified.
+
+This document is the postmortem, not a customer-facing notice. It records the timeline, the root cause, the remediation, and the follow-up work. The review was led by the incident commander, Priya Nair, with participation from the platform team, the payments team, and support operations.
+
+[Page 2]
+Timeline
+
+09:38 — A routine traffic shift moved 30 percent of checkout traffic to the new order-routing path. The change had passed staging, but staging uses a synthetic database with a much smaller connection pool than production.
+
+09:40 — The first p99 latency alert fired. Latency had risen from 240 ms to 4.8 seconds, but the alert was treated as a capacity warning rather than an availability incident because error rates were still below the page threshold.
+
+09:42 — Checkout error rates crossed 20 percent. The on-call engineer acknowledged the page and opened the incident bridge.
+
+09:44 — The database team reported that the primary database was healthy: CPU was 38 percent, memory was stable, and disk latency was normal.
+
+09:47 — The incident commander declared SEV-2 and froze deploys. Customer support was told to use the prepared outage response, not to promise a refund timeline.
+
+09:51 — The team found that application instances were waiting for database connections, not failing to reach the database. The pool wait queue had grown to more than 900 requests.
+
+09:55 — The traffic shift was reverted. New connections stopped arriving, but the existing queue took several minutes to drain.
+
+10:00 — Error rates returned below 0.5 percent. The incident was closed for customer traffic, and the follow-up review began.
+
+[Page 3]
+Root cause
+
+The primary cause was ERR_DB_POOL_EXHAUSTED. The new order-routing path opened a separate read transaction for every line item in a cart and did not release the connection until the entire cart had been rendered. Carts with more than 40 line items held a connection for the full render, so a modest increase in traffic produced a long pool wait queue.
+
+The exception recorded by the application was:
+
+ERR_DB_POOL_EXHAUSTED: timed out waiting for a connection after 5000 ms; active=120 idle=0 waiting=914
+
+The database itself was not overloaded. The application's connection pool was saturated by long-held transactions. This distinction matters because the first dashboards pointed at database CPU, and that sent the first ten minutes of investigation in the wrong direction.
+
+A secondary contributing factor was the alert design. The p99 latency alert had no companion signal for pool wait time. The team could see that requests were slow, but not that they were blocked on a resource the application controlled.
+
+[Page 4]
+Remediation
+
+The immediate remediation was a rollback of the order-routing change. The platform team then increased the pool size from 40 to 60 connections as a temporary safety margin, but this was not treated as the fix. Increasing the pool without shortening transactions would only move the exhaustion threshold.
+
+The durable fix has three parts:
+
+1. The order-routing path now releases its connection after each page of line items instead of holding one for the whole cart.
+2. A pool-wait metric is exported with every checkout request, and the p99 pool wait time is now a first-class alert.
+3. The staging database pool was resized to match production proportions so a repeat of the traffic shift cannot pass staging under a false capacity assumption.
+
+The platform team owns the connection-lifecycle change. The payments team owns the alert and the staging configuration. Both changes are tracked in the reliability backlog and are required before the order-routing path can be enabled again.
+
+[Page 5]
+Customer impact and follow-up
+
+Customers saw a generic checkout error and could retry after the incident. Support handled 214 conversations; 37 customers asked for confirmation that a charge had not been created, and all 37 were confirmed as no-charge. The status page was updated at 09:49 and again at 10:03.
+
+The review identified four follow-ups:
+
+- Add pool-wait time to the checkout service dashboard.
+- Add a synthetic cart with 80 line items to the load test.
+- Rehearse the rollback in the production change window, not only in staging.
+- Review every alert that can fire without a customer-impact signal.
+
+The review also recommends that future traffic-shift changes include an explicit connection-pool budget and a named rollback owner. Those items are process changes, not code changes, and are owned by the incident commander.
+
+[Page 6]
+What went well
+
+The rollback was available and worked on the first attempt. The incident commander kept the bridge focused on the customer path rather than on the database CPU graph. Support used the prepared response instead of improvising refund language. The postmortem was written from the timeline and the application logs, not from memory.
+
+The team deliberately did not describe the event as a database outage. The database remained available; the application exhausted its own pool. That wording matters in the customer notice and in the follow-up work, because a database upgrade would not have prevented this incident.
+
+[Page 7]
+Appendix: terms
+
+Connection pool — a bounded set of reusable database connections owned by the application.
+Pool wait — time a request spends queued for a connection before it can run its query.
+p99 latency — the latency below which 99 percent of requests complete.
+SEV-2 — a significant customer-impacting incident that requires an incident commander but does not meet the SEV-1 threshold.
+
+The appendix is included so the on-call rotation has the same definitions as the review. It is not a substitute for the runbook.

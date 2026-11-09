@@ -37,6 +37,56 @@ export interface DecideInput {
   policy?: Partial<SteeringPolicy>;
 }
 
+/**
+ * Human labels for the deterministic escalation codes. The UI and CLI render
+ * these instead of the raw code, so "why do I have to approve this?" has an
+ * answer that names the actual rule (P2.3).
+ */
+export const ESCALATION_LABELS: Record<string, string> = {
+  high_impact: 'high impact — it can change material work',
+  conflict: 'conflicts with an existing requirement',
+  supersedes_approved_requirement: 'supersedes an approved requirement',
+  irreversible: 'not automatically reversible',
+  removes_completed_work: 'touches work that is already complete',
+  steward_requested: 'the assessor flagged it as material',
+  policy_override_attempt: 'attempts to change the run’s safety policy',
+};
+
+export function escalationLabel(code: string): string {
+  return ESCALATION_LABELS[code] ?? code.replace(/_/g, ' ');
+}
+
+export function describeEscalations(codes: string[]): string[] {
+  return codes.map(escalationLabel);
+}
+
+/**
+ * Say what an approval will do, in the terms the user is deciding about. This is
+ * attached to the decision when policy escalates, so approval never looks like a
+ * generic "allow?" prompt (P2.3).
+ */
+export function approvalEffectFor(assessment: ChangeAssessment): string {
+  const ops = assessment.proposedOps;
+  const count = (kind: PlanOp['op']): number => ops.filter((op) => op.op === kind).length;
+  const parts: string[] = [];
+  if (count('add_step')) parts.push(`add ${count('add_step')} step(s)`);
+  if (count('update_step')) parts.push(`update ${count('update_step')} step(s)`);
+  if (count('remove_step')) parts.push(`remove ${count('remove_step')} step(s) from future work`);
+  if (count('cancel_pending_after')) parts.push('cancel pending steps after the named one');
+  if (count('add_constraint')) parts.push(`record ${count('add_constraint')} new constraint(s)`);
+  if (count('set_priority')) parts.push('change step priority');
+  if (count('reorder')) parts.push('reorder future steps');
+  const summary = parts.length ? parts.join(', ') : 'apply the proposed plan change';
+  const safeguards: string[] = [];
+  if (assessment.impact === 'high') safeguards.push('a workspace checkpoint is taken first');
+  if (ops.some((op) => op.op === 'remove_step' || op.op === 'cancel_pending_after')) {
+    safeguards.push('completed work is never rewritten');
+  }
+  return `Approving at the next safe point will ${summary}${
+    safeguards.length ? ` (${safeguards.join('; ')})` : ''
+  }. It becomes a new immutable plan version with its diff, and the executor receives only that bounded directive.`;
+}
+
 function isControl(assessment: ChangeAssessment): boolean {
   return assessment.relation === 'control' || assessment.kind === 'stop' || assessment.kind === 'pause';
 }
@@ -73,6 +123,26 @@ export function isIrreversible(plan: SteeringPlan | null, assessment: ChangeAsse
     return true;
   }
   return false;
+}
+
+/**
+ * Pure additions cannot invalidate anything: no step is removed, rewritten or
+ * cancelled, and no completed work is touched. A user who submits an additive
+ * request in the active objective is the author of that change, so the Steward's
+ * ADVISORY `requiresApproval` must not override them (measured 2026-11-09: the
+ * Steward flagged "add one deliverable" for approval, so a benchmark scope
+ * change that Freebuff/Claude applied became a dead `needs_approval` item).
+ *
+ * This does NOT weaken a real gate: high impact, conflicts, supersession,
+ * irreversibility and completed-work edits still escalate below, and a
+ * destructive op is never purely additive.
+ */
+export function isPurelyAdditive(assessment: ChangeAssessment): boolean {
+  return (
+    assessment.relation === 'on_task' &&
+    assessment.proposedOps.length > 0 &&
+    assessment.proposedOps.every((op) => op.op === 'add_step' || op.op === 'add_constraint')
+  );
 }
 
 /**
@@ -183,7 +253,11 @@ export function decide(input: DecideInput): SteeringDecision {
   }
   if (isIrreversible(plan, assessment)) escalations.push('irreversible');
   if (removesCompletedWork(plan, assessment.proposedOps)) escalations.push('removes_completed_work');
-  if (assessment.requiresApproval) escalations.push('steward_requested');
+  // Advisory only: a purely additive on-task change is authorized by the user
+  // who submitted it. Destructive/replacing work is not purely additive.
+  if (assessment.requiresApproval && !isPurelyAdditive(assessment)) {
+    escalations.push('steward_requested');
+  }
 
   if (escalations.length > 0) {
     return {
@@ -191,6 +265,7 @@ export function decide(input: DecideInput): SteeringDecision {
       reason: `Needs your approval: ${assessment.rationale || 'this is a material change to the run.'}`,
       at: 'next_safe_point',
       escalations,
+      approvalEffect: approvalEffectFor(assessment),
     };
   }
 

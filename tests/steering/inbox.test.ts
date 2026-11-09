@@ -15,17 +15,38 @@ import {
   confirmInterpretation,
   decideApproval,
   listBacklog,
+  listSteeringRuns,
   openSteeringRun,
   requestApproval,
   runSafePoint,
   steeringEnabled,
   submitGuidance,
   triagePending,
+  withCliSteeringRun,
 } from '../../src/steering/index.js';
 import { getGuidance, updateGuidance } from '../../src/steering/inbox.js';
 import { readChanges, readJournal, readRun } from '../../src/steering/store.js';
 import { latestPlan } from '../../src/steering/plan.js';
-import type { SteeringPlanAdapter } from '../../src/steering/types.js';
+import type { SteeringPlanAdapter, SteeringPlanStep } from '../../src/steering/types.js';
+
+/** A minimal Steward answer, as the model would return it. */
+function stewardJson(overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    relation: 'on_task',
+    kind: 'add',
+    timing: 'next_safe_point',
+    impact: 'low',
+    confidence: 0.9,
+    affectedStepIds: [],
+    conflictsWith: [],
+    supersedes: [],
+    conflict: 'none',
+    requiresApproval: false,
+    rationale: 'Adds work inside the active objective.',
+    proposedOps: [],
+    ...overrides,
+  });
+}
 
 const RUNS: string[] = [];
 function freshRun(): string {
@@ -162,7 +183,14 @@ describe('low-confidence interpretation', () => {
   it('re-opens a confirmation and lets the user resolve it as a new task', async () => {
     const runId = freshRun();
     const submitted = submitGuidance({ runId, text: 'Maybe something around the middleware', now: 1_000 });
-    await triagePending({ runId, now: 2_000 });
+    // An ambiguous instruction is the Steward's job. A model-less process leaves
+    // it `received` (see the cross-process tests); here the run owner answers it.
+    await triagePending({
+      runId,
+      now: 2_000,
+      generate: async () =>
+        stewardJson({ kind: 'clarification', confidence: 0.2, rationale: 'Ambiguous without context.' }),
+    });
     expect(getGuidance(runId, submitted.change!.id)?.decision?.action).toBe('confirm_interpretation');
 
     const reopened = confirmInterpretation({
@@ -173,6 +201,7 @@ describe('low-confidence interpretation', () => {
     expect(reopened?.status).toBe('received');
     expect(reopened?.intentHint).toBe('new_task');
 
+    // The explicit tag is authoritative: no model is needed to backlog it.
     await triagePending({ runId, now: 3_000 });
     expect(getGuidance(runId, submitted.change!.id)?.status).toBe('backlog');
   });
@@ -262,6 +291,45 @@ describe('feature flag and run lifecycle', () => {
     expect(readJournal(runId).some((event) => event.type === 'run.completed')).toBe(true);
   });
 
+  it('closes a CLI run so it is not listed as active after the command returns', async () => {
+    const previous = process.env.NUVIRA_STEERING;
+    process.env.NUVIRA_STEERING = '1';
+    try {
+      const runId = freshRun();
+      const result = await withCliSteeringRun(
+        { runId, goal: 'ship the change', cwd: '/tmp/project', engine: 'loop' },
+        async () => 'done',
+      );
+      expect(result).toBe('done');
+      expect(readRun(runId)?.status).toBe('completed');
+      expect(listSteeringRuns(true).some((run) => run.runId === runId)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.NUVIRA_STEERING;
+      else process.env.NUVIRA_STEERING = previous;
+    }
+  });
+
+  it('closes a CLI run as failed when the command throws', async () => {
+    const previous = process.env.NUVIRA_STEERING;
+    process.env.NUVIRA_STEERING = '1';
+    try {
+      const runId = freshRun();
+      await expect(
+        withCliSteeringRun(
+          { runId, goal: 'ship the change', cwd: '/tmp/project', engine: 'loop' },
+          async () => {
+            throw new Error('boom');
+          },
+        ),
+      ).rejects.toThrow('boom');
+      expect(readRun(runId)?.status).toBe('failed');
+      expect(listSteeringRuns(true).some((run) => run.runId === runId)).toBe(false);
+    } finally {
+      if (previous === undefined) delete process.env.NUVIRA_STEERING;
+      else process.env.NUVIRA_STEERING = previous;
+    }
+  });
+
   it('leaves a paused run paused so it stays resumable', () => {
     const runId = freshRun();
     submitGuidance({ runId, text: 'pause', now: 1_000 });
@@ -270,6 +338,152 @@ describe('feature flag and run lifecycle', () => {
       expect(readRun(runId)?.status).toBe('paused');
       expect(readRun(runId)?.pauseRequested).toBe(true);
     });
+  });
+});
+
+describe('cross-process steering (a separate CLI process)', () => {
+  it('leaves semantic guidance received when the submitting process has no model', async () => {
+    const runId = freshRun();
+    const submitted = submitGuidance({
+      runId,
+      text: 'Create STEERED.txt containing exactly steered-ok.',
+      source: 'cli',
+      now: 1_000,
+    });
+    const triage = await triagePending({ runId, now: 2_000 });
+    expect(triage.awaitingModel).toBe(1);
+    const change = getGuidance(runId, submitted.change!.id);
+    expect(change?.status).toBe('received');
+    expect(change?.decision).toBeUndefined();
+    expect(change?.triagingAt).toBeUndefined();
+    expect(readJournal(runId).some((event) => event.type === 'guidance.awaiting_model')).toBe(true);
+  });
+
+  it('applies it at the run owner next safe point, with the owner model', async () => {
+    const runId = freshRun();
+    const submitted = submitGuidance({
+      runId,
+      text: 'Create STEERED.txt containing exactly steered-ok.',
+      source: 'cli',
+      now: 1_000,
+    });
+    // The steer process: no Steward model, so it must not decide this.
+    await triagePending({ runId, now: 2_000 });
+    expect(getGuidance(runId, submitted.change!.id)?.status).toBe('received');
+
+    let appliedVersion = 0;
+    const adapter: SteeringPlanAdapter = {
+      engine: 'loop',
+      getVersion: () => 0,
+      getGoal: () => 'build the progress utility',
+      getSteps: () => [],
+      applyPlanVersion: (next) => {
+        appliedVersion = next.version;
+      },
+      projectForExecutor: () => '',
+    };
+    const tick = await runSafePoint({
+      runId,
+      adapter,
+      now: 3_000,
+      generate: async () =>
+        stewardJson({
+          proposedOps: [
+            {
+              op: 'add_step',
+              step: {
+                description: 'Create STEERED.txt containing exactly steered-ok.',
+                acceptanceCriteria: ['STEERED.txt contains steered-ok'],
+              },
+            },
+          ],
+        }),
+    });
+
+    expect(tick.appliedChangeIds).toEqual([submitted.change!.id]);
+    expect(tick.directive).toContain('STEERED.txt');
+    expect(latestPlan(runId)?.steps.map((step) => step.description)).toContain(
+      'Create STEERED.txt containing exactly steered-ok.',
+    );
+    expect(appliedVersion).toBeGreaterThanOrEqual(2);
+  });
+
+  it('falls back to a real add_step when the Steward model is down', async () => {
+    const runId = freshRun();
+    const submitted = submitGuidance({
+      runId,
+      text: 'Create STEERED.txt containing exactly steered-ok.',
+      now: 1_000,
+    });
+    const adapter: SteeringPlanAdapter = {
+      engine: 'loop',
+      getVersion: () => 0,
+      getGoal: () => 'build the progress utility',
+      getSteps: () => [],
+      applyPlanVersion: () => undefined,
+      projectForExecutor: () => '',
+    };
+    const tick = await runSafePoint({
+      runId,
+      adapter,
+      now: 2_000,
+      generate: async () => {
+        throw new Error('provider down');
+      },
+    });
+
+    expect(tick.appliedChangeIds).toEqual([submitted.change!.id]);
+    expect(latestPlan(runId)?.steps.map((step) => step.description).join('\n')).toContain('STEERED.txt');
+    expect(getGuidance(runId, submitted.change!.id)?.status).toBe('applied');
+  });
+
+  it('syncs the steering plan to steps plan_todo declares after the first safe point', async () => {
+    const runId = freshRun();
+    const engineSteps: SteeringPlanStep[] = [];
+    const adapter: SteeringPlanAdapter = {
+      engine: 'loop',
+      getVersion: () => engineSteps.length,
+      getGoal: () => 'build the progress utility',
+      getSteps: () =>
+        engineSteps.map((step) => ({
+          ...step,
+          dependsOn: [...step.dependsOn],
+          acceptanceCriteria: [...step.acceptanceCriteria],
+        })),
+      applyPlanVersion: () => undefined,
+      projectForExecutor: () => '',
+    };
+
+    // Before plan_todo runs: no empty baseline is invented.
+    await runSafePoint({ runId, adapter, now: 1_000 });
+    expect(latestPlan(runId)).toBeNull();
+
+    engineSteps.push(
+      {
+        id: 'step-1',
+        description: 'Create work.py',
+        status: 'pending',
+        dependsOn: [],
+        acceptanceCriteria: [],
+        priority: 'normal',
+      },
+      {
+        id: 'step-2',
+        description: 'Run and verify',
+        status: 'pending',
+        dependsOn: [],
+        acceptanceCriteria: [],
+        priority: 'normal',
+      },
+    );
+    await runSafePoint({ runId, adapter, now: 2_000 });
+    expect(latestPlan(runId)?.steps.map((step) => step.id)).toEqual(['step-1', 'step-2']);
+
+    // A terminal engine plan always syncs the final statuses.
+    engineSteps[0].status = 'done';
+    engineSteps[1].status = 'done';
+    await runSafePoint({ runId, adapter, now: 3_000 });
+    expect(latestPlan(runId)?.steps.map((step) => step.status)).toEqual(['done', 'done']);
   });
 });
 
@@ -341,7 +555,7 @@ describe('safe point application', () => {
 
   it('marks a change failed instead of partially applying an invalid op batch', async () => {
     const runId = freshRun();
-    const submitted = submitGuidance({ runId, text: 'Add a step after a missing anchor.', now: 1_000 });
+    const submitted = submitGuidance({ runId, text: 'Update a step that does not exist.', now: 1_000 });
     updateGuidance(runId, submitted.change!.id, {
       status: 'accepted',
       assessment: {
@@ -356,7 +570,10 @@ describe('safe point application', () => {
         requiresApproval: false,
         rationale: 'Adds work.',
         conflict: 'none',
-        proposedOps: [{ op: 'add_step', after: 'does-not-exist', step: { description: 'Never applied' } }],
+        proposedOps: [
+          { op: 'add_step', step: { description: 'First op is valid' } },
+          { op: 'update_step', stepId: 'does-not-exist', patch: { description: 'Never applied' } },
+        ],
       },
     });
     const adapter: SteeringPlanAdapter = {
@@ -371,7 +588,7 @@ describe('safe point application', () => {
     expect(tick.directive).toBeNull();
     const change = getGuidance(runId, submitted.change!.id);
     expect(change?.status).toBe('failed');
-    expect(change?.failure).toMatch(/unknown anchor/i);
+    expect(change?.failure).toMatch(/unknown step/i);
     // The baseline v1 may exist; no invalid version was committed.
     expect(latestPlan(runId)?.version ?? 1).toBe(1);
   });

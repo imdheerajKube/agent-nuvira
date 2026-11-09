@@ -250,9 +250,12 @@ describe('crash-safe scheduler', () => {
     ).toBe(true);
 
     // Simulate a process that committed the plan but died before marking applied.
+    // The recovery tick adopts the committed version and REPORTS it as applied:
+    // the user's change did take effect in this tick, and hiding it made a
+    // successful recovery look like a no-op.
     updateGuidance(runId, submitted.change!.id, { status: 'accepted' });
     const second = await applyAccepted({ runId, adapter: adapter(runId), now: 3_000 });
-    expect(second.appliedChangeIds).toEqual([]);
+    expect(second.appliedChangeIds).toEqual([submitted.change!.id]);
     expect(latestPlan(runId)?.version).toBe(2);
     expect(latestPlan(runId)?.steps).toHaveLength(2);
     expect(getGuidance(runId, submitted.change!.id)?.status).toBe('applied');
@@ -394,8 +397,11 @@ describe('steward context and failure behavior', () => {
       plan: null,
     });
     expect(result.source).toBe('fallback');
-    expect(result.assessment.confidence).toBeLessThanOrEqual(0.5);
-    expect(result.assessment.proposedOps).toEqual([]);
+    // The fallback is bounded (never as confident as a real assessment) but it is
+    // ACTIONABLE: an explicit additive instruction becomes a typed plan op, so a
+    // provider outage cannot turn it into a permanent `answer_only` dead end.
+    expect(result.assessment.confidence).toBeLessThanOrEqual(0.7);
+    expect(result.assessment.proposedOps.map((op) => op.op)).toEqual(['add_step']);
     expect(result.assessment.rationale).toMatch(/provider down/i);
   });
 });

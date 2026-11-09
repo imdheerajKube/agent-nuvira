@@ -198,13 +198,15 @@ export function applyPlanOps(plan: SteeringPlan, ops: PlanOp[]): PlanMutationRes
           priority: op.step.priority ?? 'normal',
           ...(op.step.agentType ? { agentType: op.step.agentType } : {}),
         };
-        if (op.after) {
-          const at = steps.findIndex((s) => s.id === op.after);
-          if (at === -1) return { ok: false, error: `add_step: unknown anchor step "${op.after}".` };
-          steps.splice(at + 1, 0, step);
-        } else {
-          steps.push(step);
-        }
+        // An `after` anchor is a PLACEMENT HINT, not a mutation target. A model
+        // that copies the plan's ordinal ("3") instead of the step id ("verify")
+        // must not fail an otherwise valid additive batch. Measured 2026-11-09:
+        // the benchmark's scope change was ACCEPTED and then died on this anchor.
+        // Unknown TARGET ids (update/remove/reorder/cancel/priority) still fail
+        // the whole batch, so atomicity for real edits is unchanged.
+        const anchor = op.after ? steps.findIndex((s) => s.id === op.after) : -1;
+        if (anchor >= 0) steps.splice(anchor + 1, 0, step);
+        else steps.push(step);
         break;
       }
       case 'update_step': {

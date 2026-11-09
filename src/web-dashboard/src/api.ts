@@ -3347,6 +3347,20 @@ export async function steeringGet(runId?: string): Promise<SteeringResponse> {
   return (r.data ?? { ok: r.status === 200, error: `Server returned HTTP ${r.status}` }) as SteeringResponse;
 }
 
+export async function steeringClose(runId: string): Promise<{
+  ok: boolean;
+  projection?: SteeringProjection;
+  error?: string;
+}> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/close', 'POST', { runId });
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    projection?: SteeringProjection;
+    error?: string;
+  };
+}
+
 export async function steeringGuide(body: {
   runId: string;
   text: string;

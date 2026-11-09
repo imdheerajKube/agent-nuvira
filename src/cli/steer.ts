@@ -29,10 +29,14 @@ import { createInterface } from 'node:readline/promises';
 import { ConfigManager } from '../config/manager.js';
 
 import {
+  changeProof,
+  closeSteeringRun,
   confirmInterpretation,
   createBacklogTaskPrompt,
   decideApproval,
+  describeEscalations,
   discussRun,
+  getGuidance,
   listBacklog,
   listSteeringRuns,
   projectRun,
@@ -56,6 +60,10 @@ interface SteerOptions {
   note?: string;
   list?: boolean;
   status?: boolean;
+  stop?: boolean;
+  pause?: boolean;
+  close?: string;
+  proof?: string;
   json?: boolean;
   cwd?: string;
 }
@@ -110,6 +118,10 @@ export class SteerCommand {
       .option('--interpret <changeId>', 'resolve a low-confidence item: how should it be treated?')
       .option('--as <choice>', 'with --interpret: guidance, new_task or question')
       .option('--note <text>', 'reason for an approve/reject/defer decision')
+      .option('--stop', 'stop the run at its next safe point (plan and queue preserved)')
+      .option('--pause', 'pause the run at its next safe point (resumable)')
+      .option('--close <runId>', 'close a stale run whose lease expired (refuses a live run)')
+      .option('--proof <changeId>', 'show the full audit trail and executor directive for one change')
       .option('--list', 'list runs with steering state')
       .option('--status', 'show the guidance queue and plan for the run')
       .option('--json', 'machine-readable output')
@@ -153,9 +165,39 @@ export class SteerCommand {
           .join(' · ');
         out(
           `${run.status === 'running' ? '▶' : run.status === 'paused' ? '⏸' : '•'} ${run.runId}  [${run.status}]  ` +
-            `plan v${view.plan?.version ?? 0}  ${run.goal.slice(0, 80)}${flags ? `  — ${flags}` : ''}`,
+            `plan v${view.plan?.version ?? 0}  ${run.goal.slice(0, 80)}${flags ? `  — ${flags}` : ''}` +
+            (run.stale ? `  ⚠ STALE since ${run.staleSince ?? 'an unknown time'}` : ''),
         );
       }
+      if (runs.some((run) => run.stale)) {
+        out('');
+        out(
+          'Stale: the lease expired, so no process is applying guidance to that run. ' +
+            'Close it with `nuvira steer --close <runId>`, or start that run again to resume it.',
+        );
+      }
+      return;
+    }
+
+    // P3.1: an explicit close of a dead run. A live lease is refused above, so
+    // this cannot terminate a run that is still working.
+    if (options.close !== undefined) {
+      const target =
+        options.close.trim() ||
+        resolveSteeringRun(undefined, options.cwd || process.cwd())?.runId ||
+        '';
+      if (!target) {
+        out('No run to close. Pass `--close <runId>` (see `nuvira steer --list`).');
+        process.exitCode = 1;
+        return;
+      }
+      const closed = closeSteeringRun(target, 'user');
+      if (!closed.ok) {
+        out(`Could not close ${target}: ${closed.error ?? 'unknown error'}`);
+        process.exitCode = 1;
+        return;
+      }
+      out(`⏹ Closed stale run ${target}. Its plan and guidance queue are preserved for inspection.`);
       return;
     }
 
@@ -238,6 +280,51 @@ export class SteerCommand {
       return;
     }
 
+    // P2.1 steer-with-proof: the durable receipt → assessment → decision → plan
+    // diff → exact executor directive chain for one change.
+    if (options.proof) {
+      const change = getGuidance(run.runId, options.proof);
+      if (!change) {
+        out(`No guidance item ${options.proof} in ${run.runId}.`);
+        process.exitCode = 1;
+        return;
+      }
+      if (options.json) {
+        out(JSON.stringify(change, null, 2));
+        return;
+      }
+      for (const line of changeProof(change)) out(line);
+      return;
+    }
+
+    // First-class control. `stop`/`pause` are control guidance, so the prefilter
+    // decides them without a model and the run's safe point reports them before
+    // any plan write. This is the CLI twin of the dashboard's Stop/Pause buttons.
+    if (options.stop || options.pause) {
+      const action = options.stop ? 'stop' : 'pause';
+      const result = submitSteeringGuidance({
+        runId: run.runId,
+        text: action,
+        source: 'cli',
+        author: 'cli-user',
+      });
+      if (!result.ok) {
+        out(`Could not ${action} the run: ${result.error ?? 'unknown error'}`);
+        process.exitCode = 1;
+        return;
+      }
+      // Controls are decidable without a model; settle the record so `--status`
+      // reflects what actually happened rather than an in-flight `received`.
+      await triagePending({ runId: run.runId });
+      out(
+        action === 'stop'
+          ? `⏹ Stop requested for ${run.runId}. The turn ends at its next safe point; plan and queue are preserved.`
+          : `⏸ Pause requested for ${run.runId}. It holds at the next safe point and stays resumable.`,
+      );
+      this.printQueue(run.runId, options.json === true);
+      return;
+    }
+
     const text =
       options.text?.trim() ||
       options.newTask?.trim() ||
@@ -297,6 +384,13 @@ export class SteerCommand {
         const label = `${statusGlyph(change.status)} ${change.id} [${change.status}] ${change.rawText.replace(/\s+/g, ' ').slice(0, 80)}`;
         out(`  ${label}`);
         if (change.decision?.reason) out(`      ${change.decision.reason}`);
+        if (typeof change.triageLatencyMs === 'number') {
+          out(`      assessed ${change.triageLatencyMs} ms after receipt`);
+        }
+        if (change.decision?.escalations?.length) {
+          out(`      escalated: ${describeEscalations(change.decision.escalations).join('; ')}`);
+        }
+        if (change.decision?.approvalEffect) out(`      ${change.decision.approvalEffect}`);
         if (change.planDiff && (change.planDiff.added.length || change.planDiff.updated.length)) {
           out(
             `      plan: +${change.planDiff.added.length} added, ${change.planDiff.updated.length} updated, ` +

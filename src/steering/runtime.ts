@@ -18,7 +18,15 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { ConfigManager } from '../config/manager.js';
 import { contentHash } from './ids.js';
-import { appendJournal, ensureRun, listRuns, patchRun, readRun, releaseLease } from './store.js';
+import {
+  appendJournal,
+  ensureRun,
+  listRuns,
+  patchRun,
+  readRun,
+  releaseLease,
+  runStaleness,
+} from './store.js';
 import { submitGuidance, type SubmitGuidanceInput, type SubmitGuidanceResult } from './inbox.js';
 import { triagePending, runSafePoint } from './scheduler.js';
 import { projectRun } from './projection.js';
@@ -26,6 +34,7 @@ import { LoopPlanAdapter, PipelinePlanAdapter, type LoopPlanStoreLike, type Pipe
 import type { StewardGenerate } from './steward.js';
 import type {
   ChangeSource,
+  RunRecord,
   SteeringEngine,
   SteeringPlanAdapter,
   SteeringProjection,
@@ -101,6 +110,37 @@ export class SteeringRunHandle {
 const HANDLES = new Map<string, SteeringRunHandle>();
 const STORAGE = new AsyncLocalStorage<SteeringRunHandle>();
 
+/**
+ * Runs opened by THIS process, closed on exit.
+ *
+ * `withCliSteeringRun` owns both ends for a normal return or a throw, but a CLI
+ * path that calls `process.exit()` skips every `finally`. Measured 2026-11-09: a
+ * one-shot `nuvira chat` exited 0 while `run.json` stayed `running`, so
+ * `steer --list` offered a dead run as active. The `exit` event is synchronous
+ * and every write in `completeSteeringRun` is synchronous, so the closer is safe
+ * there. Paused/stopped runs are deliberately left alone: they are resumable.
+ */
+const OPEN_RUN_IDS = new Set<string>();
+let exitCloserInstalled = false;
+
+function installExitCloser(): void {
+  if (exitCloserInstalled) return;
+  exitCloserInstalled = true;
+  process.once('exit', () => closeOpenSteeringRuns());
+}
+
+/** Close every run this process still holds open. Best-effort, never throws. */
+export function closeOpenSteeringRuns(): void {
+  for (const runId of [...OPEN_RUN_IDS]) {
+    try {
+      completeSteeringRun(runId, 'completed');
+    } catch {
+      // An exit hook must never throw or mask the process result.
+    }
+  }
+  OPEN_RUN_IDS.clear();
+}
+
 export interface OpenSteeringRunInput {
   runId: string;
   goal: string;
@@ -139,6 +179,8 @@ export function openSteeringRun(input: OpenSteeringRunInput): SteeringRunHandle 
   const handle = existing ?? new SteeringRunHandle(run.runId, run.engine);
   if (input.adapter) handle.attachAdapter(input.adapter);
   HANDLES.set(input.runId, handle);
+  OPEN_RUN_IDS.add(input.runId);
+  installExitCloser();
   return handle;
 }
 
@@ -153,6 +195,48 @@ export function currentSteeringRun(): SteeringRunHandle | null {
 /** Scope a turn to a steering run without changing the engine's signature. */
 export function withSteeringRun<T>(handle: SteeringRunHandle, fn: () => Promise<T>): Promise<T> {
   return STORAGE.run(handle, fn);
+}
+
+/**
+ * The CLI's whole-run lifecycle. A safe point can OPEN a run when guidance is
+ * first consumed, but the CLI had no matching close: a finished `chat`,
+ * `execute` or `resume` could leave `run.json` at `running`, so `steer --list`
+ * offered a dead run as active. This wrapper owns both ends for a CLI arm.
+ *
+ * It is a no-op when the feature flag is off, preserving the rollback contract
+ * (no run directory, no journal, no behavior change). A throw closes the run as
+ * `failed`; an ordinary return uses `statusFor` so a generation failure is not
+ * recorded as a completed run.
+ */
+export async function withCliSteeringRun<T>(
+  input: { runId: string; goal: string; cwd: string; engine: SteeringEngine },
+  fn: () => Promise<T>,
+  statusFor?: (value: T) => 'completed' | 'failed',
+): Promise<T> {
+  if (!steeringEnabled()) return fn();
+  const handle = openSteeringRun({ ...input, surface: 'cli' });
+  const close = (status: 'completed' | 'failed'): void => {
+    try {
+      completeSteeringRun(handle.runId, status);
+    } catch {
+      // Steering is a control plane, not a failure mode: a journal/disk error
+      // must not replace the command's own result or mask its exception.
+    }
+    OPEN_RUN_IDS.delete(handle.runId);
+  };
+  let closed = false;
+  try {
+    const value = await withSteeringRun(handle, fn);
+    close(statusFor?.(value) ?? 'completed');
+    closed = true;
+    return value;
+  } catch (err) {
+    close('failed');
+    closed = true;
+    throw err;
+  } finally {
+    if (!closed) close('failed');
+  }
 }
 
 function fallbackRunId(goal: string, cwd: string): string {
@@ -230,6 +314,11 @@ export async function steeringSafePointForPipeline(input: {
  * Submit guidance from any surface. The receipt is returned immediately; triage is
  * kicked off asynchronously when a model is attached, so a slow provider cannot
  * delay the acknowledgement the user sees.
+ *
+ * CROSS-PROCESS: in a separate `nuvira steer` process there is no live handle, so
+ * no Steward model is available here. Triage is still safe to call — it decides
+ * controls and explicit tags, and leaves semantic guidance `received` for the run
+ * owner's next safe point. A model-less process must never make a final decision.
  */
 export function submitSteeringGuidance(
   input: SubmitGuidanceInput & { triage?: boolean },
@@ -276,9 +365,62 @@ export function completeSteeringRun(
   });
 }
 
-export function listSteeringRuns(activeOnly = false) {
+export type ListedSteeringRun = RunRecord & { stale: boolean; staleSince?: string };
+
+/**
+ * Every run plus its freshness. `stale` is derived, never stored: marking it in
+ * `run.json` would turn a transient observation into durable state.
+ */
+export function listSteeringRuns(activeOnly = false): ListedSteeringRun[] {
   const runs = listRuns();
-  return activeOnly ? runs.filter((run) => run.status === 'running' || run.status === 'paused') : runs;
+  const filtered = activeOnly
+    ? runs.filter((run) => run.status === 'running' || run.status === 'paused')
+    : runs;
+  return filtered.map((run) => {
+    const staleness = runStaleness(run);
+    return {
+      ...run,
+      stale: staleness.stale,
+      ...(staleness.staleSince ? { staleSince: staleness.staleSince } : {}),
+    };
+  });
+}
+
+/**
+ * Close a dead `running` manifest explicitly (P3.1).
+ *
+ * Only a stale run is closable: a live lease means another process still owns
+ * the plan, and silently closing it would hide a run that is still working. A
+ * paused/stopped run is left alone because it is resumable by design.
+ */
+export function closeSteeringRun(
+  runId: string,
+  actor: 'user' | 'system' = 'user',
+  now = Date.now(),
+): { ok: boolean; error?: string; run?: RunRecord } {
+  const run = readRun(runId);
+  if (!run) return { ok: false, error: `No steering run ${runId}.` };
+  if (run.status === 'completed' || run.status === 'failed') {
+    return { ok: false, error: `Run ${runId} is already ${run.status}.` };
+  }
+  if (run.status !== 'running') {
+    return { ok: false, error: `Run ${runId} is ${run.status}; it is resumable, not stale.` };
+  }
+  const staleness = runStaleness(run, now);
+  if (!staleness.stale) {
+    return {
+      ok: false,
+      error: `Run ${runId} still has a live lease (${staleness.reason}). Let it finish, or stop it at its next safe point.`,
+    };
+  }
+  releaseLease(runId);
+  const next = patchRun(runId, { status: 'completed', stopRequested: false, pauseRequested: false }, now);
+  appendJournal(runId, {
+    type: 'run.closed_stale',
+    actor,
+    data: { reason: staleness.reason, staleSince: staleness.staleSince ?? null, actor },
+  });
+  return next ? { ok: true, run: next } : { ok: false, error: 'Could not persist the close.' };
 }
 
 /** Find a run by id, newest active run for a cwd, or newest active run. */

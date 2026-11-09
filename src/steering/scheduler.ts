@@ -49,7 +49,9 @@ import type {
   ChangeRequestRecord,
   PlanDiff,
   SteeringDecision,
+  SteeringPlan,
   SteeringPlanAdapter,
+  SteeringPlanStep,
   SteeringPolicy,
   SteeringTickResult,
 } from './types.js';
@@ -61,6 +63,8 @@ export interface TriageResult {
   triaged: ChangeRequestRecord[];
   stopped: boolean;
   paused: boolean;
+  /** Semantic items left `received` because this process has no Steward model. */
+  awaitingModel: number;
 }
 
 const EMPTY_TICK: SteeringTickResult = {
@@ -134,7 +138,7 @@ async function triagePendingUnlocked(input: {
   const now = input.now ?? Date.now();
   const policy: SteeringPolicy = { ...DEFAULT_STEERING_POLICY, ...(input.policy ?? {}) };
   const run = readRun(input.runId);
-  if (!run) return { triaged: [], stopped: false, paused: false };
+  if (!run) return { triaged: [], stopped: false, paused: false, awaitingModel: 0 };
 
   // CRASH RECOVERY: a process can die between `triaging` and the decision. The
   // record must not stay invisible forever. A triage older than five minutes is
@@ -161,6 +165,7 @@ async function triagePendingUnlocked(input: {
   const triaged: ChangeRequestRecord[] = [];
   let stopped = false;
   let paused = false;
+  let awaitingModel = 0;
 
   for (const change of pending) {
     updateGuidance(input.runId, change.id, {
@@ -189,11 +194,40 @@ async function triagePendingUnlocked(input: {
       continue;
     }
 
+    // CROSS-PROCESS OWNERSHIP. A separate `nuvira steer` process (or any surface
+    // without the run's engine) has no Steward model. A model-less semantic
+    // decision must never be final: measured 2026-11-09, a 3 ms fallback triage
+    // recorded `confirm_interpretation` at confidence 0.45, the run owner never
+    // revisited a `triaged` item, and a clear scope change died in the queue.
+    // Explicit controls and tags are decidable here; everything else waits for
+    // the run's next safe point, where the real model is attached.
+    const deterministic = classifyDeterministically(change.rawText, change.intentHint, gate.control);
+    const decidableWithoutModel =
+      Boolean(input.generate) ||
+      gate.control !== 'none' ||
+      deterministic.relation === 'meta' ||
+      deterministic.kind === 'question' ||
+      deterministic.relation === 'new_task';
+    if (!decidableWithoutModel) {
+      updateGuidance(input.runId, change.id, { status: 'received', triagingAt: undefined });
+      appendJournal(input.runId, {
+        type: 'guidance.awaiting_model',
+        actor: 'system',
+        changeId: change.id,
+        data: {
+          reason:
+            'no assessing model is attached to this process; the run owner will triage it at its next safe point',
+        },
+      });
+      awaitingModel += 1;
+      continue;
+    }
+
     let assessment: ChangeAssessment;
     if (gate.control !== 'none') {
       // Controls are decidable without a model and must not wait for one.
       assessment = assessmentForControl(change);
-    } else if (input.generate) {
+    } else if (input.generate && change.intentHint !== 'question' && change.intentHint !== 'new_task') {
       const steward = await runChangeSteward({
         generate: input.generate,
         change,
@@ -204,19 +238,21 @@ async function triagePendingUnlocked(input: {
       });
       assessment = steward.assessment;
     } else {
-      const base = classifyDeterministically(change.rawText, change.intentHint, gate.control);
+      const explicitTag = change.intentHint === 'question' || change.intentHint === 'new_task';
       assessment = {
-        relation: base.relation,
-        kind: base.kind,
-        timing: base.timing,
-        impact: base.impact,
-        confidence: Math.min(base.confidence, 0.5),
+        relation: deterministic.relation,
+        kind: deterministic.kind,
+        timing: deterministic.timing,
+        impact: deterministic.impact,
+        confidence: Math.min(deterministic.confidence, 0.5),
         affectedStepIds: change.targetStepId ? [change.targetStepId] : [],
         conflictsWith: [],
         supersedes: [],
         conflict: 'none',
         requiresApproval: false,
-        rationale: `${base.rationale} (no assessing model was attached to the run)`,
+        rationale: `${deterministic.rationale} (${
+          explicitTag ? 'explicit user tag' : 'assessed deterministically without a model'
+        })`,
         proposedOps: [],
       };
     }
@@ -270,7 +306,7 @@ async function triagePendingUnlocked(input: {
   // run forever, and the outcome is visible as `deferred`.
   expireApprovals(input.runId, (await import('./store.js')).readApprovals(input.runId), policy.approvalTtlMs, now);
 
-  return { triaged, stopped, paused };
+  return { triaged, stopped, paused, awaitingModel };
 }
 
 /**
@@ -304,6 +340,15 @@ export async function applyAccepted(input: {
     return { ...EMPTY_TICK };
   }
 
+  const accepted = readChanges(input.runId)
+    .filter((change) => change.status === 'accepted')
+    .slice(0, policy.maxChangesPerPlan);
+
+  // Nothing to apply — do NOT invent an empty baseline. Measured 2026-11-09: a
+  // baseline captured before `plan_todo` declared its steps stayed at v1 with
+  // zero steps, so the surface showed no progress and the Steward had no ids.
+  if (accepted.length === 0) return { ...EMPTY_TICK };
+
   // A run that already has guidance but no version still needs a v1 to mutate.
   if (!latestPlan(input.runId)) {
     const goal = input.adapter.getGoal() || run.goal;
@@ -318,10 +363,6 @@ export async function applyAccepted(input: {
     commitInitialPlan(initial);
   }
 
-  const accepted = readChanges(input.runId)
-    .filter((change) => change.status === 'accepted')
-    .slice(0, policy.maxChangesPerPlan);
-
   const appliedChangeIds: string[] = [];
   const changedIds: string[] = [];
   const appliedChanges: ChangeRequestRecord[] = [];
@@ -334,11 +375,28 @@ export async function applyAccepted(input: {
     // must adopt the committed version, not add the same step a second time.
     const alreadyApplied = findPlanVersionForChange(input.runId, change.id);
     if (alreadyApplied) {
-      input.adapter.applyPlanVersion(alreadyApplied);
+      // The adapter can fail independently of the committed version (a provider
+      // error, a locked vault). Leave the change actionable so the next safe point
+      // retries the SAME version instead of marking a half-applied change done.
+      try {
+        input.adapter.applyPlanVersion(alreadyApplied);
+      } catch (error) {
+        appendJournal(input.runId, {
+          type: 'change.apply_retry_pending',
+          actor: 'system',
+          changeId: change.id,
+          planVersion: alreadyApplied.version,
+          data: { reason: error instanceof Error ? error.message : String(error) },
+        });
+        finalPlan = alreadyApplied;
+        changedIds.push(change.id);
+        continue;
+      }
       setStatus(input.runId, change.id, 'applied', {
         planVersion: alreadyApplied.version,
         planDiff: alreadyApplied.diff,
         appliedAt: change.appliedAt ?? new Date(now).toISOString(),
+        directive: planDirective(alreadyApplied, [change], alreadyApplied.diff),
       });
       appendJournal(input.runId, {
         type: 'change.applied_recovered',
@@ -348,6 +406,7 @@ export async function applyAccepted(input: {
         data: { reason: 'plan version existed before the applied status was recorded' },
       });
       finalPlan = alreadyApplied;
+      appliedChangeIds.push(change.id);
       changedIds.push(change.id);
       continue;
     }
@@ -441,11 +500,39 @@ export async function applyAccepted(input: {
       continue;
     }
 
-    input.adapter.applyPlanVersion(commit.plan);
+    // P2.1: persist the exact bounded directive this change produced. The
+    // executor receives it (or the adapter projects the same text), so the user
+    // can audit what the model was actually told — never the raw guidance.
+    const directive = planDirective(commit.plan, [change], commit.diff);
+    try {
+      input.adapter.applyPlanVersion(commit.plan);
+    } catch (error) {
+      // The plan version is already committed and immutable. Keep the change
+      // ACCEPTED (actionable) rather than failed: the next safe point adopts this
+      // version through the idempotency guard and retries the adapter. Marking it
+      // failed would strand a committed plan the user was told was applied.
+      updateGuidance(input.runId, change.id, {
+        planVersion: commit.plan.version,
+        planDiff: commit.diff,
+        directive,
+      });
+      appendJournal(input.runId, {
+        type: 'change.apply_retry_pending',
+        actor: 'system',
+        changeId: change.id,
+        planVersion: commit.plan.version,
+        data: { reason: error instanceof Error ? error.message : String(error) },
+      });
+      finalPlan = commit.plan;
+      combinedDiff = mergeDiff(combinedDiff, commit.diff);
+      changedIds.push(change.id);
+      continue;
+    }
     const applied = setStatus(input.runId, change.id, 'applied', {
       planVersion: commit.plan.version,
       planDiff: commit.diff,
       appliedAt: new Date(now).toISOString(),
+      directive,
       ...(workspaceCheckpointId ? { workspaceCheckpointId } : {}),
     });
     appendJournal(input.runId, {
@@ -497,6 +584,105 @@ export async function applyAccepted(input: {
 }
 
 /**
+ * Keep the steering plan a mirror of the engine's own plan.
+ *
+ * The baseline used to be captured once, at the first safe point, and never
+ * refreshed. If that point ran before `plan_todo` declared its steps, the steering
+ * plan stayed at v1 with zero steps forever (measured 2026-11-09: engine 3/3 done,
+ * steering plan v1 `steps: []`), so the surface rendered no progress and the
+ * Steward had no step ids to target.
+ *
+ * Identity changes sync immediately. Status-only changes are throttled so a
+ * per-model-call sync cannot create a plan version per step; a fully terminal
+ * plan always syncs, so the last statuses are never lost.
+ */
+const SYNC_STATUS_INTERVAL_MS = 5_000;
+
+function planSignature(steps: SteeringPlanStep[]): string {
+  return steps
+    .map((s) =>
+      [s.id, s.status, s.description, s.dependsOn.join(','), s.acceptanceCriteria.join(','), s.priority, s.note ?? ''].join(
+        '\u0000',
+      ),
+    )
+    .join('\u0001');
+}
+
+function planIdentity(steps: SteeringPlanStep[]): string {
+  return steps.map((s) => [s.id, s.description, s.dependsOn.join(',')].join('\u0000')).join('\u0001');
+}
+
+export function syncPlanFromEngine(input: {
+  runId: string;
+  adapter: SteeringPlanAdapter;
+  now?: number;
+}): SteeringPlan | null {
+  const now = input.now ?? Date.now();
+  const latest = latestPlan(input.runId);
+  let engineSteps: SteeringPlanStep[];
+  try {
+    engineSteps = input.adapter.getSteps();
+  } catch {
+    return latest;
+  }
+  // No engine plan yet: leave the steering plan absent rather than writing an
+  // empty version that can never be trusted to represent the work.
+  if (engineSteps.length === 0) return latest;
+
+  const run = readRun(input.runId);
+  const goal = input.adapter.getGoal() || run?.goal || '';
+  if (!latest) {
+    return commitInitialPlan(
+      createInitialPlan({
+        runId: input.runId,
+        goal,
+        steps: engineSteps,
+        contractVersion: run?.contractVersion ?? 1,
+        createdBy: 'engine',
+        reason: 'baseline captured from the engine plan',
+      }),
+    );
+  }
+
+  // STEERING-ADDED WORK MUST SURVIVE A LAG. An adapter that failed to write a
+  // committed version, or an engine that has not yet refreshed, must not cause
+  // the next sync to DELETE the accepted step. Carry missing future steps that
+  // steering added; the engine remains authoritative for the steps it knows.
+  const engineIds = new Set(engineSteps.map((step) => step.id));
+  const carried = latest.steps.filter(
+    (step) =>
+      !engineIds.has(step.id) && (step.status === 'pending' || step.status === 'blocked'),
+  );
+  const syncedSteps = carried.length > 0 ? [...engineSteps, ...carried] : engineSteps;
+
+  if (planSignature(syncedSteps) === planSignature(latest.steps)) return latest;
+  const identityChanged = planIdentity(syncedSteps) !== planIdentity(latest.steps);
+  const engineTerminal = syncedSteps.every((s) => s.status === 'done' || s.status === 'cancelled');
+  const age = now - Date.parse(latest.createdAt);
+  if (!identityChanged && !engineTerminal && Number.isFinite(age) && age < SYNC_STATUS_INTERVAL_MS) {
+    return latest;
+  }
+
+  const commit = commitPlan({
+    runId: input.runId,
+    expectedVersion: latest.version,
+    // Constraints are user authority: the engine's checklist cannot erase one.
+    plan: { ...latest, goal: latest.goal || goal, steps: syncedSteps },
+    changeIds: [],
+    reason: 'engine plan synced at a safe point',
+    createdBy: 'engine',
+  });
+  if (!commit.ok) return latest;
+  appendJournal(input.runId, {
+    type: 'plan.engine_synced',
+    actor: 'system',
+    planVersion: commit.plan.version,
+    data: { steps: engineSteps.length, identityChanged, reason: 'engine plan changed' },
+  });
+  return commit.plan;
+}
+
+/**
  * The one call an executor makes at a safe point: triage anything new, then apply
  * anything already accepted (including a change the user approved since the last
  * boundary). Stop/pause are reported before any plan write.
@@ -511,6 +697,14 @@ export async function runSafePoint(input: {
   const run = readRun(input.runId);
   if (run?.stopRequested || run?.status === 'stopped') return { ...EMPTY_TICK, stop: true };
   if (run?.pauseRequested || run?.status === 'paused') return { ...EMPTY_TICK, pause: true };
+
+  // MIRROR FIRST: the Steward should classify against the steps the engine has
+  // now, not against a baseline captured before the plan existed.
+  try {
+    syncPlanFromEngine({ runId: input.runId, adapter: input.adapter, now: input.now });
+  } catch {
+    // Mirroring is advisory; a failure must never break the safe point.
+  }
 
   const triage = await triagePending({
     runId: input.runId,

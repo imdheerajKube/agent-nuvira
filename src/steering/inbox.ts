@@ -21,7 +21,6 @@ import { prefilterGuidance } from './prefilter.js';
 import {
   appendJournal,
   changePath,
-  claimLease,
   ensureRun,
   listRuns,
   readChanges,
@@ -114,17 +113,12 @@ export function submitGuidance(input: SubmitGuidanceInput): SubmitGuidanceResult
     now,
   });
 
-  // The run process is the plan writer; the inbox only needs a lease to keep two
-  // surfaces from clobbering the same stale approval, and a short one is enough.
-  if (!createdRun) {
-    const claim = claimLease(runId, { ttlMs: 30_000, now });
-    if (!claim.ok) {
-      // A live run owns the lease. It still reads the inbox — writing a change is
-      // safe and is exactly how guidance crosses the process boundary.
-      // The only unsafe case would be two PLAN writers, which never happens here.
-      void claim.reason;
-    }
-  }
+  // NO LEASE HERE, ON PURPOSE. A surface writes one uniquely named change file,
+  // which is atomic, and that is the whole cross-process contract. Claiming the
+  // run lease to submit would make the surface a competing writer: measured
+  // 2026-11-09 in the two-process test, a 30 s inbox lease made the run owner's
+  // apply fail (`plan.change_refused`) until it expired. The lease belongs to the
+  // plan writer (the run owner) only.
 
   const existing = readChanges(runId);
   const idempotencyKey = (input.idempotencyKey ?? '').trim();

@@ -1715,7 +1715,7 @@ Continue an unfinished turn (default: the newest open turn in this directory)
 
 Guide a run that is already in progress. The main task stays locked; guidance is triaged and applied at the next safe point.
 
-   - flags: `--approve <approve>, --as <as>, --cwd <cwd>, --defer <defer>, --discuss <discuss>, --interpret <interpret>, --json, --list, --new-task <new_task>, --note <note>, --question <question>, --reject <reject>, --status, --text <text>, --withdraw <withdraw>`
+   - flags: `--approve <approve>, --as <as>, --close <close>, --cwd <cwd>, --defer <defer>, --discuss <discuss>, --interpret <interpret>, --json, --list, --new-task <new_task>, --note <note>, --pause, --proof <proof>, --question <question>, --reject <reject>, --status, --stop, --text <text>, --withdraw <withdraw>`
 ### `nuvira website`
 
 Open the Agent-Nuvira website — capabilities, commands, docs, setup

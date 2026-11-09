@@ -170,3 +170,21 @@ export function resolveAttachmentSessionMaxBytes(): number {
     MAX_ATTACHMENT_SESSION_MAX_BYTES_CEILING,
   );
 }
+
+/**
+ * Optional absolute floor for the cross-encoder relevance score. A negative
+ * value is valid: MS MARCO logits put unrelated passages well below zero. When
+ * unset, there is no absolute gate and the lexical generic-term guard remains
+ * the only abstention rule. The default stays unset until real unanswered
+ * questions exist; a threshold tuned on the authored fixtures is not a
+ * calibration.
+ */
+export function resolveAttachmentRerankMinScore(): number | undefined {
+  for (const name of ['NUVIRA_ATTACHMENT_RERANK_MIN_SCORE', 'BUFF_ATTACHMENT_RERANK_MIN_SCORE']) {
+    const raw = process.env[name];
+    if (raw === undefined || raw.trim() === '') continue;
+    const value = Number(raw.trim());
+    if (Number.isFinite(value)) return value;
+  }
+  return undefined;
+}

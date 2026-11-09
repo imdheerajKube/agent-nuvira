@@ -114,6 +114,7 @@ import { resolveModelHarnessProfile } from '../learning/model-harness.js';
 import { hasCredentials } from '../learning/model-selection.js';
 import { resolveEngine } from '../learning/engine-router.js';
 import { logger } from '../utils/logger.js';
+import { withCliSteeringRun } from '../steering/index.js';
 import {
   beginTrace,
   endTrace,
@@ -1430,7 +1431,9 @@ export async function runLoopExecutor(
       model,
       configExposure: getLoopExposureMode(configManager),
     });
-    const result = await runToolLoop({
+    const result = await withCliSteeringRun(
+      { runId: traceId, goal, cwd: turnCwd, engine: 'loop' },
+      () => runToolLoop({
       messages: thread,
       // Read fresh on every step: a mid-turn failover must be visible to the
       // model, not just to the log (see the route feed).
@@ -1616,7 +1619,9 @@ export async function runLoopExecutor(
       // trace store through this one sink (an OPTION, not a dep: the loop
       // describes, the surface records).
       onTraceEvent,
-    });
+      }),
+      (r) => (r.generationFailed ? 'failed' : 'completed'),
+    );
 
     // G18 — WHAT ACTUALLY HAPPENED, in the same shape the chat and gateway
     // paths record: a declined call, an unverified edit, an unsatisfied

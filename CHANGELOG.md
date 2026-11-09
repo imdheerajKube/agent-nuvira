@@ -2,6 +2,46 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.6.0 — steering you can audit, and retrieval that survives a real query
+
+This release completes the mid-run steering parity work and ships the attachment
+retrieval hardening measured alongside it.
+
+**Steering — proof and recovery.**
+
+- **Steer with proof.** Every applied change records its receipt, triage latency,
+  decision/escalations, plan diff, and the exact bounded directive the executor
+  received. The dashboard shows it per change and `nuvira steer --proof <id>`
+  prints the same audit trail.
+- **Cross-surface continuity.** The dashboard lists every durable run, so guidance
+  submitted by the CLI (or a `source: 'gateway'` sender) is visible and decidable
+  there without restarting.
+- **Policy-aware approval.** Escalation cards name the deterministic reason (high
+  impact, conflict, supersession, irreversible work, completed work) and state
+  exactly what approving will change, including the workspace-checkpoint
+  safeguard.
+- **Stale runs.** A `running` run whose lease expired is marked stale and can be
+  closed explicitly from `nuvira steer --close <runId>` or the dashboard. A live
+  lease is refused; paused/stopped runs stay resumable.
+- **Outage replay.** A Steward failure falls back to the deterministic classifier
+  and still applies an explicit instruction. An adapter failure after the plan
+  commit leaves the change actionable, and the next safe point adopts the same
+  version exactly once.
+- **Two-process write test found a real bug.** A surface's inbox write took a 30 s
+  lease, which blocked the run owner's apply. Inbox records are atomic per file;
+  the plan lease now belongs only to the plan writer.
+
+**Attachment retrieval.** The keyword path no longer ranks function words and
+returns zero hits for a no-content question. Identifier-aware BM25 and a
+fuzzy/trigram typo fallback are implemented, with an optional local cross-encoder
+reranker and a reproducible seven-arm benchmark. The decision record and measured
+baseline are in `docs/ATTACHMENT_RETRIEVAL_DECISION_2026-11-09.md`; real-query
+validation remains pending.
+
+Tests: `tests/steering` 101 passing; root and dashboard typechecks clean; the
+mid-run benchmark passes 3/3. The benchmark harness now isolates
+`NUVIRA_MEMORY_DIR` so a previous run's plan cannot leak into a fresh repo.
+
 ## v3.5.15 — an empty response is diagnosed, not punished
 
 `deepseek-v4-flash` / `deepseek-v4-pro` were returning steps with `content: ''`

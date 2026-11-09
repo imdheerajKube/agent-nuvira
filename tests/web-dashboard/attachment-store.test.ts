@@ -20,7 +20,9 @@ import { join } from 'node:path';
 import {
   AttachmentUploadError,
   chunkAttachmentText,
+  fuseRerankedHits,
   getAttachmentStore,
+  type AttachmentHit,
 } from '../../src/web-dashboard/attachment-store.js';
 
 let dir: string;
@@ -35,6 +37,7 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
   delete process.env.NUVIRA_ATTACHMENT_DIR;
   delete process.env.NUVIRA_ATTACHMENT_INGEST_MAX_CHARS;
+  delete process.env.NUVIRA_ATTACHMENT_RERANK;
 });
 
 async function upload(name: string, body: string | Buffer, sessionId = 'session-1') {
@@ -62,11 +65,112 @@ describe('attachment ingestion', () => {
     expect(store.read(record.id, { offset: text.length - 30, limit: 100 })).toContain('THE-LAST-LINE');
   });
 
+  it('uses finer chunks for long documents but keeps short sections together', () => {
+    const longChunks = chunkAttachmentText('alpha '.repeat(10_000));
+    expect(longChunks.every((chunk) => chunk.text.length <= 2_500)).toBe(true);
+
+    const shortChunks = chunkAttachmentText('alpha '.repeat(1_000));
+    expect(shortChunks).toHaveLength(1);
+    expect(shortChunks[0].text.length).toBeGreaterThan(2_500);
+  });
+
   it('chunks PDF-style page markers into page locators', () => {
     const chunks = chunkAttachmentText('[Page 1]\nAlpha\n\n[Page 2]\nBeta needle\n');
     expect(chunks.some((chunk) => chunk.page === 1)).toBe(true);
     expect(chunks.some((chunk) => chunk.page === 2 && chunk.text.includes('needle'))).toBe(true);
     expect(chunks.find((chunk) => chunk.page === 2)?.locator).toContain('page 2');
+  });
+
+  it('returns no hits when a question has no content terms', async () => {
+    const { store, record } = await upload('prose.txt', 'alpha is here and of the thing\nwho is it\n');
+    const found = store.search(record.id, 'What is the capital of France?', 3);
+    expect('error' in found).toBe(false);
+    if ('error' in found) return;
+    expect(found.hits).toEqual([]);
+
+    const noContent = store.search(record.id, 'who is it', 3);
+    expect('error' in noContent).toBe(false);
+    if ('error' in noContent) return;
+    expect(noContent.hits).toEqual([]);
+  });
+
+  it('matches from word boundaries and does not treat a generic content word as evidence', async () => {
+    // `nation` appears inside `explanation`; a mid-word substring match leaked
+    // the World Cup question. `current` occurs as a real word but is not topic
+    // evidence for a Bitcoin question. A specific term next to it still ranks.
+    const { store, record } = await upload(
+      'prose.txt',
+      'The explanation for every rejection is required. The current plan version is 7.\n',
+    );
+
+    const worldCup = store.search(record.id, 'Which nation lifted the World Cup trophy in 2022?', 3);
+    expect('error' in worldCup).toBe(false);
+    if ('error' in worldCup) return;
+    expect(worldCup.hits).toEqual([]);
+
+    const bitcoin = store.search(record.id, 'What is the current price of Bitcoin?', 3);
+    expect('error' in bitcoin).toBe(false);
+    if ('error' in bitcoin) return;
+    expect(bitcoin.hits).toEqual([]);
+
+    const version = store.search(record.id, 'What is the current version?', 3);
+    expect('error' in version).toBe(false);
+    if ('error' in version) return;
+    expect(version.hits.length).toBeGreaterThan(0);
+  });
+
+  it('matches applied/apply inflections without treating an unrelated question as evidence', async () => {
+    const { store, record } = await upload(
+      'guidance.txt',
+      'Applies accepted changes only at safe points. Never apply during a tool call.\n',
+    );
+
+    const found = store.search(record.id, 'When may a change be applied?', 3);
+    expect('error' in found).toBe(false);
+    if ('error' in found) return;
+    expect(found.hits[0]?.text).toContain('Applies accepted changes only at safe points.');
+
+    const unrelated = store.search(record.id, 'What is the capital of France?', 3);
+    expect('error' in unrelated).toBe(false);
+    if ('error' in unrelated) return;
+    expect(unrelated.hits).toEqual([]);
+  });
+
+  it('fuses lexical and reranker ranks instead of letting either overwrite the other', () => {
+    const hit = (index: number): AttachmentHit => ({
+      index,
+      locator: `chars ${index}`,
+      start: index,
+      end: index + 1,
+      text: `passage ${index}`,
+      score: 1,
+      snippet: `passage ${index}`,
+    });
+    const lexical = [hit(0), hit(1), hit(2)];
+    const reranked = [
+      { index: 2, score: 9 },
+      { index: 0, score: 5 },
+      { index: 1, score: 1 },
+    ];
+
+    const fused = fuseRerankedHits(lexical, reranked, 3);
+    expect(fused.map((item) => item.index)).toEqual([0, 2, 1]);
+    expect(fused.find((item) => item.index === 2)?.rerankScore).toBe(9);
+  });
+
+  it('falls back to lexical order when the optional reranker is disabled', async () => {
+    process.env.NUVIRA_ATTACHMENT_RERANK = '0';
+    const { store, record } = await upload(
+      'notes.txt',
+      'alpha is unrelated context\nthe needle is here\nomega filler\n',
+    );
+
+    const found = await store.searchRanked(record.id, 'needle', 2);
+    expect('error' in found).toBe(false);
+    if ('error' in found) return;
+    expect(found.hits.length).toBeGreaterThan(0);
+    expect(found.hits[0].snippet).toContain('needle');
+    expect(found.hits[0].rerankScore).toBeUndefined();
   });
 
   it('searches stored chunks and reads a bounded window with the next offset', async () => {
@@ -87,7 +191,8 @@ describe('attachment ingestion', () => {
       'huge.txt',
       'filler '.repeat(30_000) + '\nUNIQUE-MARKER\n' + 'tail '.repeat(30_000),
     );
-    const built = store.buildContext([record.id], 'UNIQUE-MARKER', { maxChars: 3_000 });
+    process.env.NUVIRA_ATTACHMENT_RERANK = '0';
+    const built = await store.buildContext([record.id], 'UNIQUE-MARKER', { maxChars: 3_000 });
     expect(built.context.length).toBeLessThan(4_000);
     expect(built.context).toContain('UNIQUE-MARKER');
     expect(built.context).toContain(`id="${record.id}"`);

@@ -39,6 +39,7 @@ import { formatTurnReport } from '../learning/turn-report.js';
 import { parseRequestSync } from '../nlu/parser.js';
 import { resolveEngine, readEngineModeConfig } from '../learning/engine-router.js';
 import { runLoopExecutor } from './loop-executor.js';
+import { withCliSteeringRun } from '../steering/index.js';
 import { resolveDispatch } from '../nlu/actions.js';
 import { isConversationalQuestion } from '../nlu/conversation-gate.js';
 import { contractFromParsed, renderContractCard } from '../nlu/contract.js';
@@ -1854,6 +1855,7 @@ export class ExecuteCommand extends BaseCommand {
         // a `nuvira execute` run was labelled `cli-chat`, which is exactly the
         // kind of misattribution a bug report cannot afford.
         debugSurface: 'cli-execute',
+        cliSteering: true,
         // WS5 (#27) — the command's own flags, on the arm that answers directly.
         // The loop arm is handed the same three by `runLoopEngineGoal`, so one
         // `nuvira execute --worktree` isolates the run on EITHER engine.
@@ -2261,7 +2263,14 @@ export class ExecuteCommand extends BaseCommand {
       // this command, the gateway and the model's build/resume tools cannot
       // drift apart — which is what SURFACE_DEBT['pipeline-wrapper-bypass'] was
       // recording while this command built its own Orchestrator.
-      const pipeline = await runPipelineTool(goal, this.configManager, {
+      const pipeline = await withCliSteeringRun(
+        {
+          runId: `cli-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          goal,
+          cwd: process.cwd(),
+          engine: 'pipeline',
+        },
+        () => runPipelineTool(goal, this.configManager, {
         provider,
         model,
         // The board is OURS: the wrapper must not mount a second one behind it.
@@ -2272,7 +2281,9 @@ export class ExecuteCommand extends BaseCommand {
         taskIntentHint: dispatch.taskIntentHint,
         recallContext,
         execOptions,
-      });
+        }),
+        (p) => (p.result?.success === false || !p.result ? 'failed' : 'completed'),
+      );
       const result = pipeline.result;
       if (!result) {
         // The wrapper never throws, so a run that could not even resolve a
@@ -2324,15 +2335,24 @@ export class ExecuteCommand extends BaseCommand {
                 // A FRESH wrapper run per batch: each batch is its own run, and
                 // reusing anything from the previous one would carry its
                 // counters and trace id into the next.
-                const batch = await runPipelineTool(batchJob.continuationPrompt, this.configManager, {
-                  provider,
-                  model,
-                  board: false,
-                  announce: false,
-                  taskIntentHint: dispatch.taskIntentHint,
-                  recallContext,
-                  execOptions: { ...execOptions, spinner: undefined },
-                });
+                const batch = await withCliSteeringRun(
+                  {
+                    runId: `cli-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                    goal: batchJob.continuationPrompt,
+                    cwd: process.cwd(),
+                    engine: 'pipeline',
+                  },
+                  () => runPipelineTool(batchJob.continuationPrompt, this.configManager, {
+                    provider,
+                    model,
+                    board: false,
+                    announce: false,
+                    taskIntentHint: dispatch.taskIntentHint,
+                    recallContext,
+                    execOptions: { ...execOptions, spinner: undefined },
+                  }),
+                  (p) => (p.result?.success === false || !p.result ? 'failed' : 'completed'),
+                );
                 const batchResult = batch.result;
                 if (!batchResult) {
                   // Nothing ran at all, so there is no progress to measure and

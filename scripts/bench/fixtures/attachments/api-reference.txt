@@ -1,0 +1,74 @@
+# Payments API reference — v3.5.15
+
+This reference describes the production Payments API. The current release is v3.5.15. Clients should send the API version in the path, not in a query parameter. The base URL is https://api.example-payments.test. All requests must use TLS 1.2 or later.
+
+## Authentication
+
+Authenticate with a bearer token in the Authorization header. Tokens are scoped to a workspace and an environment. A test token cannot read production objects. Rotate a token by creating a replacement, deploying it, and then revoking the old token after the overlap window.
+
+Do not put a token in a URL. Tokens in URLs can appear in proxy logs, browser history, and support tickets. If a token is exposed, revoke it immediately and open a security case.
+
+## Request tracing
+
+Every request should include an X-Request-ID header. The value must be unique per logical operation and must be stable across retries. The API echoes the value in the response and includes it in error payloads. If the header is absent, the API generates one, but the client cannot correlate that generated value with its own logs.
+
+The X-Request-ID value is for tracing only. It is not an authentication credential and it does not make a request idempotent.
+
+## Idempotency
+
+Mutating requests accept an Idempotency-Key header. The idempotency key prevents a retry from creating a duplicate charge when the original response was lost. A key is valid for 24 hours and is scoped to the workspace and endpoint. Reusing the same key with a different request body returns 409 Conflict.
+
+Generate a new key for each logical payment, not for each network attempt. If the client times out after sending a request, retry with the same key and the same body. The server returns the original result if it has already processed the request.
+
+The idempotency key is required for POST /v2/charges and optional for refunds. It is ignored on GET requests. Do not use a timestamp alone as the key; two payments created in the same second would collide.
+
+## Charges
+
+Create a charge with POST /v2/charges. The minimum amount is 50 cents. The currency must be a three-letter ISO 4217 code. The request body accepts amount, currency, customer_id, payment_method_id, description, and metadata. Metadata keys are limited to 40 characters and values to 500 characters.
+
+A successful charge returns 201 Created with a charge object. The object contains id, status, amount, currency, created_at, and the original idempotency key. A charge can be authorized, captured, failed, or refunded. Authorization and capture are separate states; a client must not treat an authorized charge as settled revenue.
+
+## Errors
+
+The API uses standard HTTP status codes with a JSON error body. The body contains type, code, message, request_id, and optional details. Do not parse the human-readable message to decide what happened; branch on code.
+
+Common codes:
+
+- invalid_request — the body is malformed or a required field is missing.
+- authentication_failed — the token is missing, expired, or revoked.
+- permission_denied — the token is valid but lacks the required scope.
+- rate_limited — the request exceeded the workspace rate limit.
+- idempotency_conflict — the key was reused with a different body.
+- card_declined — the issuer declined the payment method.
+
+A 429 response includes a Retry-After header. Retry only after the stated delay, and use exponential backoff with jitter if the header is absent. Do not retry a 400 response without changing the request. Do not retry a card_declined response with the same payment method unless the customer supplies a different method.
+
+## Rate limits
+
+The default limit is 100 requests per second per workspace and 20 requests per second per token. Bursts up to 200 requests are allowed for up to five seconds. The response headers X-RateLimit-Limit, X-RateLimit-Remaining, and X-RateLimit-Reset describe the current window.
+
+The rate limit is enforced per token, not per customer. A batch job that uses one token can starve interactive traffic from the same workspace. Use a separate token for batch work and keep concurrency below the stated limit.
+
+## Webhooks
+
+Webhooks are signed with the X-Signature header. The signature is an HMAC-SHA256 of the raw request body using the endpoint secret. Verify the signature before parsing the body. A webhook may be delivered more than once; use the event id for deduplication.
+
+Webhook delivery is at-least-once, not exactly-once. Return a 2xx response within five seconds. If the endpoint times out, the API retries with exponential backoff for up to 24 hours. A 4xx response other than 429 stops retries for that event.
+
+## Versioning
+
+The path version identifies the API contract. v3.5.15 is backward compatible with v3.5.0 for the charge and refund endpoints. The customer object added a required tax_region field in v3.5.15; older clients that omit it receive a validation error. The field is documented in the migration guide, not in this reference.
+
+Version headers are advisory only. Sending X-API-Version does not select the contract. The path is authoritative.
+
+## Pagination
+
+List endpoints use cursor pagination. Pass limit and starting_after. The default limit is 20 and the maximum is 100. The response contains has_more and the id of the last object. Cursors are opaque; do not construct them from timestamps. A cursor expires after 24 hours.
+
+## Deprecation
+
+The /v1/charges endpoint is deprecated. It still accepts requests, but new integrations must use /v2/charges. The v1 endpoint does not support idempotency keys and will be removed after 31 December 2027. Deprecation notices are sent to the workspace owner and are listed in the changelog.
+
+## Support
+
+For API issues, include the X-Request-ID value, the endpoint, the timestamp, and the error code. Never include a full card number, a bearer token, or a customer's personal data in a support ticket. For production incidents, open a Severity 1 case through the support portal.

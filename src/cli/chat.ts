@@ -16,6 +16,7 @@ import { maybeAutoRecall, recallContextBlock } from '../context/session-recall.j
 import { decisionsRecordingEnabled, recallDecisionBlock } from '../learning/decision-log.js';
 import { getMemoryManager } from '../memory/manager.js';
 import { logger } from '../utils/logger.js';
+import { withCliSteeringRun } from '../steering/index.js';
 import { printOrchestrationResult } from './execute.js';
 import {
   AnswerStream,
@@ -406,11 +407,20 @@ export async function runDeveloperMode(
   configManager: any,
   options?: { provider?: string; model?: string },
 ): Promise<void> {
-  const r = await runPipelineTool(goal, configManager, {
-    provider: options?.provider,
-    model: options?.model,
-    board: true,
-  });
+  const r = await withCliSteeringRun(
+    {
+      runId: `cli-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      goal,
+      cwd: process.cwd(),
+      engine: 'pipeline',
+    },
+    () => runPipelineTool(goal, configManager, {
+      provider: options?.provider,
+      model: options?.model,
+      board: true,
+    }),
+    (p) => (p.result?.success === false || !p.result ? 'failed' : 'completed'),
+  );
   if (r.result) {
     console.log('');
     printOrchestrationResult(r.result);
@@ -1184,6 +1194,12 @@ export class ChatCommand extends BaseCommand {
      */
     debugSurface?: string;
     /**
+     * The caller is a CLI command, so it owns a steering run's lifecycle. The
+     * dashboard/gateway leave this unset: they already open and close their own
+     * run, and a second one would make `steer --list` show a duplicate.
+     */
+    cliSteering?: boolean;
+    /**
      * WS2 — the chat/thread this turn belongs to, when the caller has one.
      *
      * Recorded in the debug log's header so the log is FINDABLE, not merely
@@ -1532,7 +1548,7 @@ export class ChatCommand extends BaseCommand {
       true,
       { auto: autoMode },
       parsed,
-      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, skills: opts.skills, onToken: opts.onToken, onReasoning: opts.onReasoning, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
+      { askUser: opts.askUser, onProgress: opts.onProgress, onToolCall: opts.onToolCall, onPlanChange: opts.onPlanChange, onGitDiff: opts.onGitDiff, onSkillDraft: opts.onSkillDraft, onFinding: opts.onFinding, planStore: opts.planStore ?? this.planStore, gateway: opts.gateway, projectContext: opts.projectContext, recallContext: recallBlock, decisionContext: decisionBlock, projectPath: opts.projectPath, skills: opts.skills, onToken: opts.onToken, onReasoning: opts.onReasoning, signal: opts.signal, continuation: opts.continuation, systemPolicy: opts.systemPolicy, debugSurface: opts.debugSurface ?? 'cli-chat', debugSession: opts.debugSession, cliSteering: opts.cliSteering, worktree: opts.worktree, keepWorktree: opts.keepWorktree, resume: opts.resume },
     );
 
     // No-model fallback: the tool loop could not generate a single response
@@ -1556,7 +1572,19 @@ export class ChatCommand extends BaseCommand {
           `running this ask in the multi-agent pipeline instead (a different execution model` +
           `${autoMode ? '' : ', on the same pinned pair'})`,
       );
-      const r = await runPipelineTool(message, this.configManager, { provider: type, model, board: false });
+      const pipelineRun = () => runPipelineTool(message, this.configManager, { provider: type, model, board: false });
+      const r = opts.cliSteering
+        ? await withCliSteeringRun(
+            {
+              runId: `cli-pipeline-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+              goal: message,
+              cwd: process.cwd(),
+              engine: 'pipeline',
+            },
+            pipelineRun,
+            (p) => (p.result?.success === false || !p.result ? 'failed' : 'completed'),
+          )
+        : await pipelineRun();
       // `success`, not `error`: a pipeline that RAN and failed reports its
       // outcome in `summary` and only sometimes sets `error`, so keying off
       // `error` alone returned a failed run's summary with NO failure flag —
@@ -2220,7 +2248,7 @@ export class ChatCommand extends BaseCommand {
         parsed,
         // WS5 (#27) — isolation and resume ride on the CLI's own flags. Passed
         // per turn: in the REPL each message is its own turn (see the manual).
-        { ...this.ws5Overrides(options), ...live.overrides },
+        { cliSteering: true, ...this.ws5Overrides(options), ...live.overrides },
       ).finally(() => live.stop());
 
       // No-model fallback: the tool loop could not generate a single response
@@ -2291,7 +2319,7 @@ export class ChatCommand extends BaseCommand {
           parseRequestSync(picked),
           // P5 — a picked followup continues the previous execution. A pinned
           // skill stays pinned for it: the followup is the same task.
-          { continuation: true, ...this.ws5Overrides(options), ...(options?.skill ? { skills: options.skill } : {}), ...liveNext.overrides },
+          { cliSteering: true, continuation: true, ...this.ws5Overrides(options), ...(options?.skill ? { skills: options.skill } : {}), ...liveNext.overrides },
         ).finally(() => liveNext.stop());
         const nextText = stripToolCallArtifacts(next.content);
         if (nextText) {
@@ -2410,6 +2438,7 @@ export class ChatCommand extends BaseCommand {
             // P5 — a picked followup (or a typed one that matches the last
             // suggestions) is a continuation, not a fresh independent request.
             {
+              cliSteering: true,
               continuation: pickedFollowup || isSuggestedFollowup(message, lastFollowups),
               ...this.ws5Overrides(options),
               // A `--skill` pin holds for every message in the session, not
@@ -2644,6 +2673,8 @@ export class ChatCommand extends BaseCommand {
       onFinding?: (finding: WireFinding) => void;
       /** WS2 — the surface label for the session debug log header. */
       debugSurface?: string;
+      /** The CLI owns this turn's steering run lifecycle (see withCliSteeringRun). */
+      cliSteering?: boolean;
       /** WS2 — the conversation this turn belongs to (see `answerOnce`). */
       debugSession?: string;
       /**
@@ -3852,7 +3883,7 @@ export class ChatCommand extends BaseCommand {
           // Best-effort — a rehydration failure is a cold start, not a broken turn.
         }
       }
-      result = await runToolLoop({
+      const runLoop = () => runToolLoop({
         messages: thread,
         // The route the model is TOLD about itself. Read fresh each step from the
         // session, which the failover path above updates — so a turn that moves
@@ -4049,6 +4080,13 @@ export class ChatCommand extends BaseCommand {
           },
         },
       });
+      result = ctxOverrides?.cliSteering
+        ? await withCliSteeringRun(
+            { runId: chatTraceId, goal: message, cwd: turnCwd, engine: 'loop' },
+            runLoop,
+            (r) => (r.generationFailed ? 'failed' : 'completed'),
+          )
+        : await runLoop();
       // P3 — REMEMBER the worker that actually delivered this task, so the next
       // turn of the SAME task ("resume", "continue") prefers it instead of
       // re-deciding from a signal-free word. Only a DELIVERED turn is remembered:

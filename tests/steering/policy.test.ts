@@ -262,9 +262,14 @@ const cases: Case[] = [
     expected: 'needs_approval',
   },
   {
-    name: 'the steward approval flag can only escalate',
-    text: 'Add a small helper',
-    assessment: assessment({ impact: 'low', requiresApproval: true }),
+    name: 'the steward approval flag can only escalate a non-additive change',
+    text: 'Change the helper',
+    assessment: assessment({
+      kind: 'modify',
+      impact: 'low',
+      requiresApproval: true,
+      proposedOps: [{ op: 'update_step', stepId: 'step-1', patch: { description: 'Change the helper' } }],
+    }),
     expected: 'needs_approval',
   },
   {
@@ -404,5 +409,40 @@ describe('steering policy matrix', () => {
       expect(typeof decision.reason).toBe('string');
       expect(decision.reason.trim().length).toBeGreaterThan(10);
     }
+  });
+
+  it('does not let advisory steward approval block a purely additive user request', () => {
+    // Measured 2026-11-09: the Steward flagged "add one deliverable" for
+    // approval and the run ended with a dead `needs_approval` item, while
+    // Freebuff/Claude applied the same user scope change.
+    const additive = decide({
+      change: change('Also create STEERED.txt.'),
+      assessment: assessment({ requiresApproval: true, impact: 'medium' }),
+      run: run(),
+      plan: plan([step('1', 'done'), step('2', 'done')]),
+    });
+    expect(additive.action).toBe('accept');
+
+    // A destructive edit keeps every gate, even with the same advisory flag.
+    const destructive = decide({
+      change: change('Replace step 2 with a rewrite.'),
+      assessment: assessment({
+        kind: 'modify',
+        impact: 'high',
+        requiresApproval: true,
+        proposedOps: [{ op: 'update_step', stepId: '2', patch: { description: 'rewrite' } }],
+      }),
+      run: run(),
+      plan: plan([step('1', 'done'), step('2', 'pending')]),
+    });
+    expect(destructive.action).toBe('needs_approval');
+
+    // High impact stays gated even when the change only adds a step.
+    const bigAdd = decide({
+      change: change('Add a whole new billing subsystem.'),
+      assessment: assessment({ impact: 'high', requiresApproval: true }),
+      run: run(),
+    });
+    expect(bigAdd.action).toBe('needs_approval');
   });
 });

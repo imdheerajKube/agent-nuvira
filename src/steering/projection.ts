@@ -8,6 +8,7 @@
  */
 
 import { latestPlan } from './plan.js';
+import { describeEscalations } from './policy.js';
 import {
   readApprovals,
   readBacklog,
@@ -93,6 +94,52 @@ export function steeringMetrics(
     highImpactFalseAccepts,
     ...(lastTriaged ? { lastTriageAt: lastTriaged } : {}),
   };
+}
+
+/**
+ * The audit trail of ONE change, as plain lines (P2.1 steer-with-proof).
+ *
+ * This is deliberately derived only from durable fields: receipt, triage
+ * latency, decision/escalations, the plan diff, and the exact bounded directive
+ * the executor was given. A surface that renders this cannot accidentally show a
+ * raw message as if it had been injected into the thread.
+ */
+export function changeProof(change: ChangeRequestRecord): string[] {
+  const lines: string[] = [
+    `${change.id} · ${change.status}`,
+    `Received ${change.submittedAt} from ${change.source} (${change.author}).`,
+  ];
+  if (change.triagedAt) {
+    lines.push(
+      `Triaged ${change.triagedAt}${
+        typeof change.triageLatencyMs === 'number' ? ` — ${change.triageLatencyMs} ms after receipt` : ''
+      }.`,
+    );
+  }
+  if (change.appliedAt) lines.push(`Applied ${change.appliedAt}.`);
+  if (change.decision) {
+    lines.push(`Decision: ${change.decision.action} — ${change.decision.reason}`);
+    if (change.decision.escalations?.length) {
+      lines.push(`Escalated because: ${describeEscalations(change.decision.escalations).join('; ')}.`);
+    }
+    if (change.decision.approvalEffect) lines.push(change.decision.approvalEffect);
+  }
+  if (change.planDiff) {
+    const diff = change.planDiff;
+    const parts: string[] = [];
+    if (diff.added.length) parts.push(`+${diff.added.join(',')}`);
+    if (diff.updated.length) parts.push(`~${diff.updated.join(',')}`);
+    if (diff.removed.length) parts.push(`-${diff.removed.join(',')}`);
+    if (diff.cancelled.length) parts.push(`cancelled ${diff.cancelled.join(',')}`);
+    if (diff.constraintsAdded.length) parts.push(`${diff.constraintsAdded.length} constraint(s)`);
+    if (diff.reordered) parts.push('reordered');
+    if (parts.length) lines.push(`Plan v${change.planVersion ?? '?'} diff: ${parts.join(' · ')}`);
+  }
+  if (change.failure) lines.push(`Failure: ${change.failure}`);
+  if (change.directive) {
+    lines.push('', 'Executor directive (bounded, derived from the applied version):', change.directive);
+  }
+  return lines;
 }
 
 /** Build the full view for one run. A missing run is a real, empty answer. */

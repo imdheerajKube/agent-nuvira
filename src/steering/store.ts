@@ -220,6 +220,50 @@ export function writeBacklog(runId: string, items: BacklogItem[]): boolean {
   return writeJson(backlogPath(runId), items);
 }
 
+/** A run with no live lease and no manifest write in this long is a ghost. */
+export const STALE_RUN_AFTER_MS = 10 * 60 * 1000;
+
+/**
+ * Is this manifest a dead `running` run?
+ *
+ * Measured 2026-11-09: a one-shot CLI exited 0 while `run.json` stayed
+ * `running`, so `steer --list` offered a dead run as active. The exit hook
+ * closes the runs this process knows about, but a SIGKILL, a crash or an old
+ * version leaves a lease that will never be released. A lease past its expiry —
+ * or no lease at all with an old `updatedAt` — is stale, and the surface says so
+ * instead of inviting guidance into a process that no longer exists.
+ *
+ * Paused/stopped runs are NOT stale: they are deliberately resumable.
+ */
+export function runStaleness(
+  run: RunRecord | null,
+  now = Date.now(),
+): { stale: boolean; staleSince?: string; reason: string } {
+  if (!run) return { stale: false, reason: 'run not found' };
+  if (run.status !== 'running') return { stale: false, reason: `run is ${run.status}` };
+  if (run.lease) {
+    const expires = Date.parse(run.lease.expiresAt);
+    if (Number.isFinite(expires)) {
+      return expires <= now
+        ? {
+            stale: true,
+            staleSince: new Date(expires).toISOString(),
+            reason: `lease held by pid ${run.lease.pid} expired at ${run.lease.expiresAt}`,
+          }
+        : { stale: false, reason: 'lease is live' };
+    }
+  }
+  const updated = Date.parse(run.updatedAt);
+  if (Number.isFinite(updated) && now - updated > STALE_RUN_AFTER_MS) {
+    return {
+      stale: true,
+      staleSince: run.updatedAt,
+      reason: 'no live lease and the manifest has not changed',
+    };
+  }
+  return { stale: false, reason: 'recent activity' };
+}
+
 /** Every run manifest on disk, newest first. */
 export function listRuns(): RunRecord[] {
   const dir = runsDir();

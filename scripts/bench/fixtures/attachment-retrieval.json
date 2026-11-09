@@ -1,0 +1,195 @@
+{
+  "description": "Attachment retrieval benchmark. Each case targets one fixture document; expect is the exact passage marker that a correct top-k hit must contain. Unanswerable cases must retrieve nothing.",
+  "k": 5,
+  "documents": [
+    "incident-postmortem.txt",
+    "vendor-agreement.md",
+    "sales-review.md",
+    "api-reference.txt",
+    "support-runbook.md"
+  ],
+  "cases": [
+    {
+      "id": "incident-code",
+      "document": "incident-postmortem.txt",
+      "question": "What does ERR_DB_POOL_EXHAUSTED mean?",
+      "kind": "exact",
+      "expect": "ERR_DB_POOL_EXHAUSTED"
+    },
+    {
+      "id": "vendor-code",
+      "document": "vendor-agreement.md",
+      "question": "What order form is WH-8821?",
+      "kind": "exact",
+      "expect": "WH-8821"
+    },
+    {
+      "id": "api-version",
+      "document": "api-reference.txt",
+      "question": "What changed in v3.5.15?",
+      "kind": "exact",
+      "expect": "v3.5.15"
+    },
+    {
+      "id": "support-sev1",
+      "document": "support-runbook.md",
+      "question": "What is a SEV-1?",
+      "kind": "exact",
+      "expect": "SEV-1 is a complete outage"
+    },
+    {
+      "id": "vendor-clause",
+      "document": "vendor-agreement.md",
+      "question": "What does Section 7.3 say about ending the contract?",
+      "kind": "exact",
+      "expect": "7.3 Termination for convenience"
+    },
+    {
+      "id": "api-request-id",
+      "document": "api-reference.txt",
+      "question": "What is the X-Request-ID header used for?",
+      "kind": "exact",
+      "expect": "X-Request-ID"
+    },
+    {
+      "id": "incident-paraphrase-pay",
+      "document": "incident-postmortem.txt",
+      "question": "Why were shoppers blocked?",
+      "kind": "paraphrase",
+      "expect": "checkout requests failed"
+    },
+    {
+      "id": "vendor-paraphrase-notice",
+      "document": "vendor-agreement.md",
+      "question": "How much warning before walking away?",
+      "kind": "paraphrase",
+      "expect": "sixty (60) days' written notice"
+    },
+    {
+      "id": "sales-paraphrase-revenue",
+      "document": "sales-review.md",
+      "question": "Why did the company earn less?",
+      "kind": "paraphrase",
+      "expect": "revenue declined 12%"
+    },
+    {
+      "id": "support-paraphrase-wake",
+      "document": "support-runbook.md",
+      "question": "Who gets woken?",
+      "kind": "paraphrase",
+      "expect": "page the on-call engineer"
+    },
+    {
+      "id": "api-paraphrase-retry",
+      "document": "api-reference.txt",
+      "question": "How can a client make a repeated submission harmless?",
+      "kind": "paraphrase",
+      "expect": "idempotency key"
+    },
+    {
+      "id": "incident-paraphrase-signal",
+      "document": "incident-postmortem.txt",
+      "question": "What metric moved before customers noticed?",
+      "kind": "paraphrase",
+      "expect": "p99 latency alert"
+    },
+    {
+      "id": "api-typo-idempotency",
+      "document": "api-reference.txt",
+      "question": "How does idempotancy prevent duplicate charges?",
+      "kind": "typo",
+      "expect": "idempotency key"
+    },
+    {
+      "id": "support-typo-runbook",
+      "document": "support-runbook.md",
+      "question": "What does the runbok say about paging?",
+      "kind": "typo",
+      "expect": "Paging and escalation"
+    },
+    {
+      "id": "vendor-typo-termination",
+      "document": "vendor-agreement.md",
+      "question": "What are the terminaton rules?",
+      "kind": "typo",
+      "expect": "Termination for cause"
+    },
+    {
+      "id": "incident-typo-latency",
+      "document": "incident-postmortem.txt",
+      "question": "What was the latancy at the start?",
+      "kind": "typo",
+      "expect": "p99 latency alert"
+    },
+    {
+      "id": "sales-region",
+      "document": "sales-review.md",
+      "question": "Which region had the weakest renewal rate?",
+      "kind": "structure",
+      "expect": "EMEA had the weakest renewal rate"
+    },
+    {
+      "id": "vendor-liability",
+      "document": "vendor-agreement.md",
+      "question": "What is the liability cap?",
+      "kind": "structure",
+      "expect": "liability cap"
+    },
+    {
+      "id": "support-status-page",
+      "document": "support-runbook.md",
+      "question": "Where do we tell customers what is happening?",
+      "kind": "structure",
+      "expect": "status page is the customer communication channel"
+    },
+    {
+      "id": "incident-owner",
+      "document": "incident-postmortem.txt",
+      "question": "Who owns the remediation?",
+      "kind": "structure",
+      "expect": "platform team"
+    },
+    {
+      "id": "unanswerable-france",
+      "document": "incident-postmortem.txt",
+      "question": "What is the capital of France?",
+      "kind": "unanswerable",
+      "expect": null
+    },
+    {
+      "id": "unanswerable-sourdough",
+      "document": "sales-review.md",
+      "question": "How do I bake sourdough bread?",
+      "kind": "unanswerable",
+      "expect": null
+    },
+    {
+      "id": "adjacent-tax",
+      "document": "vendor-agreement.md",
+      "question": "What is the tax rate for contractors?",
+      "kind": "adjacent",
+      "expect": null
+    },
+    {
+      "id": "unanswerable-world-cup",
+      "document": "support-runbook.md",
+      "question": "Who won the 1998 World Cup?",
+      "kind": "unanswerable",
+      "expect": null
+    },
+    {
+      "id": "unanswerable-fuzzy-world-would",
+      "document": "incident-postmortem.txt",
+      "question": "Who won the 2022 World Cup?",
+      "kind": "unanswerable",
+      "expect": null
+    },
+    {
+      "id": "unanswerable-generic-current",
+      "document": "api-reference.txt",
+      "question": "What is the current price of Bitcoin?",
+      "kind": "unanswerable",
+      "expect": null
+    }
+  ]
+}

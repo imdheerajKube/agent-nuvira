@@ -3940,16 +3940,17 @@ registerTool({
   run: async (args) => {
     const { id, query, limit } = args as { id: string; query: string; limit?: number };
     const { getAttachmentStore } = await import('../web-dashboard/attachment-store.js');
-    const result = getAttachmentStore().search(id, query, limit ?? 5);
+    const result = await getAttachmentStore().searchRanked(id, query, limit ?? 5);
     if ('error' in result) return result.error;
     if (result.hits.length === 0) {
       return `No matches for "${query}" in attachment "${result.record.name}". Try attachment_read to page through the document.`;
     }
     return [
       `[Attachment "${result.record.name}" — ${result.hits.length} match(es) for "${query}"]`,
-      ...result.hits.map((hit) =>
-        `- [${hit.locator}] score=${hit.score}\n  ${hit.snippet}\n  (attachment_read id="${id}" offset=${hit.start} limit=${Math.min(12_000, Math.max(1, hit.end - hit.start + 200))} for the full passage)`,
-      ),
+      ...result.hits.map((hit) => {
+        const score = hit.rerankScore !== undefined ? hit.rerankScore.toFixed(3) : hit.score;
+        return `- [${hit.locator}] score=${score}\n  ${hit.snippet}\n  (attachment_read id="${id}" offset=${hit.start} limit=${Math.min(12_000, Math.max(1, hit.end - hit.start + 200))} for the full passage)`;
+      }),
     ].join('\n');
   },
 });

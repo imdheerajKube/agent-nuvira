@@ -204,6 +204,31 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     cliEquivalent: 'NUVIRA_ATTACHMENT_INGEST_MAX_CHARS',
   },
   {
+    name: 'NUVIRA_ATTACHMENT_RERANK',
+    label: 'Rerank attachment search',
+    group: 'turn',
+    kind: 'flag',
+    rule: 'truthy',
+    description:
+      'Run a small local cross-encoder over the top attachment-search candidates before returning excerpts. The model is downloaded once, runs locally, and never sends document text to a provider; if it is unavailable, search keeps the lexical order.',
+    unsetMeans:
+      'ON when @huggingface/transformers and the reranker model are available; lexical order otherwise.',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_RERANK',
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_RERANK_MIN_SCORE',
+    label: 'Attachment rerank no-answer floor',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '-5',
+    valueLabel: 'Save',
+    description:
+      'Drop reranked attachment hits when the best local cross-encoder score is below this value. Negative values are valid; the score is a relevance logit, not a probability. Unset keeps the absolute score gate off and leaves the lexical generic-term guard as the only abstention rule.',
+    unsetMeans:
+      'No absolute score gate. The lexical generic-term guard still returns no hits when a question has no specific term.',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_RERANK_MIN_SCORE',
+  },
+  {
     name: 'NUVIRA_ATTACHMENT_RETENTION_DAYS',
     label: 'Attachment retention (days)',
     group: 'turn',

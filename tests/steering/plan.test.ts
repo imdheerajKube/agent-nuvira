@@ -101,14 +101,26 @@ describe('plan mutation protections', () => {
     expect(statuses['step-4']).toBe('cancelled');
   });
 
-  it('fails the whole batch on an unknown anchor, never a partial plan', () => {
+  it('appends a step when the anchor id is unknown (a hint, not a target)', () => {
+    // Measured 2026-11-09: the Steward read ordinal "3" from a plan whose ids
+    // were write/run/verify. The additive step is valid; failing it lost the
+    // user's scope change entirely.
+    const result = applyPlanOps(plan([step('write'), step('verify')]), [
+      { op: 'add_step', after: '3', step: { description: 'appended' } },
+    ]);
+    expect(result.ok).toBe(true);
+    expect(result.plan?.steps.at(-1)?.description).toBe('appended');
+    expect(result.plan?.steps).toHaveLength(3);
+  });
+
+  it('fails the whole batch on an unknown TARGET id, never a partial plan', () => {
     const result = applyPlanOps(plan([step('step-1')]), [
       { op: 'add_step', step: { description: 'first valid' } },
-      { op: 'add_step', after: 'missing', step: { description: 'invalid' } },
+      { op: 'update_step', stepId: 'missing', patch: { description: 'invalid' } },
     ]);
     expect(result.ok).toBe(false);
     expect(result.plan).toBeUndefined();
-    expect(result.error).toMatch(/unknown anchor/i);
+    expect(result.error).toMatch(/unknown step/i);
   });
 
   it('fails on unknown step ids for update, remove, reorder and priority', () => {

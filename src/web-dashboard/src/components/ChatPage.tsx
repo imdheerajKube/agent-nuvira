@@ -54,7 +54,7 @@ function formatAttachmentBytes(bytes: number): string {
 }
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { dashboardAPI, type AttachmentQuota, type PendingQuestion } from '../api';
+import { dashboardAPI, steeringGuide, type AttachmentQuota, type PendingQuestion } from '../api';
 import { useAuthVersion } from '../useAuthVersion';
 import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
@@ -2227,6 +2227,25 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   // reordering the hooks.
   subscribeLiveRef.current = subscribeLive;
 
+  /**
+   * First-class pause/stop from the same composer. `stop`/`pause` are control
+   * guidance: the deterministic prefilter decides them without a model, and the
+   * run's safe point reports the control before any plan write.
+   */
+  const steerControl = useCallback(async (action: 'pause' | 'stop') => {
+    setError('');
+    const result = await steeringGuide({ runId: sessionIdRef.current, text: action });
+    if (!result.ok) {
+      setError(result.error ?? `Could not ${action} the run.`);
+      return;
+    }
+    setMeta(
+      action === 'stop'
+        ? '⏹ Stop requested — the run ends at the next safe point; its plan and guidance queue are preserved.'
+        : '⏸ Pause requested — the run holds at the next safe point and stays resumable.',
+    );
+  }, []);
+
   const send = useCallback(
     async (
       text: string,
@@ -2244,7 +2263,38 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     ) => {
       const clean = text.trim();
       const chipList = Array.isArray(withAttachments) ? withAttachments : attachments;
-      if ((!clean && chipList.length === 0) || busy) return;
+      if (!clean && chipList.length === 0) return;
+
+      // SAME-COMPOSER STEERING. While a turn runs, the main task stays locked, but
+      // the user's next sentence is still about THIS run. Freebuff/Claude accept
+      // it in the same box; Nuvira's only path was a separate process that could
+      // not reach the run's model (measured 2026-11-09, 0/3). The text becomes a
+      // durable guidance change — assessed, then applied at the next safe point —
+      // never a raw message injected into the live thread.
+      if (busy) {
+        if (chipList.length > 0) {
+          setMeta('📎 Attachments go with the next turn — guidance during a running turn is text only.');
+          return;
+        }
+        setMeta('🧭 Adding to the current task — assessing it now; it applies at the next safe point.');
+        const submitted = await steeringGuide({
+          runId: sessionIdRef.current,
+          text: clean,
+          idempotencyKey: `composer-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        });
+        if (!submitted.ok) {
+          setMeta(null);
+          setError(submitted.error ?? 'Could not add that to the current task.');
+          return;
+        }
+        setMeta(
+          submitted.deduped
+            ? `🧭 Already in the guidance queue as ${submitted.change?.id ?? 'an existing item'} — no duplicate was created.`
+            : `🧭 Added as ${submitted.change?.id ?? 'guidance'} — the main task stays locked; this applies at the next safe point.`,
+        );
+        setInput('');
+        return;
+      }
       // `/skill <name…>` PINS a skill for the turns that follow; it is a command
       // for the harness, never a message to the model, so it is consumed here
       // before any turn state is armed. No name clears the pins.
@@ -3928,19 +3978,44 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                     setInput(lastSentRef.current);
                   }
                 }}
-                placeholder="Message the agent… (Enter to send · Shift+Enter for a new line · ↑ recalls last · 📎 attach a file or paste a large document)"
-                disabled={busy}
+                placeholder={
+                  busy
+                    ? 'Add to the current task… (Enter to steer · Shift+Enter for a new line)'
+                    : 'Message the agent… (Enter to send · Shift+Enter for a new line · ↑ recalls last · 📎 attach a file or paste a large document)'
+                }
                 maxLength={8000}
                 rows={1}
                 autoFocus
               />
               {busy ? (
-                <button className="admin-mini-btn chat-cancel-btn" type="button" onClick={cancelTurn}>
-                  ⏹ Cancel
-                </button>
+                <>
+                  <button
+                    className="admin-mini-btn"
+                    type="button"
+                    title="Pause at the next safe point — the plan and queue are preserved"
+                    onClick={() => void steerControl('pause')}
+                  >
+                    ⏸ Pause
+                  </button>
+                  <button
+                    className="admin-mini-btn"
+                    type="button"
+                    title="Stop at the next safe point — completed work and the plan are preserved"
+                    onClick={() => void steerControl('stop')}
+                  >
+                    ⏹ Stop
+                  </button>
+                  <button className="admin-mini-btn chat-cancel-btn" type="button" onClick={cancelTurn}>
+                    ✕ Cancel turn
+                  </button>
+                </>
               ) : null}
-              <button className="admin-refresh-btn" type="submit" disabled={busy || (!input.trim() && attachments.length === 0)}>
-                {busy ? '⏳ Working…' : '➤ Send'}
+              <button
+                className="admin-refresh-btn"
+                type="submit"
+                disabled={!input.trim() && attachments.length === 0}
+              >
+                {busy ? '🧭 Add to task' : '➤ Send'}
               </button>
             </div>
           </form>

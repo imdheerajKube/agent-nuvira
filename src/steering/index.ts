@@ -13,7 +13,10 @@ export {
   getSteeringRun,
   currentSteeringRun,
   withSteeringRun,
+  withCliSteeringRun,
   completeSteeringRun,
+  closeOpenSteeringRuns,
+  closeSteeringRun,
   submitSteeringGuidance,
   steeringProjection,
   listSteeringRuns,
@@ -30,10 +33,23 @@ export {
   confirmInterpretation,
   findActiveRun,
 } from './inbox.js';
-export { triagePending, applyAccepted, runSafePoint, pendingGuidanceSummary } from './scheduler.js';
-export { projectRun, steeringMetrics } from './projection.js';
-export { decide, statusForDecision } from './policy.js';
-export { runChangeSteward, validateAssessment, fallbackAssessment } from './steward.js';
+export {
+  triagePending,
+  applyAccepted,
+  runSafePoint,
+  syncPlanFromEngine,
+  pendingGuidanceSummary,
+} from './scheduler.js';
+export { projectRun, steeringMetrics, changeProof } from './projection.js';
+export {
+  decide,
+  statusForDecision,
+  describeEscalations,
+  escalationLabel,
+  approvalEffectFor,
+  ESCALATION_LABELS,
+} from './policy.js';
+export { runChangeSteward, validateAssessment, fallbackAssessment, deriveFallbackOps } from './steward.js';
 export type { StewardGenerate, StewardResult } from './steward.js';
 export { discussRun, discussContext } from './discuss.js';
 export {
@@ -53,4 +69,12 @@ export {
 export { LoopPlanAdapter, PipelinePlanAdapter } from './adapters.js';
 export type { LoopPlanStoreLike, PipelineVaultLike } from './adapters.js';
 export { prefilterGuidance, scanInjection, detectControl, MAX_GUIDANCE_CHARS } from './prefilter.js';
-export { steeringRoot, listRuns, readRun, readChanges, readApprovals, readJournal } from './store.js';
+export {
+  steeringRoot,
+  listRuns,
+  readRun,
+  readChanges,
+  readApprovals,
+  readJournal,
+  runStaleness,
+} from './store.js';

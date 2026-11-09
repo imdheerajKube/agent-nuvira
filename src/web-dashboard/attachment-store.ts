@@ -35,11 +35,14 @@ import { pipeline } from 'node:stream/promises';
 import { resolveNuviraDataPath } from '../config/paths.js';
 import {
   resolveAttachmentIngestMaxChars,
+  resolveAttachmentRerankMinScore,
   resolveAttachmentRetentionDays,
   resolveAttachmentStoreMaxBytes,
   resolveAttachmentUploadMaxBytes,
 } from '../config/limits.js';
 import { getReadExtractManager } from '../tools/read-extract.js';
+import { isGenericTerm, STOPWORDS, termVariants } from '../learning/lexical-search.js';
+import { passesRerankThreshold, rerankPassages, type RerankedPassage } from '../learning/reranker.js';
 
 export type AttachmentStatus = 'uploading' | 'processing' | 'ready' | 'partial' | 'failed';
 export type AttachmentKind = 'file' | 'paste' | 'drop';
@@ -104,7 +107,10 @@ export interface AttachmentChunk {
 }
 
 export interface AttachmentHit extends AttachmentChunk {
+  /** Lexical score, retained for transparency and for fallback ordering. */
   score: number;
+  /** Cross-encoder relevance score when the optional reranker ran. */
+  rerankScore?: number;
   snippet: string;
 }
 
@@ -152,6 +158,9 @@ export class AttachmentUploadError extends Error {
 
 const MAX_CHUNK_CHARS = 6_000;
 const CHUNK_OVERLAP_CHARS = 400;
+const LONG_DOCUMENT_CHARS = 30_000;
+const LONG_DOCUMENT_CHUNK_CHARS = 2_500;
+const LONG_DOCUMENT_OVERLAP_CHARS = 250;
 const DEFAULT_READ_CHARS = 12_000;
 const MAX_READ_CHARS = 40_000;
 
@@ -262,12 +271,18 @@ export function chunkAttachmentText(text: string): AttachmentChunk[] {
   let index = 0;
   for (const section of sectionsOf(text)) {
     if (!section.text.trim()) continue;
+    // Long documents get finer sections so the reranker sees the passage that
+    // was ranked; short documents keep larger sections so a heading and its
+    // answer are not split apart. The 30K threshold is above every synthetic
+    // fixture and below the 60K real attachment.
+    const maxChars = text.length > LONG_DOCUMENT_CHARS ? LONG_DOCUMENT_CHUNK_CHARS : MAX_CHUNK_CHARS;
+    const overlap = text.length > LONG_DOCUMENT_CHARS ? LONG_DOCUMENT_OVERLAP_CHARS : CHUNK_OVERLAP_CHARS;
     let local = 0;
     while (local < section.text.length) {
-      let end = Math.min(section.text.length, local + MAX_CHUNK_CHARS);
+      let end = Math.min(section.text.length, local + maxChars);
       if (end < section.text.length) {
         const boundary = section.text.lastIndexOf('\n', end);
-        if (boundary > local + Math.floor(MAX_CHUNK_CHARS * 0.55)) end = boundary;
+        if (boundary > local + Math.floor(maxChars * 0.55)) end = boundary;
       }
       const body = section.text.slice(local, end).trim();
       if (body) {
@@ -284,7 +299,7 @@ export function chunkAttachmentText(text: string): AttachmentChunk[] {
         });
       }
       if (end >= section.text.length) break;
-      local = Math.max(local + 1, end - CHUNK_OVERLAP_CHARS);
+      local = Math.max(local + 1, end - overlap);
     }
   }
   return chunks;
@@ -297,22 +312,96 @@ function queryTerms(query: string): string[] {
         .toLowerCase()
         .split(/[^a-z0-9_]+/i)
         .map((t) => t.trim())
-        .filter((t) => t.length >= 2 && !['the', 'and', 'for', 'with', 'from', 'that', 'this', 'what', 'when', 'where', 'which', 'how', 'why', 'are', 'was', 'were', 'you', 'your'].includes(t)),
+        // Use the shared stopword definition. The old local list omitted short
+        // function words such as `is` and `of`, so an unrelated question could
+        // match almost every chunk. Two-character identifier pieces such as `v3`
+        // still survive because they are not stopwords.
+        .filter((t) => t.length >= 2 && !STOPWORDS.has(t)),
     ),
   ).slice(0, 24);
+}
+
+function isWordChar(value: string | undefined): boolean {
+  // `_` is a separator here: `new_task` must still match the query terms
+  // `new` and `task`, while `nation` must not match inside `explanation`.
+  return value !== undefined && /[a-z0-9]/.test(value);
+}
+
+/**
+ * Count occurrences that START at a word boundary. The start boundary blocks
+ * `nation` inside `explanation`; the end stays open so `change` still finds
+ * `changes` and `happen` still finds `happens`.
+ */
+function countTermStarts(text: string, term: string): number {
+  let count = 0;
+  let at = text.indexOf(term);
+  while (at >= 0) {
+    if (!isWordChar(text[at - 1])) count += 1;
+    at = text.indexOf(term, at + term.length);
+  }
+  return count;
+}
+
+function firstTermStartIndex(text: string, term: string): number {
+  let at = text.indexOf(term);
+  while (at >= 0) {
+    if (!isWordChar(text[at - 1])) return at;
+    at = text.indexOf(term, at + term.length);
+  }
+  return -1;
 }
 
 function makeSnippet(text: string, terms: string[]): string {
   const lower = text.toLowerCase();
   let at = -1;
   for (const term of terms) {
-    const found = lower.indexOf(term);
-    if (found >= 0 && (at < 0 || found < at)) at = found;
+    for (const variant of termVariants(term)) {
+      const found = firstTermStartIndex(lower, variant);
+      if (found >= 0 && (at < 0 || found < at)) at = found;
+    }
   }
   if (at < 0) return text.slice(0, 360).replace(/\s+/g, ' ').trim();
   const start = Math.max(0, at - 140);
   const end = Math.min(text.length, at + 320);
   return `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ').trim()}${end < text.length ? '…' : ''}`;
+}
+
+const FUSION_K = 60;
+
+/**
+ * Reciprocal-rank fusion of the lexical order and the reranker order. Neither
+ * score is comparable to the other, so only their ranks are combined. Keeping
+ * the lexical rank is what prevents the cross-encoder from discarding an exact
+ * identifier match while still letting it promote a paraphrase.
+ */
+export function fuseRerankedHits(
+  lexical: AttachmentHit[],
+  reranked: RerankedPassage[],
+  limit: number,
+): AttachmentHit[] {
+  const fused = new Map<number, { hit: AttachmentHit; rrf: number }>();
+  const rerankScores = new Map<number, number>();
+  const add = (index: number, rank: number): void => {
+    const hit = lexical[index];
+    if (!hit) return;
+    const entry = fused.get(index) ?? { hit, rrf: 0 };
+    entry.rrf += 1 / (FUSION_K + rank + 1);
+    fused.set(index, entry);
+  };
+
+  lexical.forEach((_, rank) => add(rank, rank));
+  reranked.forEach(({ index, score }, rank) => {
+    rerankScores.set(index, score);
+    add(index, rank);
+  });
+
+  return [...fused.entries()]
+    .sort(([, a], [, b]) => b.rrf - a.rrf || a.hit.index - b.hit.index)
+    .slice(0, Math.max(0, limit))
+    .map(([index, { hit }]) => {
+      const rerankScore = rerankScores.get(index);
+      return rerankScore === undefined ? hit : { ...hit, rerankScore };
+    });
 }
 
 export class AttachmentStore {
@@ -723,28 +812,80 @@ export class AttachmentStore {
       return { error: `Attachment "${record.name}" is still being indexed. Try again in a moment.` };
     }
     const terms = queryTerms(query);
+    // No content terms means no evidence. Returning every chunk here was the
+    // false-positive bug that made an unrelated question look like a match.
+    if (terms.length === 0) return { record: publicRecord(record), hits: [] };
+    // A generic content word is not evidence by itself. The Bitcoin question
+    // shares only `current` with a steering document; `Bitcoin`/`price` are
+    // absent, so there is no specific term to justify a passage.
+    if (!terms.some((term) => !isGenericTerm(term))) {
+      return { record: publicRecord(record), hits: [] };
+    }
     const chunks = this.chunks(id);
     const scored = chunks
       .map((chunk) => {
         const lower = chunk.text.toLowerCase();
+        const matched: string[] = [];
         let score = 0;
+        let matchedSpecific = false;
         for (const term of terms) {
-          let at = lower.indexOf(term);
-          while (at >= 0) {
-            score += 1;
-            at = lower.indexOf(term, at + term.length);
+          // Count the best inflection, not the sum of every variant: a document
+          // containing `changed` must not score twice for `change` + `changed`.
+          let occurrences = 0;
+          for (const variant of termVariants(term)) {
+            occurrences = Math.max(occurrences, countTermStarts(lower, variant));
           }
+          if (occurrences === 0) continue;
+          score += occurrences;
+          matched.push(term);
+          if (!isGenericTerm(term)) matchedSpecific = true;
         }
-        if (terms.length > 0 && lower.includes(query.trim().toLowerCase())) score += terms.length * 2;
-        return { chunk, score };
+        // A chunk that only shares `current` with the question has no topical
+        // evidence, even though the word occurs there many times.
+        if (!matchedSpecific) return { chunk, score: 0, matched };
+        if (lower.includes(query.trim().toLowerCase())) score += terms.length * 2;
+        return { chunk, score, matched };
       })
-      .filter((x) => terms.length === 0 || x.score > 0)
+      .filter((x) => x.score > 0)
       .sort((a, b) => b.score - a.score || a.chunk.index - b.chunk.index)
       .slice(0, Math.max(1, Math.min(20, limit)));
 
     return {
       record: publicRecord(record),
-      hits: scored.map(({ chunk, score }) => ({ ...chunk, score, snippet: makeSnippet(chunk.text, terms) })),
+      hits: scored.map(({ chunk, score, matched }) => ({ ...chunk, score, snippet: makeSnippet(chunk.text, matched) })),
+    };
+  }
+
+  /**
+   * Search with the optional local cross-encoder over a wider lexical pool.
+   * The first stage keeps recall cheap; the reranker spends compute only on a
+   * bounded candidate set. If the model is disabled or unavailable, the caller
+   * gets the same lexical hits it would have received from `search`.
+   */
+  async searchRanked(
+    id: string,
+    query: string,
+    limit = 5,
+    opts: { candidateLimit?: number; minRerankScore?: number } = {},
+  ): Promise<{ record: PublicAttachment; hits: AttachmentHit[] } | { error: string }> {
+    const candidateLimit = Math.max(limit, Math.min(20, opts.candidateLimit ?? 20));
+    const found = this.search(id, query, candidateLimit);
+    if ('error' in found) return found;
+    if (found.hits.length <= 1) return { ...found, hits: found.hits.slice(0, limit) };
+
+    const reranked = await rerankPassages(query, found.hits.map((hit) => hit.text));
+    if (!reranked) return { ...found, hits: found.hits.slice(0, limit) };
+
+    const minScore = opts.minRerankScore ?? resolveAttachmentRerankMinScore();
+    if (!passesRerankThreshold(reranked, minScore)) {
+      // The question has lexical overlap but no reranked evidence. Returning no
+      // hits is more honest than handing the model a plausible-looking passage.
+      return { record: found.record, hits: [] };
+    }
+
+    return {
+      record: found.record,
+      hits: fuseRerankedHits(found.hits, reranked, limit),
     };
   }
 
@@ -796,11 +937,11 @@ export class AttachmentStore {
    * attachment text that reaches the first model call; the rest is retrieved
    * on demand.
    */
-  buildContext(
+  async buildContext(
     ids: string[],
     query: string,
     opts: { maxChars?: number; maxHitsPerAttachment?: number } = {},
-  ): { records: PublicAttachment[]; context: string } {
+  ): Promise<{ records: PublicAttachment[]; context: string }> {
     const records: PublicAttachment[] = [];
     const lines: string[] = [];
     let remaining = Math.max(2_000, opts.maxChars ?? 14_000);
@@ -815,7 +956,9 @@ export class AttachmentStore {
       remaining -= manifest.length;
       if (remaining <= 0) continue;
       if (record.status !== 'ready' && record.status !== 'partial') continue;
-      const found = this.search(id, query, maxHits);
+      const found = await this.searchRanked(id, query, maxHits, {
+        candidateLimit: Math.max(8, maxHits * 3),
+      });
       if ('error' in found) continue;
       for (const hit of found.hits) {
         if (remaining <= 200) break;

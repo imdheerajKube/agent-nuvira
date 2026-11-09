@@ -165,6 +165,8 @@ export interface SteeringDecision {
   options?: string[];
   /** Deterministic escalation reasons (high impact, conflict, completed work). */
   escalations?: string[];
+  /** Plain-English statement of what approving this change will actually do. */
+  approvalEffect?: string;
   at?: 'next_safe_point' | 'immediate';
 }
 
@@ -189,6 +191,12 @@ export interface ChangeRequestRecord {
   planVersion?: number;
   planDiff?: PlanDiff;
   appliedAt?: string;
+  /**
+   * The EXACT bounded directive the executor received for this change. Derived
+   * from the applied plan version, never from raw guidance, and stored so the
+   * user can audit what the model was actually told (P2.1 steer-with-proof).
+   */
+  directive?: string;
   failure?: string;
   /** True when an identical submission inside the dedupe window was collapsed. */
   deduped?: boolean;

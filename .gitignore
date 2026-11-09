@@ -168,9 +168,20 @@ docs/demos/nuvira-commands-all.cast
 # that a fresh clone cannot open — the same failure the three entries above were
 # published to fix — and the adopt/decline split gets re-derived from scratch.
 !docs/ASSESSMENT_2026-10-15_ROUTER_VS_FINAL_DESIGN.md
+# The attachment-retrieval exercise record and decision log. It is the only place
+# the synthetic baseline, the real-query gate, and the semantic/hybrid revisit
+# triggers are written down together. Untracked, the next session re-runs the
+# same six-arm benchmark and re-litigates the same decision. The generated report
+# it links to is whitelisted with it so the evidence does not 404 on a fresh clone.
+!docs/ATTACHMENT_RETRIEVAL_DECISION_2026-11-09.md
+!docs/BENCH_ATTACHMENT_RETRIEVAL_2026-11-09.md
 
 # Book (internal document — not published)
 book/
+
+# Local third-party corpus used for retrieval experiments. It is 9.7 MB of the
+# upstream `requests` project, not part of this package, and must not be vendored.
+requests/
 
 # Editor / IDE workspace settings — machine-local, never project source.
 # Without this the release pipeline's `git add -A` swept a stray

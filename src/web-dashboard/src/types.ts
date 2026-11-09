@@ -2428,6 +2428,10 @@ export interface SteeringDecisionView {
   action: string;
   reason: string;
   authority?: string;
+  /** Deterministic escalation codes (high_impact, conflict, …). */
+  escalations?: string[];
+  /** What approving will actually do, in plan terms. */
+  approvalEffect?: string;
 }
 
 export interface SteeringPlanDiffView {
@@ -2453,6 +2457,9 @@ export interface SteeringChangeRecord {
   decision?: SteeringDecisionView;
   planVersion?: number;
   planDiff?: SteeringPlanDiffView;
+  appliedAt?: string;
+  /** The exact bounded directive the executor received. */
+  directive?: string;
   failure?: string;
   triagedAt?: string;
   triageLatencyMs?: number;
@@ -2484,6 +2491,9 @@ export interface SteeringRunView {
   sessionId?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Derived: a `running` run whose lease expired, so nothing is applying it. */
+  stale?: boolean;
+  staleSince?: string;
 }
 
 export interface SteeringBacklogItem {
@@ -2544,6 +2554,13 @@ export interface SteeringResponse {
   ok: boolean;
   enabled?: boolean;
   projection?: SteeringProjection;
-  runs?: Array<{ runId: string; status: string; goal: string; updatedAt?: string }>;
+  runs?: Array<{
+    runId: string;
+    status: string;
+    goal: string;
+    updatedAt?: string;
+    stale?: boolean;
+    staleSince?: string;
+  }>;
   error?: string;
 }

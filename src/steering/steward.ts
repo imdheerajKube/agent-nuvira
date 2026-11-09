@@ -103,6 +103,8 @@ const SYSTEM_PROMPT = [
   'Rules for operations:',
   '- Prefer the fewest ops that express the change.',
   '- Use only step ids that appear in the supplied plan. New steps may omit `id`.',
+  '- Step ids are NAMES (e.g. `write`, `verify`), never positions. `after` is a placement',
+  '  hint only; an unknown anchor appends the new step at the end.',
   '- `add_constraint` is for a guardrail that narrows future work (e.g. "do not touch payments").',
   '- `cancel_pending_after` reduces scope; never cancel completed work.',
   '- `reorder` and `set_priority` may name only pending/blocked steps. Never move or mutate a',
@@ -256,11 +258,13 @@ export function buildStewardMessages(input: {
   plan: SteeringPlan | null;
   recentEvents: string[];
 }): ToolMessage[] {
+  // No ordinals on purpose: a numbered list invites the model to use "3" as a
+  // step id when the plan's third step is actually named `verify`.
   const planSummary = input.plan
     ? input.plan.steps
         .map(
-          (s, i) =>
-            `${i + 1}. [${s.id}] (${s.status}) ${s.description}${s.dependsOn.length ? ` dependsOn=${s.dependsOn.join(',')}` : ''}`,
+          (s) =>
+            `- [${s.id}] (${s.status}) ${s.description}${s.dependsOn.length ? ` dependsOn=${s.dependsOn.join(',')}` : ''}`,
         )
         .join('\n') || '(the plan has no steps yet)'
     : '(no plan version exists yet)';
@@ -345,6 +349,52 @@ export function parseAssessmentJson(content: string): unknown | null {
   return null;
 }
 
+/**
+ * Deterministic plan operations for high-signal instructions.
+ *
+ * The Steward is the preferred assessor, but a provider outage must not turn an
+ * explicit request into `answer_only`. This maps only the cases the deterministic
+ * classifier can state unambiguously, and only when the user named the target
+ * step for a destructive edit. Policy still decides whether the batch applies or
+ * needs a human; nothing here bypasses an escalation.
+ */
+export function deriveFallbackOps(
+  change: ChangeRequestRecord,
+  assessment: Pick<ChangeAssessment, 'kind'>,
+): PlanOp[] {
+  const text = String(change.rawText ?? '').trim().replace(/\s+/g, ' ');
+  if (!text) return [];
+  switch (assessment.kind) {
+    case 'constraint':
+      return [{ op: 'add_constraint', constraint: text.slice(0, 1000) }];
+    case 'add':
+      return [{ op: 'add_step', step: { description: text.slice(0, 1000), acceptanceCriteria: [] } }];
+    case 'modify':
+    case 'correction':
+      // Rewriting a description is material. A note records the instruction on
+      // the step the user named without pretending to know the new wording.
+      return change.targetStepId
+        ? [{ op: 'update_step', stepId: change.targetStepId, patch: { note: text.slice(0, 1000) } }]
+        : [];
+    case 'remove':
+      return change.targetStepId
+        ? [
+            {
+              op: 'update_step',
+              stepId: change.targetStepId,
+              patch: { status: 'cancelled', note: text.slice(0, 1000) },
+            },
+          ]
+        : [];
+    case 'priority':
+      return change.targetStepId
+        ? [{ op: 'set_priority', stepIds: [change.targetStepId], priority: 'high' }]
+        : [];
+    default:
+      return [];
+  }
+}
+
 /** The deterministic fallback, always available. */
 export function fallbackAssessment(
   change: ChangeRequestRecord,
@@ -352,21 +402,23 @@ export function fallbackAssessment(
 ): ChangeAssessment {
   const gate = prefilterGuidance(change.rawText);
   const base = classifyDeterministically(change.rawText, change.intentHint, gate.control);
+  const proposedOps = deriveFallbackOps(change, base);
   return {
     relation: base.relation,
     kind: base.kind,
     timing: base.timing,
     impact: base.impact,
-    // Deliberately below the default policy threshold: an assessment that did not
-    // come from the Steward must ask the user rather than act.
-    confidence: Math.min(base.confidence, 0.5),
+    // With concrete operations the deterministic read is actionable and may be
+    // accepted at a safe point; without them it stays below the policy threshold
+    // so the user is asked rather than acted on.
+    confidence: proposedOps.length > 0 ? Math.min(Math.max(base.confidence, 0.6), 0.7) : Math.min(base.confidence, 0.5),
     affectedStepIds: change.targetStepId ? [change.targetStepId] : [],
     conflictsWith: [],
     supersedes: [],
     conflict: 'none',
     requiresApproval: false,
     rationale: `${base.rationale} (${reason})`,
-    proposedOps: [],
+    proposedOps,
   };
 }
 

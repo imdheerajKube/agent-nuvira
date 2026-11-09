@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from 'react';
 
 import {
   steeringBacklog,
+  steeringClose,
   steeringDecide,
   steeringDiscuss,
   steeringGet,
@@ -63,6 +64,26 @@ function statusChip(status: string): string {
   }
 }
 
+const ESCALATION_TEXT: Record<string, string> = {
+  high_impact: 'high impact — it can change material work',
+  conflict: 'conflicts with an existing requirement',
+  supersedes_approved_requirement: 'supersedes an approved requirement',
+  irreversible: 'not automatically reversible',
+  removes_completed_work: 'touches work that is already complete',
+  steward_requested: 'the assessor flagged it as material',
+  policy_override_attempt: 'attempts to change the safety policy',
+};
+
+function escalationTexts(codes: string[] | undefined): string[] {
+  return (codes ?? []).map((code) => ESCALATION_TEXT[code] ?? code.replace(/_/g, ' '));
+}
+
+function proofTime(iso?: string): string {
+  if (!iso) return '';
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? iso : date.toLocaleString();
+}
+
 function ids(values: string[], max = 4): string {
   const shown = values.slice(0, max).join(', ');
   return values.length > max ? `${shown} +${values.length - max} more` : shown;
@@ -85,13 +106,11 @@ function ChangeRow({
   onDecision,
   onInterpret,
   onCapture,
-  busy,
 }: {
   change: SteeringChangeRecord;
   onDecision: (changeId: string, action: 'approve' | 'reject' | 'defer' | 'withdraw') => void;
   onInterpret: (changeId: string, choice: 'guidance' | 'new_task' | 'question') => void;
   onCapture: (changeId: string) => void;
-  busy: boolean;
 }) {
   const assessment = change.assessment;
   const diff = diffLine(change);
@@ -128,40 +147,72 @@ function ChangeRow({
         </>
       ) : null}
       {change.decision?.reason ? <div className="steering-reason">{change.decision.reason}</div> : null}
+      {change.decision?.escalations?.length ? (
+        <div className="steering-escalation">
+          Why this needs you: {escalationTexts(change.decision.escalations).join(' · ')}
+        </div>
+      ) : null}
+      {change.decision?.approvalEffect ? (
+        <div className="admin-hint">{change.decision.approvalEffect}</div>
+      ) : null}
       {diff ? <div className="admin-hint">{diff}</div> : null}
+      {change.status === 'applied' || change.directive ? (
+        <details className="steering-proof">
+          <summary className="admin-hint">
+            Proof — what the executor received · received {proofTime(change.submittedAt)}
+            {typeof change.triageLatencyMs === 'number'
+              ? ` · triaged in ${change.triageLatencyMs} ms`
+              : ''}
+            {change.appliedAt ? ` · applied ${proofTime(change.appliedAt)}` : ''}
+          </summary>
+          {change.decision ? (
+            <div className="admin-hint">
+              Decision: {change.decision.action} — {change.decision.reason}
+            </div>
+          ) : null}
+          <pre className="steering-proof-text">
+            {change.directive ??
+              'No directive was issued: this change did not produce a plan version.'}
+          </pre>
+        </details>
+      ) : null}
       {change.failure ? <div className="steering-error">{change.failure}</div> : null}
       {change.decision?.action === 'confirm_interpretation' ? (
         <div className="steering-actions">
           <span className="admin-hint">How should I treat this?</span>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onInterpret(change.id, 'guidance')}>
+          {/* Deliberately NOT disabled while the turn is busy: a decision is a
+              durable record that the run applies at its next safe point, not an
+              action on the live turn. Freezing it made the user wait for the
+              very run they were trying to steer (measured 2026-11-09). */}
+          <button type="button" className="admin-refresh-btn" onClick={() => onInterpret(change.id, 'guidance')}>
             Current task
           </button>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onInterpret(change.id, 'new_task')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onInterpret(change.id, 'new_task')}>
             New task
           </button>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onInterpret(change.id, 'question')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onInterpret(change.id, 'question')}>
             Just a question
           </button>
         </div>
       ) : null}
       {change.status === 'needs_approval' ? (
         <div className="steering-actions">
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onDecision(change.id, 'approve')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onDecision(change.id, 'approve')}>
             Approve
           </button>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onDecision(change.id, 'reject')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onDecision(change.id, 'reject')}>
             Reject
           </button>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onDecision(change.id, 'defer')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onDecision(change.id, 'defer')}>
             Defer
           </button>
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onDecision(change.id, 'withdraw')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onDecision(change.id, 'withdraw')}>
             Withdraw
           </button>
         </div>
       ) : change.status === 'received' || change.status === 'triaged' || change.status === 'deferred' ? (
         <div className="steering-actions">
-          <button type="button" className="admin-refresh-btn" disabled={busy} onClick={() => onDecision(change.id, 'withdraw')}>
+          <button type="button" className="admin-refresh-btn" onClick={() => onDecision(change.id, 'withdraw')}>
             Withdraw
           </button>
         </div>
@@ -179,6 +230,10 @@ function ChangeRow({
 
 export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
   const [view, setView] = useState<SteeringProjection | null>(null);
+  const [runs, setRuns] = useState<
+    Array<{ runId: string; status: string; goal: string; stale?: boolean }>
+  >([]);
+  const [activeRunId, setActiveRunId] = useState(sessionId);
   const [text, setText] = useState('');
   const [discuss, setDiscuss] = useState('');
   const [answer, setAnswer] = useState('');
@@ -187,10 +242,19 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
   const [sending, setSending] = useState(false);
   const [copied, setCopied] = useState('');
 
-  const refresh = useCallback(async () => {
-    const result = await steeringGet(sessionId);
-    if (result.ok) setView(result.projection ?? null);
+  // P2.2 cross-surface continuity: the same durable run is readable from the
+  // dashboard, the CLI and any gateway sender. The picker lists every run this
+  // store knows, so a change submitted from `nuvira steer` is visible (and
+  // decidable) here without switching processes.
+  useEffect(() => {
+    setActiveRunId(sessionId);
   }, [sessionId]);
+
+  const refresh = useCallback(async () => {
+    const [result, all] = await Promise.all([steeringGet(activeRunId), steeringGet()]);
+    if (result.ok) setView(result.projection ?? null);
+    if (all.ok) setRuns(all.runs ?? []);
+  }, [activeRunId]);
 
   useEffect(() => {
     void refresh();
@@ -202,12 +266,36 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     return () => clearInterval(timer);
   }, [busy, refresh]);
 
+  /**
+   * First-class pause/stop. These are ordinary control guidance: the prefilter
+   * recognises them deterministically, the scheduler records them, and the safe
+   * point reports the control BEFORE any plan write. No raw text reaches the
+   * executor and no model is required.
+   */
+  const control = async (action: 'pause' | 'stop') => {
+    if (sending) return;
+    setSending(true);
+    setError('');
+    const result = await steeringGuide({ runId: activeRunId, text: action });
+    setSending(false);
+    if (!result.ok) {
+      setError(result.error ?? `Could not ${action} the run.`);
+      return;
+    }
+    setReceipt(
+      action === 'stop'
+        ? '⏹ Stop requested — the run ends at the next safe point; its plan and queue are preserved.'
+        : '⏸ Pause requested — the run holds at the next safe point and stays resumable.',
+    );
+    if (result.projection) setView(result.projection);
+  };
+
   const send = async (intentHint: 'guidance' | 'question' | 'new_task') => {
     const value = text.trim();
     if (!value || sending) return;
     setSending(true);
     setError('');
-    const result = await steeringGuide({ runId: sessionId, text: value, intentHint });
+    const result = await steeringGuide({ runId: activeRunId, text: value, intentHint });
     if (!result.ok) {
       setError(result.error ?? 'Could not submit guidance.');
     } else {
@@ -222,7 +310,7 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
       // readable answer comes from the read-only discuss path, which has no
       // authority to change the plan.
       if (intentHint === 'question') {
-        const answered = await steeringDiscuss({ runId: sessionId, question: value });
+        const answered = await steeringDiscuss({ runId: activeRunId, question: value });
         if (answered.ok) setAnswer(answered.answer ?? '');
       }
     }
@@ -234,7 +322,7 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     choice: 'guidance' | 'new_task' | 'question',
   ) => {
     setError('');
-    const result = await steeringInterpret({ runId: sessionId, changeId, choice });
+    const result = await steeringInterpret({ runId: activeRunId, changeId, choice });
     if (!result.ok) {
       setError(result.error ?? `Could not interpret ${changeId}.`);
       return;
@@ -244,14 +332,14 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     );
     if (result.projection) setView(result.projection);
     if (choice === 'question' && result.change) {
-      const answered = await steeringDiscuss({ runId: sessionId, question: result.change.rawText });
+      const answered = await steeringDiscuss({ runId: activeRunId, question: result.change.rawText });
       if (answered.ok) setAnswer(answered.answer ?? '');
     }
   };
 
   const decide = async (changeId: string, action: 'approve' | 'reject' | 'defer' | 'withdraw') => {
     setError('');
-    const result = await steeringDecide({ runId: sessionId, changeId, action });
+    const result = await steeringDecide({ runId: activeRunId, changeId, action });
     if (!result.ok) setError(result.error ?? `Could not ${action} ${changeId}.`);
     else {
       setReceipt(
@@ -275,7 +363,7 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     if (!question) return;
     setError('');
     setAnswer('…');
-    const result = await steeringDiscuss({ runId: sessionId, question });
+    const result = await steeringDiscuss({ runId: activeRunId, question });
     if (!result.ok) {
       setAnswer('');
       setError(result.error ?? 'Could not answer that question.');
@@ -286,7 +374,7 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
 
   const capture = async (changeId: string) => {
     setError('');
-    const result = await steeringBacklog({ runId: sessionId, action: 'capture', changeId });
+    const result = await steeringBacklog({ runId: activeRunId, action: 'capture', changeId });
     if (!result.ok) {
       setError(result.error ?? `Could not add ${changeId} to the backlog.`);
       return;
@@ -296,7 +384,7 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
   };
 
   const createTask = async (backlogId: string) => {
-    const result = await steeringBacklog({ runId: sessionId, backlogId, action: 'create-task' });
+    const result = await steeringBacklog({ runId: activeRunId, backlogId, action: 'create-task' });
     if (!result.ok) {
       setError(result.error ?? 'Could not prepare the task.');
       return;
@@ -308,6 +396,20 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     } catch {
       setCopied('');
     }
+    void refresh();
+  };
+
+  // P3.1: closing is only offered for a stale run; the server refuses a live
+  // lease, so this button cannot terminate a run that is still working.
+  const closeRun = async () => {
+    setError('');
+    const result = await steeringClose(activeRunId);
+    if (!result.ok) {
+      setError(result.error ?? 'Could not close the run.');
+      return;
+    }
+    setReceipt('⏹ Closed the stale run. Its plan and guidance queue are preserved for inspection.');
+    if (result.projection) setView(result.projection);
     void refresh();
   };
 
@@ -330,15 +432,43 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
           main task locked · {view.run?.status ?? 'no run'} · plan v{plan?.version ?? 0} · {done}/
           {plan?.steps.length ?? 0} steps done
         </span>
+        {runs.length > 1 ? (
+          <select
+            className="steering-run-picker"
+            aria-label="Steering run"
+            value={activeRunId}
+            onChange={(event) => setActiveRunId(event.target.value)}
+          >
+            {runs.map((run) => (
+              <option key={run.runId} value={run.runId}>
+                {run.runId.slice(0, 14)} · {run.status}
+                {run.stale ? ' · stale' : ''}
+              </option>
+            ))}
+          </select>
+        ) : null}
       </div>
+      {view.run?.stale ? (
+        <div className="steering-stale" role="alert">
+          ⚠ This run looks stale — its lease expired, so nothing is applying guidance.
+          {view.run.staleSince ? ` Since ${proofTime(view.run.staleSince)}.` : ''} Closing keeps the
+          plan and queue for inspection.
+          <button type="button" className="admin-refresh-btn" onClick={() => void closeRun()}>
+            Close stale run
+          </button>
+        </div>
+      ) : null}
       <div className="steering-counts admin-hint">
         {counts.open} open · {counts.applied} applied · {counts.needsApproval} awaiting approval ·{' '}
         {counts.deferred} deferred · {counts.stale} stale · {counts.backlog} backlogged ·{' '}
         {counts.rejected} rejected
       </div>
       <div className="steering-counts admin-hint">
-        triage p95 {view.metrics.p95TriageLatencyMs}ms · apply avg {view.metrics.avgTimeToApplyMs}ms ·{' '}
+        {view.metrics.guidanceReceived} received · triage avg {view.metrics.avgTriageLatencyMs}ms / p95{' '}
+        {view.metrics.p95TriageLatencyMs}ms · apply avg {view.metrics.avgTimeToApplyMs}ms ·{' '}
         {Math.round(view.metrics.staleRate * 100)}% stale ·{' '}
+        {view.metrics.abandonedApprovals} expired approval(s) · approval avg{' '}
+        {view.metrics.avgApprovalLatencyMs}ms · {view.metrics.needsApproval} awaiting approval ·{' '}
         {view.metrics.highImpactFalseAccepts} high-impact false accepts ·{' '}
         {view.metrics.lowConfidenceCount} low-confidence assessments
       </div>
@@ -363,6 +493,12 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
           <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('new_task')}>
             New task
           </button>
+          <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('pause')}>
+            ⏸ Pause run
+          </button>
+          <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('stop')}>
+            ⏹ Stop run
+          </button>
         </div>
         <div className="admin-hint">
           Guidance is assessed, then applied at the next safe point. New tasks go to the backlog, never this run.
@@ -383,7 +519,6 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
               onDecision={(id, action) => void decide(id, action)}
               onInterpret={(id, choice) => void interpret(id, choice)}
               onCapture={(id) => void capture(id)}
-              busy={busy}
             />
           ))}
         </ul>
@@ -402,7 +537,6 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
                 onDecision={() => undefined}
                 onInterpret={() => undefined}
                 onCapture={() => undefined}
-                busy={busy}
               />
             ))}
           </ul>

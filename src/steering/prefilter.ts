@@ -237,6 +237,21 @@ export function classifyDeterministically(
       rationale: 'Quality feedback that should become a concrete simplification proposal.',
     };
   }
+  // An explicit instruction to PRODUCE something is additive work inside the
+  // active objective. Recognizing it deterministically matters for the fallback
+  // path: measured 2026-11-09, "create STEERED.txt" classified as ambiguous
+  // `clarification` at 0.45, so a model-less triage could not propose any plan
+  // operation and the change was never applied.
+  if (/\b(create|write|make|generate|produce|scaffold)\b/i.test(lower)) {
+    return {
+      relation: 'on_task',
+      kind: 'add',
+      timing: 'next_safe_point',
+      impact: 'low',
+      confidence: 0.7,
+      rationale: 'An explicit instruction to produce a deliverable inside the active objective.',
+    };
+  }
   if (isTests || isDocs || /\b(add|include|ensure|cover)\b/i.test(lower)) {
     return {
       relation: 'on_task',

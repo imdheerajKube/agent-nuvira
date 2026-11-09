@@ -143,6 +143,7 @@ import { probeService } from '../config/service-probe.js';
 import { pruneScratchWorkspaces } from '../config/scratch-workspace.js';
 import {
   addBacklogItem,
+  closeSteeringRun,
   completeSteeringRun,
   confirmInterpretation,
   createBacklogTaskPrompt,
@@ -3987,6 +3988,33 @@ async function handleSteeringApi(
       return;
     }
     writeJson(res, 200, { ok: true, enabled, projection: projectRun(runId, { enabled }) });
+    return;
+  }
+
+  // P3.1: close a stale manifest explicitly. Refuses a live lease, so this can
+  // never hide a run another process is still working on.
+  if (pathname === '/api/steering/close' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    if (!runId) {
+      writeJson(res, 400, { ok: false, error: 'runId is required.' });
+      return;
+    }
+    const closed = closeSteeringRun(runId, 'user');
+    if (!closed.ok) {
+      writeJson(res, 409, { ok: false, error: closed.error ?? 'Could not close the run.' });
+      return;
+    }
+    writeJson(res, 200, {
+      ok: true,
+      run: closed.run,
+      projection: projectRun(runId, { enabled: true }),
+    });
     return;
   }
 
@@ -9067,7 +9095,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       if (action === 'chunks') {
         const query = url.searchParams.get('query') || '';
         const limit = Number(url.searchParams.get('limit') || 5);
-        const found = store.search(id, query, Number.isFinite(limit) ? limit : 5);
+        const found = await store.searchRanked(id, query, Number.isFinite(limit) ? limit : 5);
         if ('error' in found) {
           writeJson(res, 404, { ok: false, error: found.error });
           return;
@@ -9192,7 +9220,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       const previousIds = chatConsole.attachmentIds(sessionId);
       const allAttachmentIds = Array.from(new Set([...previousIds, ...requestedIds])).slice(-10);
       await Promise.all(allAttachmentIds.map((id) => attachmentStore.waitFor(id, 1200)));
-      const attachmentBundle = attachmentStore.buildContext(allAttachmentIds, message, { maxChars: 14_000 });
+      const attachmentBundle = await attachmentStore.buildContext(allAttachmentIds, message, { maxChars: 14_000 });
       const attachments = [
         ...legacyAttachments,
         ...(attachmentBundle.context
