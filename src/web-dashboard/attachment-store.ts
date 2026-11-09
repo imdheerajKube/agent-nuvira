@@ -35,6 +35,8 @@ import { pipeline } from 'node:stream/promises';
 import { resolveNuviraDataPath } from '../config/paths.js';
 import {
   resolveAttachmentIngestMaxChars,
+  resolveAttachmentRetentionDays,
+  resolveAttachmentStoreMaxBytes,
   resolveAttachmentUploadMaxBytes,
 } from '../config/limits.js';
 import { getReadExtractManager } from '../tools/read-extract.js';
@@ -110,6 +112,32 @@ export interface AttachmentUploadReceipt {
   tempPath: string;
   size: number;
   sha256: string;
+}
+
+export interface AttachmentUsage {
+  count: number;
+  bytes: number;
+  /** Per-conversation totals, largest first. */
+  sessions: Array<{ sessionId: string; count: number; bytes: number }>;
+  oldestAt?: number;
+}
+
+export interface AttachmentPruneOptions {
+  now?: number;
+  maxAgeMs?: number;
+  maxBytes?: number;
+  /** Never remove an attachment this young, even when a cap is exceeded. */
+  minAgeMs?: number;
+  /** IDs referenced by a live or recently active conversation. */
+  protectedIds?: Iterable<string>;
+}
+
+export interface AttachmentPruneResult {
+  removed: number;
+  bytesFreed: number;
+  skipped: number;
+  remainingBytes: number;
+  remainingCount: number;
 }
 
 export class AttachmentUploadError extends Error {
@@ -552,6 +580,110 @@ export class AttachmentStore {
     this.processing.delete(id);
     rmSync(dir, { recursive: true, force: true });
     return true;
+  }
+
+  /** Every artifact's disk footprint, including metadata and retrieval index. */
+  private directoryBytes(id: string): number {
+    const dir = this.objectDir(id);
+    if (!existsSync(dir)) return 0;
+    let total = 0;
+    try {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (!entry.isFile()) continue;
+        try { total += statSync(join(dir, entry.name)).size; } catch { /* vanished */ }
+      }
+    } catch { /* unreadable object */ }
+    return total;
+  }
+
+  private recordsWithBytes(): Array<{ record: AttachmentRecord; bytes: number }> {
+    const dir = this.objectsDir();
+    if (!existsSync(dir)) return [];
+    const out: Array<{ record: AttachmentRecord; bytes: number }> = [];
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isDirectory() || !this.validId(entry.name)) continue;
+      const record = this.readMeta(entry.name);
+      if (record) out.push({ record, bytes: this.directoryBytes(entry.name) });
+    }
+    return out;
+  }
+
+  /** Stored bytes and counts, globally or for one conversation. */
+  usage(sessionId?: string): AttachmentUsage {
+    const wanted = sessionId ? safeSegment(sessionId) : undefined;
+    const sessions = new Map<string, { sessionId: string; count: number; bytes: number }>();
+    let count = 0;
+    let bytes = 0;
+    let oldestAt: number | undefined;
+    for (const { record, bytes: size } of this.recordsWithBytes()) {
+      if (wanted && record.sessionId !== wanted) continue;
+      count += 1;
+      bytes += size;
+      oldestAt = oldestAt === undefined ? record.createdAt : Math.min(oldestAt, record.createdAt);
+      const total = sessions.get(record.sessionId) ?? { sessionId: record.sessionId, count: 0, bytes: 0 };
+      total.count += 1;
+      total.bytes += size;
+      sessions.set(record.sessionId, total);
+    }
+    return {
+      count,
+      bytes,
+      sessions: [...sessions.values()].sort((a, b) => b.bytes - a.bytes),
+      ...(oldestAt !== undefined ? { oldestAt } : {}),
+    };
+  }
+
+  /**
+   * Remove expired artifacts, then the oldest unprotected artifacts until the
+   * store fits `maxBytes`. Ids referenced by a live/recent conversation and files
+   * younger than `minAgeMs` are never removed. Safe to call on startup.
+   */
+  prune(opts: AttachmentPruneOptions = {}): AttachmentPruneResult {
+    const now = opts.now ?? Date.now();
+    const maxAgeMs = Math.max(0, opts.maxAgeMs ?? resolveAttachmentRetentionDays() * 86_400_000);
+    const maxBytes = Math.max(0, opts.maxBytes ?? resolveAttachmentStoreMaxBytes());
+    const minAgeMs = Math.max(0, opts.minAgeMs ?? 60 * 60 * 1000);
+    const protectedIds = new Set(opts.protectedIds ?? []);
+    const entries = this.recordsWithBytes().sort((a, b) => a.record.createdAt - b.record.createdAt);
+    const kept = new Set(entries.map(({ record }) => record.id));
+    let totalBytes = entries.reduce((sum, entry) => sum + entry.bytes, 0);
+    let removed = 0;
+    let bytesFreed = 0;
+    let skipped = 0;
+
+    const remove = (entry: { record: AttachmentRecord; bytes: number }): boolean => {
+      const record = entry.record;
+      if (!kept.has(record.id)) return false;
+      if (protectedIds.has(record.id) || now - record.createdAt < minAgeMs || record.status === 'processing' || record.status === 'uploading') {
+        skipped += 1;
+        return false;
+      }
+      if (!this.delete(record.id)) {
+        skipped += 1;
+        return false;
+      }
+      kept.delete(record.id);
+      removed += 1;
+      bytesFreed += entry.bytes;
+      totalBytes -= entry.bytes;
+      return true;
+    };
+
+    for (const entry of entries) {
+      if (now - entry.record.createdAt > maxAgeMs) remove(entry);
+    }
+    for (const entry of entries) {
+      if (totalBytes <= maxBytes) break;
+      remove(entry);
+    }
+
+    return {
+      removed,
+      bytesFreed,
+      skipped,
+      remainingBytes: totalBytes,
+      remainingCount: kept.size,
+    };
   }
 
   /** Read a bounded character window from the stored full extraction. */

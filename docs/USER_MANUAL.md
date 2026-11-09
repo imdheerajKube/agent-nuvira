@@ -670,10 +670,17 @@ than turning it into one prompt string. The upload is streamed to disk under
 
 The model sees a compact **manifest** — id, name, size, page/sheet/row counts, readiness — plus a
 few excerpts matched to your question. It reads the rest with `attachment_search` and
-`attachment_read`, so a 500-page PDF or a large workbook does not have to fit in one prompt. The
-attachment id is saved with the conversation: a later turn can ask "what did page 42 say?" without
+`attachment_read`, so a 500-page PDF or a large workbook does not have to fit in one prompt.The attachment id is saved with the conversation: a later turn can ask "what did page 42 say?" without
 re-uploading the file. PDF, DOCX, XLSX, PPTX and text formats are supported; an unreadable file is
 reported as **not readable** instead of being described from its bytes.
+
+Attachments are not kept forever. Files nobody has touched are removed after 30 days
+(`NUVIRA_ATTACHMENT_RETENTION_DAYS`), conversations active in the last 7 days are protected, and the
+store enforces a 50 GB global budget plus a 10 GB per-conversation budget
+(`NUVIRA_ATTACHMENT_STORE_MAX_BYTES` / `NUVIRA_ATTACHMENT_SESSION_MAX_BYTES`). When a budget is full,
+the oldest unprotected files are removed first; if an upload still cannot fit, it is refused with the
+current usage rather than silently stored. The composer shows this conversation's usage above the
+attachment controls.
 
 ### When no folder is attached — what happens, and where a file goes
 

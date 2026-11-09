@@ -114,3 +114,64 @@ describe('attachment ingestion', () => {
     expect(store.get(record.id)).toBeNull();
   });
 });
+
+describe('attachment retention and quota', () => {
+  it('reports disk usage globally and per conversation', async () => {
+    const { store, record } = await upload('one.txt', 'one'.repeat(2_000), 'session-a');
+    await upload('two.txt', 'two'.repeat(2_000), 'session-b');
+
+    const all = store.usage();
+    const one = store.usage('session-a');
+    expect(all.count).toBe(2);
+    expect(all.bytes).toBeGreaterThan(4_000);
+    expect(one.count).toBe(1);
+    expect(one.sessions).toEqual([expect.objectContaining({ sessionId: 'session-a', count: 1 })]);
+    expect(one.bytes).toBeGreaterThanOrEqual(record.size);
+  });
+
+  it('removes expired artifacts but keeps protected IDs', async () => {
+    const { store, record: keep } = await upload('keep.txt', 'keep', 'session-a');
+    const { record: old } = await upload('old.txt', 'old', 'session-b');
+    const result = store.prune({
+      now: Date.now() + 31 * 86_400_000,
+      maxAgeMs: 30 * 86_400_000,
+      minAgeMs: 0,
+      protectedIds: [keep.id],
+    });
+
+    expect(result.removed).toBe(1);
+    expect(store.get(keep.id)).not.toBeNull();
+    expect(store.get(old.id)).toBeNull();
+  });
+
+  it('removes the oldest unprotected artifacts until the store fits its cap', async () => {
+    const { store, record: oldest } = await upload('oldest.txt', 'a'.repeat(2_000), 'session-a');
+    const { record: newest } = await upload('newest.txt', 'b'.repeat(2_000), 'session-b');
+    const before = store.usage().bytes;
+    const result = store.prune({
+      maxAgeMs: 365 * 86_400_000,
+      maxBytes: Math.floor(before / 2),
+      minAgeMs: 0,
+    });
+
+    expect(result.removed).toBeGreaterThan(0);
+    expect(store.usage().bytes).toBeLessThanOrEqual(Math.floor(before / 2));
+    expect(store.get(oldest.id)).toBeNull();
+    expect(store.get(newest.id)).not.toBeNull();
+  });
+
+  it('respects protected IDs when the cap is exceeded', async () => {
+    const { store, record: keep } = await upload('keep.txt', 'a'.repeat(2_000), 'session-a');
+    await upload('other.txt', 'b'.repeat(2_000), 'session-b');
+    const result = store.prune({
+      maxAgeMs: 365 * 86_400_000,
+      maxBytes: 1,
+      minAgeMs: 0,
+      protectedIds: [keep.id],
+    });
+
+    expect(result.removed).toBeGreaterThan(0);
+    expect(store.get(keep.id)).not.toBeNull();
+    expect(store.usage().bytes).toBeGreaterThan(1);
+  });
+});

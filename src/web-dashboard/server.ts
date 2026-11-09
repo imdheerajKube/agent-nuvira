@@ -12,7 +12,7 @@
 
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { envBuff } from '../config/paths';
-import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync, readdirSync } from 'node:fs';
+import { createReadStream, readFileSync, existsSync, statSync, watch, mkdirSync, writeFileSync, readdirSync, rmSync } from 'node:fs';
 import { join, extname, dirname, basename, resolve, isAbsolute } from 'node:path';
 import { fileURLToPath } from 'node:url';import { homedir } from 'node:os';
 import { parseRbacUsers } from '../enterprise/rbac.js';
@@ -7422,12 +7422,21 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         resolveExtractMaxChars,
         resolveAttachmentMaxBytes,
         resolveAttachmentUploadMaxBytes,
+        resolveAttachmentRetentionDays,
+        resolveAttachmentStoreMaxBytes,
+        resolveAttachmentSessionMaxBytes,
         DEFAULT_EXTRACT_MAX_CHARS,
         DEFAULT_ATTACHMENT_MAX_BYTES,
         DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES,
+        DEFAULT_ATTACHMENT_RETENTION_DAYS,
+        DEFAULT_ATTACHMENT_STORE_MAX_BYTES,
+        DEFAULT_ATTACHMENT_SESSION_MAX_BYTES,
       } = await import('../config/limits.js');
       const attachmentMaxBytes = resolveAttachmentMaxBytes();
       const attachmentUploadMaxBytes = resolveAttachmentUploadMaxBytes();
+      const attachmentRetentionDays = resolveAttachmentRetentionDays();
+      const attachmentStoreMaxBytes = resolveAttachmentStoreMaxBytes();
+      const attachmentSessionMaxBytes = resolveAttachmentSessionMaxBytes();
       writeJson(res, 200, {
         // Legacy inline attachment cap (still used by API callers that send
         // `attachments` in the JSON body).
@@ -7436,10 +7445,16 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         // Durable streaming upload cap — this is the one the composer uses.
         attachmentUploadMaxBytes,
         attachmentUploadMaxKb: Math.round(attachmentUploadMaxBytes / 1024),
+        attachmentRetentionDays,
+        attachmentStoreMaxBytes,
+        attachmentSessionMaxBytes,
         extractMaxChars: resolveExtractMaxChars(),
         defaults: {
           attachmentMaxBytes: DEFAULT_ATTACHMENT_MAX_BYTES,
           attachmentUploadMaxBytes: DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES,
+          attachmentRetentionDays: DEFAULT_ATTACHMENT_RETENTION_DAYS,
+          attachmentStoreMaxBytes: DEFAULT_ATTACHMENT_STORE_MAX_BYTES,
+          attachmentSessionMaxBytes: DEFAULT_ATTACHMENT_SESSION_MAX_BYTES,
           extractMaxChars: DEFAULT_EXTRACT_MAX_CHARS,
         },
       });
@@ -8926,10 +8941,46 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       const mime = headerValue('x-attachment-mime') || req.headers['content-type'] || 'application/octet-stream';
       const kindRaw = headerValue('x-attachment-kind');
       const kind = kindRaw === 'paste' || kindRaw === 'drop' ? kindRaw : 'file';
-      const { getAttachmentStore, AttachmentUploadError } = await import('./attachment-store.js');
+      const { getAttachmentStore, AttachmentUploadError, formatBytes } = await import('./attachment-store.js');
       const store = getAttachmentStore();
       try {
         const receipt = await store.receiveUpload(req);
+        const {
+          resolveAttachmentSessionMaxBytes,
+          resolveAttachmentStoreMaxBytes,
+        } = await import('../config/limits.js');
+        const sessionMax = resolveAttachmentSessionMaxBytes();
+        const sessionUsage = store.usage(sessionId);
+        if (sessionUsage.bytes + receipt.size > sessionMax) {
+          rmSync(receipt.tempPath, { force: true });
+          writeJson(res, 413, {
+            ok: false,
+            code: 'session_quota',
+            error: `This would exceed the conversation's ${formatBytes(sessionMax)} attachment quota (${formatBytes(sessionUsage.bytes)} already used). Delete an attachment or raise NUVIRA_ATTACHMENT_SESSION_MAX_BYTES.`,
+          });
+          return;
+        }
+        const storeMax = resolveAttachmentStoreMaxBytes();
+        // Make room by removing the oldest unprotected artifacts. The incoming
+        // file is not finalized yet, so it cannot be selected itself, and files
+        // touched in the last hour are always kept.
+        try {
+          store.prune({
+            maxBytes: Math.max(0, storeMax - receipt.size),
+            minAgeMs: 60 * 60 * 1000,
+            protectedIds: chatConsole.recentAttachmentIds(),
+          });
+        } catch { /* a failed sweep must not reject a valid upload by itself */ }
+        const totalUsage = store.usage();
+        if (totalUsage.bytes + receipt.size > storeMax) {
+          rmSync(receipt.tempPath, { force: true });
+          writeJson(res, 413, {
+            ok: false,
+            code: 'store_quota',
+            error: `The attachment store is full (${formatBytes(totalUsage.bytes)} of ${formatBytes(storeMax)} used). Delete an attachment or raise NUVIRA_ATTACHMENT_STORE_MAX_BYTES.`,
+          });
+          return;
+        }
         const attachment = await store.finalizeUpload({ sessionId, name, mime, kind, receipt });
         writeJson(res, 201, { ok: true, attachment });
       } catch (error) {
@@ -8956,8 +9007,26 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         return;
       }
       const { getAttachmentStore } = await import('./attachment-store.js');
+      const {
+        resolveAttachmentRetentionDays,
+        resolveAttachmentSessionMaxBytes,
+        resolveAttachmentStoreMaxBytes,
+        resolveAttachmentUploadMaxBytes,
+      } = await import('../config/limits.js');
+      const store = getAttachmentStore();
       const sessionId = url.searchParams.get('sessionId') || undefined;
-      writeJson(res, 200, { ok: true, attachments: getAttachmentStore().list(sessionId) });
+      writeJson(res, 200, {
+        ok: true,
+        attachments: store.list(sessionId),
+        usage: store.usage(),
+        ...(sessionId ? { sessionUsage: store.usage(sessionId) } : {}),
+        limits: {
+          uploadMaxBytes: resolveAttachmentUploadMaxBytes(),
+          sessionMaxBytes: resolveAttachmentSessionMaxBytes(),
+          storeMaxBytes: resolveAttachmentStoreMaxBytes(),
+          retentionDays: resolveAttachmentRetentionDays(),
+        },
+      });
     })();
     return;
   }
@@ -10040,6 +10109,20 @@ export function createDashboardServer(
   } catch {
     /* best-effort */
   }
+
+  // Durable attachments are kept for a bounded time and under a disk cap. Run
+  // the sweep on boot so an install that is never opened in the UI still does
+  // not accumulate old uploads forever. Protected ids are the conversations a
+  // user touched recently; the sweep itself also refuses to delete files from
+  // the last hour.
+  void import('./attachment-store.js')
+    .then(({ getAttachmentStore }) => {
+      const result = getAttachmentStore().prune({ protectedIds: chatConsole.recentAttachmentIds() });
+      if (result.removed > 0) {
+        console.log(`  🧹 Removed ${result.removed} expired attachment(s), freed ${result.bytesFreed} bytes`);
+      }
+    })
+    .catch(() => { /* best-effort — never stop the dashboard from starting */ });
 
   server.listen(bindPort, bindHost, () => {
     console.log(`\n  🌐 Agent-Nuvira Dashboard`);

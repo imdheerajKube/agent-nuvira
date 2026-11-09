@@ -657,6 +657,26 @@ export class ChatConsole {
   }
 
   /**
+   * Attachment IDs referenced by a live or recently active conversation.
+   * Retention uses this as a protection set: a user who is still working in a
+   * chat should not lose the file the next turn will read just because the
+   * store hit its global cap.
+   */
+  recentAttachmentIds(maxAgeMs = 7 * 24 * 60 * 60 * 1000): string[] {
+    const cutoff = Date.now() - maxAgeMs;
+    const ids = new Set<string>();
+    for (const [sessionId, rec] of this.sessions) {
+      if (!this.busy.has(sessionId) && rec.updatedAt < cutoff) continue;
+      for (const turn of rec.turns) {
+        for (const id of turn.attachmentIds ?? []) {
+          if (typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)) ids.add(id);
+        }
+      }
+    }
+    return Array.from(ids);
+  }
+
+  /**
    * P4 — sidebar summaries, most recently updated first. The server exposes
    * these via `GET /api/sessions`.
    */

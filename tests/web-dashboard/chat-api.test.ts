@@ -371,6 +371,20 @@ describe('/api/chat', () => {
     expect(firstContext).toContain(uploaded.attachment.id);
     expect(firstContext).not.toContain('SECRET-BODY-MARKER');
 
+    const listed = await fetch(`${baseUrl}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(listed.status).toBe(200);
+    const listedBody = (await listed.json()) as {
+      usage?: { count: number };
+      sessionUsage?: { count: number };
+      limits?: { sessionMaxBytes?: number; retentionDays?: number };
+    };
+    expect(listedBody.usage?.count).toBe(1);
+    expect(listedBody.sessionUsage?.count).toBe(1);
+    expect(listedBody.limits?.sessionMaxBytes).toBeGreaterThan(0);
+    expect(listedBody.limits?.retentionDays).toBeGreaterThan(0);
+
     // A later turn with no attachmentIds still rebuilds the manifest from the
     // conversation's persisted IDs — no re-upload required.
     const second = await authedFetch('/api/chat', 'POST', {
@@ -387,6 +401,27 @@ describe('/api/chat', () => {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(del.status).toBe(200);
+
+    // A per-conversation quota refuses the upload BEFORE it becomes durable.
+    const previous = process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES;
+    process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES = '100';
+    try {
+      const tooBig = await fetch(`${baseUrl}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'text/plain',
+          'x-attachment-name': 'too-big.txt',
+          Authorization: `Bearer ${token}`,
+        },
+        body: new Uint8Array(Buffer.alloc(512, 97)),
+      });
+      expect(tooBig.status).toBe(413);
+      const refusal = (await tooBig.json()) as { code?: string };
+      expect(refusal.code).toBe('session_quota');
+    } finally {
+      if (previous === undefined) delete process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES;
+      else process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES = previous;
+    }
   });
 
   it('WS5 — passes the GUI`s isolation request to the engine and reports the worktree it ran in', async () => {

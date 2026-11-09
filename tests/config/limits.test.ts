@@ -18,8 +18,14 @@ import { join } from 'node:path';
 
 import {
   DEFAULT_ATTACHMENT_MAX_BYTES,
+  DEFAULT_ATTACHMENT_RETENTION_DAYS,
+  DEFAULT_ATTACHMENT_SESSION_MAX_BYTES,
+  DEFAULT_ATTACHMENT_STORE_MAX_BYTES,
   DEFAULT_EXTRACT_MAX_CHARS,
   resolveAttachmentMaxBytes,
+  resolveAttachmentRetentionDays,
+  resolveAttachmentSessionMaxBytes,
+  resolveAttachmentStoreMaxBytes,
   resolveExtractMaxChars,
 } from '../../src/config/limits.js';
 import { getReadExtractManager } from '../../src/tools/read-extract.js';
@@ -36,6 +42,9 @@ afterEach(() => {
   for (const d of dirs.splice(0)) rmSync(d, { recursive: true, force: true });
   delete process.env.NUVIRA_EXTRACT_MAX_CHARS;
   delete process.env.NUVIRA_ATTACHMENT_MAX_BYTES;
+  delete process.env.NUVIRA_ATTACHMENT_RETENTION_DAYS;
+  delete process.env.NUVIRA_ATTACHMENT_STORE_MAX_BYTES;
+  delete process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES;
 });
 
 describe('resolveExtractMaxChars', () => {
@@ -73,6 +82,31 @@ describe('resolveAttachmentMaxBytes', () => {
   it('reads NUVIRA_ATTACHMENT_MAX_BYTES', () => {
     process.env.NUVIRA_ATTACHMENT_MAX_BYTES = '5242880';
     expect(resolveAttachmentMaxBytes()).toBe(5_242_880);
+  });
+});
+
+describe('attachment retention and storage quotas', () => {
+  it('defaults to 30 days, 50 GB total, and 10 GB per conversation', () => {
+    expect(resolveAttachmentRetentionDays()).toBe(DEFAULT_ATTACHMENT_RETENTION_DAYS);
+    expect(resolveAttachmentStoreMaxBytes()).toBe(DEFAULT_ATTACHMENT_STORE_MAX_BYTES);
+    expect(resolveAttachmentSessionMaxBytes()).toBe(DEFAULT_ATTACHMENT_SESSION_MAX_BYTES);
+  });
+
+  it('reads the retention and quota variables and clamps their ceilings', () => {
+    process.env.NUVIRA_ATTACHMENT_RETENTION_DAYS = '90';
+    process.env.NUVIRA_ATTACHMENT_STORE_MAX_BYTES = '1000000';
+    process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES = '500000';
+    expect(resolveAttachmentRetentionDays()).toBe(90);
+    expect(resolveAttachmentStoreMaxBytes()).toBe(1_000_000);
+    expect(resolveAttachmentSessionMaxBytes()).toBe(500_000);
+
+    process.env.NUVIRA_ATTACHMENT_RETENTION_DAYS = '999999';
+    expect(resolveAttachmentRetentionDays()).toBe(365);
+  });
+
+  it('falls back on a malformed quota rather than throwing', () => {
+    process.env.NUVIRA_ATTACHMENT_SESSION_MAX_BYTES = 'not-a-number';
+    expect(resolveAttachmentSessionMaxBytes()).toBe(DEFAULT_ATTACHMENT_SESSION_MAX_BYTES);
   });
 });
 

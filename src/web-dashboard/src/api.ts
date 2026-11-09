@@ -268,6 +268,24 @@ export interface RemoteAttachment {
   warnings?: string[];
 }
 
+export interface AttachmentUsage {
+  count: number;
+  bytes: number;
+  sessions: Array<{ sessionId: string; count: number; bytes: number }>;
+  oldestAt?: number;
+}
+
+export interface AttachmentQuota {
+  usage: AttachmentUsage;
+  sessionUsage: AttachmentUsage;
+  limits: {
+    uploadMaxBytes: number;
+    sessionMaxBytes: number;
+    storeMaxBytes: number;
+    retentionDays: number;
+  };
+}
+
 export type DashboardListener = (data: DashboardData) => void;
 export type ConnectionListener = (connected: boolean) => void;
 export type DAGListener = (dag: DAGData) => void;
@@ -2157,6 +2175,42 @@ export class DashboardAPI {
       });
       const data = (await res.json()) as { ok?: boolean; attachment?: RemoteAttachment };
       return res.status === 200 && data.ok && data.attachment ? data.attachment : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Remove an uploaded artifact from durable storage (the chip's ✕). */
+  async deleteAttachment(id: string): Promise<boolean> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`, {
+        method: 'DELETE',
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      return res.status === 200;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Storage used by this conversation, plus the effective attachment quotas. */
+  async getAttachmentQuota(sessionId: string): Promise<AttachmentQuota | null> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        usage?: AttachmentUsage;
+        sessionUsage?: AttachmentUsage;
+        limits?: AttachmentQuota['limits'];
+      };
+      if (res.status !== 200 || data.ok !== true || !data.usage || !data.sessionUsage || !data.limits) return null;
+      return { usage: data.usage, sessionUsage: data.sessionUsage, limits: data.limits };
     } catch {
       return null;
     }

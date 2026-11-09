@@ -204,6 +204,42 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
     cliEquivalent: 'NUVIRA_ATTACHMENT_INGEST_MAX_CHARS',
   },
   {
+    name: 'NUVIRA_ATTACHMENT_RETENTION_DAYS',
+    label: 'Attachment retention (days)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '30',
+    valueLabel: 'Save',
+    description:
+      'How long an attachment nobody has touched is kept before the store removes it. Attachments referenced by a conversation active in the last 7 days are protected, and the boot sweep never removes a file younger than one hour. Set higher to keep documents longer (up to 365 days).',
+    unsetMeans: '30 days.',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_RETENTION_DAYS',
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_STORE_MAX_BYTES',
+    label: 'Attachment store cap (bytes)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '53687091200',
+    valueLabel: 'Save',
+    description:
+      'Total disk budget for durable attachments, in bytes. When the store is over budget the oldest unprotected artifacts are removed first; if an upload still cannot fit it is refused before it is stored (up to 1,099,511,627,776 = 1 TB).',
+    unsetMeans: '53,687,091,200 bytes (50 GB).',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_STORE_MAX_BYTES',
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_SESSION_MAX_BYTES',
+    label: 'Per-conversation attachment cap (bytes)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '10737418240',
+    valueLabel: 'Save',
+    description:
+      'The largest total set of attachments one conversation may keep, in bytes. An upload that would exceed it is refused with the current usage and the variable to raise (up to 107,374,182,400 = 100 GB).',
+    unsetMeans: '10,737,418,240 bytes (10 GB).',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_SESSION_MAX_BYTES',
+  },
+  {
     name: 'NUVIRA_CAPABILITY_MODE',
     label: 'Capability mode',
     group: 'turn',

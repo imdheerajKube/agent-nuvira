@@ -61,6 +61,24 @@ export const DEFAULT_ATTACHMENT_INGEST_MAX_CHARS = 20_000_000;
 /** Ceiling on ingestion text, in characters (100M). */
 export const MAX_ATTACHMENT_INGEST_MAX_CHARS_CEILING = 100_000_000;
 
+/** How long an attachment nobody references is kept (30 days). */
+export const DEFAULT_ATTACHMENT_RETENTION_DAYS = 30;
+
+/** Ceiling on attachment retention, in days (one year). */
+export const MAX_ATTACHMENT_RETENTION_DAYS_CEILING = 365;
+
+/** Total attachment-store budget (50 GB). */
+export const DEFAULT_ATTACHMENT_STORE_MAX_BYTES = 50 * 1024 * 1024 * 1024;
+
+/** Ceiling on the total store, in bytes (1 TB). */
+export const MAX_ATTACHMENT_STORE_MAX_BYTES_CEILING = 1024 * 1024 * 1024 * 1024;
+
+/** One conversation's attachment budget (10 GB). */
+export const DEFAULT_ATTACHMENT_SESSION_MAX_BYTES = 10 * 1024 * 1024 * 1024;
+
+/** Ceiling on one conversation's budget, in bytes (100 GB). */
+export const MAX_ATTACHMENT_SESSION_MAX_BYTES_CEILING = 100 * 1024 * 1024 * 1024;
+
 /** Read an integer from the environment, falling back to `fallback` on anything invalid. */
 function intFromEnv(names: string[], fallback: number, min: number, max: number): number {
   for (const name of names) {
@@ -120,5 +138,35 @@ export function resolveAttachmentIngestMaxChars(): number {
     DEFAULT_ATTACHMENT_INGEST_MAX_CHARS,
     1,
     MAX_ATTACHMENT_INGEST_MAX_CHARS_CEILING,
+  );
+}
+
+/** How long an unreferenced attachment is retained, in days. */
+export function resolveAttachmentRetentionDays(): number {
+  return intFromEnv(
+    ['NUVIRA_ATTACHMENT_RETENTION_DAYS', 'BUFF_ATTACHMENT_RETENTION_DAYS'],
+    DEFAULT_ATTACHMENT_RETENTION_DAYS,
+    1,
+    MAX_ATTACHMENT_RETENTION_DAYS_CEILING,
+  );
+}
+
+/** Total disk budget for the durable attachment store, in bytes. */
+export function resolveAttachmentStoreMaxBytes(): number {
+  return intFromEnv(
+    ['NUVIRA_ATTACHMENT_STORE_MAX_BYTES', 'BUFF_ATTACHMENT_STORE_MAX_BYTES'],
+    DEFAULT_ATTACHMENT_STORE_MAX_BYTES,
+    1,
+    MAX_ATTACHMENT_STORE_MAX_BYTES_CEILING,
+  );
+}
+
+/** One conversation's disk budget for durable attachments, in bytes. */
+export function resolveAttachmentSessionMaxBytes(): number {
+  return intFromEnv(
+    ['NUVIRA_ATTACHMENT_SESSION_MAX_BYTES', 'BUFF_ATTACHMENT_SESSION_MAX_BYTES'],
+    DEFAULT_ATTACHMENT_SESSION_MAX_BYTES,
+    1,
+    MAX_ATTACHMENT_SESSION_MAX_BYTES_CEILING,
   );
 }

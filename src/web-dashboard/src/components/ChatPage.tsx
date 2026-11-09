@@ -54,7 +54,7 @@ function formatAttachmentBytes(bytes: number): string {
 }
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { dashboardAPI, type PendingQuestion } from '../api';
+import { dashboardAPI, type AttachmentQuota, type PendingQuestion } from '../api';
 import { useAuthVersion } from '../useAuthVersion';
 import Markdown from './Markdown';
 // P2 — structured artifacts extracted from the answer TEXT (```diff blocks,
@@ -1418,6 +1418,8 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [renameValue, setRenameValue] = useState('');
   // P8 — composer attachments (file picker / paste-as-attachment / drag-drop).
   const [attachments, setAttachments] = useState<AttachmentChip[]>([]);
+  /** P9 — durable-store usage for this conversation, plus the effective quotas. */
+  const [attachmentQuota, setAttachmentQuota] = useState<AttachmentQuota | null>(null);
   // Skills the user pinned with `/skill <name>`. This is the GUI half of
   // `nuvira chat --skill`: the names ride on every turn of this chat, and the
   // server loads each methodology into the turn instead of hinting at it. The
@@ -1583,6 +1585,14 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     }
   }, [attachedProject]);
 
+  /** Refresh the storage line after an upload/delete (best-effort). */
+  const refreshAttachmentQuota = useCallback(async () => {
+    const quota = await dashboardAPI.getAttachmentQuota(sessionIdRef.current);
+    if (quota) setAttachmentQuota(quota);
+  }, []);
+
+  useEffect(() => { void refreshAttachmentQuota(); }, [refreshAttachmentQuota]);
+
   /** P8 — start a fresh session (sidebar + New chat button). */
   const newChat = useCallback(() => {
     subRef.current?.();
@@ -1615,16 +1625,24 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     setInput('');
     setRailOpen(true);
     setContinuationNotice(null);
-  }, []);
+    void refreshAttachmentQuota();
+  }, [refreshAttachmentQuota]);
 
   /** P8 — add an attachment chip (file picker / drag-drop / paste-as-text). */
   const addAttachment = useCallback((chip: AttachmentChip) => {
     setAttachments((a) => [...a, chip].slice(-10));
   }, []);
 
-  const removeAttachment = useCallback((index: number) => {
+  const removeAttachment = useCallback(async (index: number) => {
+    const chip = attachments[index];
     setAttachments((a) => a.filter((_, i) => i !== index));
-  }, []);
+    // A durable chip owns a disk artifact. Removing the chip must remove the
+    // bytes too, otherwise the store's quota fills with files nobody can see.
+    if (chip?.id) {
+      await dashboardAPI.deleteAttachment(chip.id);
+      void refreshAttachmentQuota();
+    }
+  }, [attachments, refreshAttachmentQuota]);
 
   /**
    * P9 — file picker: stream the file to the durable attachment store.
@@ -1651,6 +1669,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       return;
     }
     const uploaded = result.attachment;
+    void refreshAttachmentQuota();
     setAttachments((prev) => prev.map((chip) => (chip === local
       ? {
           ...chip,
@@ -2813,10 +2832,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     setError('');
     setMeta(null);
     setPendingQuestion(null);
+    void refreshAttachmentQuota();
     // Refresh the sidebar (the just-abandoned session is now in it).
     const s = await dashboardAPI.listChatSessions();
     if (Array.isArray(s)) setSessions(s);
-  }, []);
+  }, [refreshAttachmentQuota]);
 
   /** The project bar, so an "attach a folder" request can bring it into view. */
   const projectBarRef = useRef<HTMLDivElement | null>(null);
@@ -3685,9 +3705,18 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                     <span className="admin-hint">
                       {a.status === 'uploading' ? 'uploading…' : a.status === 'processing' ? 'indexing…' : a.status === 'failed' ? 'failed' : formatAttachmentBytes(a.sizeBytes ?? 0)}
                     </span>
-                    <button type="button" className="chat-mini-action" onClick={() => removeAttachment(i)}>✕</button>
+                    <button type="button" className="chat-mini-action" onClick={() => void removeAttachment(i)}>✕</button>
                   </span>
                 ))}
+              </div>
+            ) : null}
+            {attachmentQuota ? (
+              <div
+                className="admin-hint"
+                title={`${formatAttachmentBytes(attachmentQuota.usage.bytes)} of ${formatAttachmentBytes(attachmentQuota.limits.storeMaxBytes)} used across all conversations · files not touched for ${attachmentQuota.limits.retentionDays} days are removed automatically`}
+              >
+                📎 {formatAttachmentBytes(attachmentQuota.sessionUsage.bytes)} of {formatAttachmentBytes(attachmentQuota.limits.sessionMaxBytes)} in this chat
+                {' · '}expires after {attachmentQuota.limits.retentionDays} days
               </div>
             ) : null}
             <div className="chat-controls">
