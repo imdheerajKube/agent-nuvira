@@ -67,6 +67,10 @@ export const NOT_A_DOC_CITATION = new Map([
     'AUDIT_CROSSCHECK.md',
     'the report an ASSESSMENT turn wrote into the project it was auditing, cited by `src/tools/own-writes.ts` and its tests as the measured case for the write gate (trace-1793853385112-sf2exl) — an artifact produced on someone else\'s tree, never a doc this repo ships',
   ],
+  [
+    'BENCH_ATTACHMENT_RETRIEVAL_REAL.md',
+    'the real-query report `scripts/bench/attachment-retrieval.ts` writes when run against a user fixture; the checked-in synthetic baseline is BENCH_ATTACHMENT_RETRIEVAL_2026-11-09.md',
+  ],
 ]);
 
 /**

@@ -1017,7 +1017,7 @@ nuvira workflow publish                # share your own
 
 ## 9. Beyond code: the tool surface
 
-The agent has **117 tools**. This is the honest list of what it can do that is not "write a
+The agent has **120 tools**. This is the honest list of what it can do that is not "write a
 file". Categories below are descriptive; run `nuvira tools list` for the live registry.
 
 **Filesystem & code** — `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`,
@@ -2107,7 +2107,7 @@ re-checked against `src/learning/runtime-dependencies.ts` on every run of
 | Command surface = 289 / 48 groups | `node scripts/generate-commands-surface.mjs --check` | ✓ in sync |
 | Version 3.3.0 | `nuvira --version` | ✓ |
 | Node >= 18.18.0 | `package.json` `engines` | ✓ |
-| 117 tools | `nuvira tools list` | ✓ (re-checked 2026-10-27) |
+| 120 tools | `nuvira tools list` | ✓ (re-checked 2026-11-09) |
 | 7 runtime tools, each with an install command | `nuvira doctor` | ✓ (re-checked 2026-10-16) |
 | 22 providers, 4 live here | `nuvira provider list` | ✓ |
 | 520 models | `nuvira models` | ✓ |

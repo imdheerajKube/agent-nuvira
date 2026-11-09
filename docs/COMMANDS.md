@@ -444,6 +444,33 @@ nuvira models excluded         # show what routing is skipping, and WHY
   nuvira run "npm test" -t 120
   ```
 
+### 3.5b Mid-run steering — guide a run that is already working
+
+- **Objective:** Change scope, add a requirement, ask a question, or stop/pause a run
+  while a turn is executing — without sending a second message into the live thread.
+  Guidance is recorded, assessed deterministically (with the run's own model when it is
+  attached), and applied only at the next safe point as a new immutable plan version.
+  High-impact, conflicting, or destructive changes still need your approval.
+- **Command:** `nuvira steer [runId] [--text "<guidance>"] [--question "<q>"] [--new-task "<task>"]` ·
+  `nuvira steer --discuss "<q>"` · `nuvira steer --approve|--reject|--defer|--withdraw <changeId>` ·
+  `nuvira steer --interpret <changeId> --as guidance|new_task|question` ·
+  `nuvira steer --stop` · `nuvira steer --pause` · `nuvira steer --close <runId>` ·
+  `nuvira steer --proof <changeId>` · `nuvira steer --list|--status [--json]`
+- **Examples:**
+  ```bash
+  nuvira steer --text "Also create STEERED.txt containing steered-ok"
+  nuvira steer --question "What is left, and what is blocked?"
+  nuvira steer --new-task "Build a mobile app"       # backlog, never this run
+  nuvira steer --approve G-abc123                     # applies at the next safe point
+  nuvira steer --proof G-abc123                       # receipt → decision → directive
+  nuvira steer --stop                                 # finish the safe point, then stop
+  nuvira steer --list                                 # active and stale runs
+  nuvira steer --close <runId>                        # close a stale (expired-lease) run
+  ```
+- **Notes:** A separate `nuvira steer` process writes a durable change record; the run
+  owner assesses it at its next safe point. `--proof` prints the exact bounded directive
+  the executor received — raw guidance is never injected into the live thread.
+
 ### 3.6 Animated video — render, revise, inspect (no model in the loop)
 
 - **Objective:** Turn a preset plus your data — or a frame sequence your own renderer
@@ -580,6 +607,8 @@ would not start and closed with no README).
 - **Examples:**
   ```bash
   nuvira config policy                              # the built-in floor + your overrides
+  nuvira config policy list                         # the same view, explicit
+  nuvira config policy list --json                  # machine-readable, for scripts
   nuvira config policy approve "git push"            # ask once, then the session grant may cover it
   nuvira config policy approve "kill -9"             # a debugging kill, per your approval
   nuvira config policy allow "npm run build"         # no ask for an ordinary command
@@ -2054,5 +2083,5 @@ section of this document — the router picks it up automatically.
 
 ---
 
-*Document generated from the live CLI surface (`nuvira` v3.5.x). When in doubt,
+*Document generated from the live CLI surface (`nuvira` v3.6.x). When in doubt,
 `nuvira <command> --help` shows the authoritative signature for your installed version.*
