@@ -1,0 +1,116 @@
+/**
+ * Attachment store — durable upload, full ingestion, bounded retrieval.
+ *
+ * These tests are deliberately end-to-end at the store boundary: a real stream,
+ * a real file on disk, the real `read_extract` readers, and the real chunk
+ * search. They pin the behaviour that fixes the large-input failure:
+ *
+ *   - upload bytes are not a JSON/base64 body;
+ *   - ingestion stores the WHOLE text, not a 40K first page;
+ *   - the model-facing context is bounded;
+ *   - a later turn can search/read the same attachment by ID.
+ */
+
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { Readable } from 'node:stream';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  AttachmentUploadError,
+  chunkAttachmentText,
+  getAttachmentStore,
+} from '../../src/web-dashboard/attachment-store.js';
+
+let dir: string;
+
+beforeEach(() => {
+  dir = mkdtempSync(join(tmpdir(), 'nuvira-attachments-'));
+  process.env.NUVIRA_ATTACHMENT_DIR = dir;
+  process.env.NUVIRA_ATTACHMENT_INGEST_MAX_CHARS = '1000000';
+});
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true });
+  delete process.env.NUVIRA_ATTACHMENT_DIR;
+  delete process.env.NUVIRA_ATTACHMENT_INGEST_MAX_CHARS;
+});
+
+async function upload(name: string, body: string | Buffer, sessionId = 'session-1') {
+  const store = getAttachmentStore();
+  const receipt = await store.receiveUpload(Readable.from([Buffer.isBuffer(body) ? body : Buffer.from(body)]));
+  const record = await store.finalizeUpload({
+    sessionId,
+    name,
+    mime: 'text/plain',
+    receipt,
+  });
+  const ready = await store.waitFor(record.id, 5000);
+  if (!ready) throw new Error('attachment did not become ready');
+  return { store, record: ready };
+}
+
+describe('attachment ingestion', () => {
+  it('stores the full text and returns a ready manifest with an ID', async () => {
+    const text = 'first line\n'.repeat(20_000) + 'THE-LAST-LINE\n';
+    const { store, record } = await upload('large.txt', text);
+
+    expect(record.status).toBe('ready');
+    expect(record.chars).toBe(text.length);
+    expect(record.chunkCount).toBeGreaterThan(1);
+    expect(store.read(record.id, { offset: text.length - 30, limit: 100 })).toContain('THE-LAST-LINE');
+  });
+
+  it('chunks PDF-style page markers into page locators', () => {
+    const chunks = chunkAttachmentText('[Page 1]\nAlpha\n\n[Page 2]\nBeta needle\n');
+    expect(chunks.some((chunk) => chunk.page === 1)).toBe(true);
+    expect(chunks.some((chunk) => chunk.page === 2 && chunk.text.includes('needle'))).toBe(true);
+    expect(chunks.find((chunk) => chunk.page === 2)?.locator).toContain('page 2');
+  });
+
+  it('searches stored chunks and reads a bounded window with the next offset', async () => {
+    const { store, record } = await upload('notes.txt', 'alpha\n'.repeat(1000) + 'the needle is here\n' + 'omega\n'.repeat(1000));
+    const found = store.search(record.id, 'needle', 3);
+    expect('error' in found).toBe(false);
+    if ('error' in found) return;
+
+    expect(found.hits.length).toBeGreaterThan(0);
+    expect(found.hits[0].snippet).toContain('needle');
+    const window = store.read(record.id, { offset: 0, limit: 100 });
+    expect(window).toContain('chars 1-100');
+    expect(window).toContain('offset=100');
+  });
+
+  it('keeps the turn context bounded even when the document is much larger', async () => {
+    const { store, record } = await upload(
+      'huge.txt',
+      'filler '.repeat(30_000) + '\nUNIQUE-MARKER\n' + 'tail '.repeat(30_000),
+    );
+    const built = store.buildContext([record.id], 'UNIQUE-MARKER', { maxChars: 3_000 });
+    expect(built.context.length).toBeLessThan(4_000);
+    expect(built.context).toContain('UNIQUE-MARKER');
+    expect(built.context).toContain(`id="${record.id}"`);
+  });
+
+  it('records an explicit refusal for an unreadable file, not an empty success', async () => {
+    const { record } = await upload('binary.bin', Buffer.from([0, 1, 2, 3, 4]));
+    expect(record.status).toBe('failed');
+    expect(record.error).toBeTruthy();
+  });
+
+  it('stops a stream at the configured upload cap', async () => {
+    const store = getAttachmentStore();
+    await expect(
+      store.receiveUpload(Readable.from([Buffer.alloc(64)]), { maxBytes: 8 }),
+    ).rejects.toBeInstanceOf(AttachmentUploadError);
+  });
+
+  it('lists by session and deletes the artifact', async () => {
+    const { store, record } = await upload('one.txt', 'one', 'session-a');
+    await upload('two.txt', 'two', 'session-b');
+    expect(store.list('session-a').map((item) => item.name)).toEqual(['one.txt']);
+    expect(store.delete(record.id)).toBe(true);
+    expect(store.get(record.id)).toBeNull();
+  });
+});

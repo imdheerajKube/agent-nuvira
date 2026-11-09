@@ -45,6 +45,9 @@ import type {
   TaskStatus,
   SkillEnvVarRow,
   ProcessEnvVarRow,
+  SteeringChangeRecord,
+  SteeringProjection,
+  SteeringResponse,
   ContinuityData,
   ResumableRun,
   ResumeStartResult,
@@ -243,6 +246,26 @@ export function setAdminToken(token: string | null): void {
 export function authHeaders(): Record<string, string> {
   const token = getAdminToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+export interface RemoteAttachment {
+  id: string;
+  name: string;
+  mime: string;
+  kind: 'file' | 'paste' | 'drop';
+  size: number;
+  status: 'uploading' | 'processing' | 'ready' | 'partial' | 'failed';
+  createdAt: number;
+  updatedAt: number;
+  chars?: number;
+  chunkCount?: number;
+  pages?: number;
+  sheets?: string[];
+  slides?: number;
+  rows?: number;
+  truncated?: boolean;
+  error?: string;
+  warnings?: string[];
 }
 
 export type DashboardListener = (data: DashboardData) => void;
@@ -2056,16 +2079,84 @@ export class DashboardAPI {
   /**
    * P4 — load one past session's full transcript (resume in the thread).
    */
-  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; /** P8b — the strict half of the pin ("this model only"), persisted with it. */ pinnedStrict?: boolean; busy?: boolean; /** Epoch-ms when the running turn started — the honest origin for a wait. */ busySince?: number; pendingQuestion?: PendingQuestion } | null> {
+  async getChatSession(id: string): Promise<{ turns: Array<{ role: 'user' | 'assistant'; content: string; attachmentIds?: string[] }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; /** P8b — the strict half of the pin ("this model only"), persisted with it. */ pinnedStrict?: boolean; busy?: boolean; /** Epoch-ms when the running turn started — the honest origin for a wait. */ busySince?: number; pendingQuestion?: PendingQuestion } | null> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/sessions/${encodeURIComponent(id)}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         signal: AbortSignal.timeout(10_000),
       });
-      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; pinnedStrict?: boolean; busy?: boolean; busySince?: number; pendingQuestion?: PendingQuestion } };
+      const d = (await res.json()) as { ok?: boolean; session?: { turns: Array<{ role: 'user' | 'assistant'; content: string; attachmentIds?: string[] }>; title: string; updatedAt: number; projectPath?: string; pinnedProvider?: string; pinnedModel?: string; pinnedStrict?: boolean; busy?: boolean; busySince?: number; pendingQuestion?: PendingQuestion } };
       if (res.status === 200 && d.ok && d.session) return d.session;
       return null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Upload one attachment as raw bytes.
+   *
+   * The file is NOT base64'd and NOT read into a JSON body: the request stream
+   * is the file, so a multi-GB upload is bounded by disk/quota rather than by
+   * the chat body limit. The server returns a durable id; the chat request then
+   * carries only that id.
+   */
+  async uploadAttachment(
+    sessionId: string,
+    file: File,
+    onProgress?: (loaded: number, total: number) => void,
+  ): Promise<{ ok: true; attachment: RemoteAttachment } | { ok: false; error: string }> {
+    const token = getAdminToken();
+    return new Promise((resolve) => {
+      try {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${this.baseUrl}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`);
+        xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+        xhr.setRequestHeader('x-attachment-name', encodeURIComponent(file.name || 'attachment'));
+        xhr.setRequestHeader('x-attachment-mime', file.type || 'application/octet-stream');
+        xhr.setRequestHeader('x-attachment-kind', 'file');
+        if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        if (onProgress) {
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) onProgress(event.loaded, event.total);
+          };
+        }
+        xhr.onload = () => {
+          try {
+            const data = JSON.parse(xhr.responseText || '{}') as {
+              ok?: boolean;
+              attachment?: RemoteAttachment;
+              error?: string;
+            };
+            if (xhr.status >= 200 && xhr.status < 300 && data.ok === true && data.attachment) {
+              resolve({ ok: true, attachment: data.attachment });
+            } else {
+              resolve({ ok: false, error: data.error || `Upload failed (HTTP ${xhr.status}).` });
+            }
+          } catch {
+            resolve({ ok: false, error: `Upload failed (HTTP ${xhr.status}).` });
+          }
+        };
+        xhr.onerror = () => resolve({ ok: false, error: 'Could not reach the dashboard server.' });
+        xhr.onabort = () => resolve({ ok: false, error: 'Upload cancelled.' });
+        xhr.send(file);
+      } catch (err) {
+        resolve({ ok: false, error: err instanceof Error ? err.message : 'Upload failed.' });
+      }
+    });
+  }
+
+  /** Re-read an attachment's indexing status after an upload. */
+  async getAttachment(id: string): Promise<RemoteAttachment | null> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/attachments/${encodeURIComponent(id)}`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        signal: AbortSignal.timeout(10_000),
+      });
+      const data = (await res.json()) as { ok?: boolean; attachment?: RemoteAttachment };
+      return res.status === 200 && data.ok && data.attachment ? data.attachment : null;
     } catch {
       return null;
     }
@@ -2107,6 +2198,8 @@ export class DashboardAPI {
        * absent) means the content is the text to inject inline.
        */
       attachments?: Array<{ name: string; content: string; kind?: string; encoding?: 'text' | 'base64' }>;
+      /** Durable ids from `uploadAttachment`; the server builds bounded context from these. */
+      attachmentIds?: string[];
       /**
        * WS5 (#27) — run THIS turn in its own git worktree of the attached project.
        * Omitted (not `false`) defers to the dashboard process's `NUVIRA_ISOLATE`;
@@ -2222,6 +2315,9 @@ export class DashboardAPI {
           ...(opts?.strict === undefined ? {} : { strict: opts.strict }),
           projectPath: opts?.projectPath,
           attachments: opts?.attachments,
+          ...(opts?.attachmentIds && opts.attachmentIds.length > 0
+            ? { attachmentIds: opts.attachmentIds }
+            : {}),
           // WS5 — sent only when the caller decided something, so an untouched
           // control leaves the server's environment in charge (see the option doc).
           ...(opts?.worktree === undefined ? {} : { worktree: opts.worktree }),

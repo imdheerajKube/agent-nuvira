@@ -661,6 +661,20 @@ directory plus every path already attached to the session, with a folder browser
 Choose a project there and the conversation, the file tools, the diff view and the run all operate
 on that directory — the same as starting `nuvira chat` inside it.
 
+### Attaching large files
+
+The composer's paperclip (and drag-drop) uploads the file to a durable attachment store rather
+than turning it into one prompt string. The upload is streamed to disk under
+`NUVIRA_ATTACHMENT_UPLOAD_MAX_BYTES` (2 GB default), extracted out-of-band up to
+`NUVIRA_ATTACHMENT_INGEST_MAX_CHARS` (20M characters default), and chunked for retrieval.
+
+The model sees a compact **manifest** — id, name, size, page/sheet/row counts, readiness — plus a
+few excerpts matched to your question. It reads the rest with `attachment_search` and
+`attachment_read`, so a 500-page PDF or a large workbook does not have to fit in one prompt. The
+attachment id is saved with the conversation: a later turn can ask "what did page 42 say?" without
+re-uploading the file. PDF, DOCX, XLSX, PPTX and text formats are supported; an unreadable file is
+reported as **not readable** instead of being described from its bytes.
+
 ### When no folder is attached — what happens, and where a file goes
 
 The console resolves a directory for every turn, in this order, and the response always says which

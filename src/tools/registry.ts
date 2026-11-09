@@ -128,6 +128,14 @@ export interface ToolContext {
    * project.
    */
   workspaceUnscoped?: boolean;
+  /**
+   * The conversation this turn belongs to, when the surface has one.
+   *
+   * `attachment_list` uses it to show the files uploaded to THIS chat rather
+   * than every attachment on the machine. Attachment IDs themselves are opaque
+   * and are never derived from this value.
+   */
+  attachmentSessionId?: string;
   /** Live pipeline board (for pipeline tool runs inside the chat loop). */
   board?: any;
   /** Sink for `suggest_followups` results. */
@@ -3889,6 +3897,80 @@ registerTool({
       default: return 'Unknown action';
     }
   }),
+});
+
+// ─── Uploaded attachments (durable store + bounded retrieval) ───────────────
+// The dashboard uploads a file out-of-band and puts its ID in the turn context.
+// These tools are the second half of that contract: the manifest names the ID,
+// and the model can search or page through the stored extraction without the
+// file ever becoming one giant prompt.
+registerTool({
+  name: 'attachment_list',
+  description:
+    'List the files uploaded to this conversation, with their attachment IDs, status and size. ' +
+    'Use this before asking the user to re-upload anything.',
+  category: 'workflow',
+  inputSchema: z.object({
+    limit: z.number().min(1).max(50).optional().describe('Maximum attachments to list (default 20)'),
+  }),
+  endsAgentStep: false,
+  run: async (args, ctx) => {
+    const { limit } = args as { limit?: number };
+    const { getAttachmentStore } = await import('../web-dashboard/attachment-store.js');
+    const records = getAttachmentStore()
+      .list(ctx.attachmentSessionId)
+      .slice(0, limit ?? 20);
+    if (records.length === 0) return 'No uploaded attachments in this conversation.';
+    return records.map((record) => getAttachmentStore().manifest(record)).join('\n');
+  },
+});
+
+registerTool({
+  name: 'attachment_search',
+  description:
+    'Search the extracted text of one uploaded attachment for passages matching a query. ' +
+    'Returns locators (page/sheet/character range) and snippets. Use attachment_read to see more.',
+  category: 'workflow',
+  inputSchema: z.object({
+    id: z.string().min(1).describe('Attachment ID from the [Attachments] manifest'),
+    query: z.string().min(1).describe('Words or phrase to find'),
+    limit: z.number().min(1).max(20).optional().describe('Maximum hits (default 5)'),
+  }),
+  endsAgentStep: false,
+  run: async (args) => {
+    const { id, query, limit } = args as { id: string; query: string; limit?: number };
+    const { getAttachmentStore } = await import('../web-dashboard/attachment-store.js');
+    const result = getAttachmentStore().search(id, query, limit ?? 5);
+    if ('error' in result) return result.error;
+    if (result.hits.length === 0) {
+      return `No matches for "${query}" in attachment "${result.record.name}". Try attachment_read to page through the document.`;
+    }
+    return [
+      `[Attachment "${result.record.name}" — ${result.hits.length} match(es) for "${query}"]`,
+      ...result.hits.map((hit) =>
+        `- [${hit.locator}] score=${hit.score}\n  ${hit.snippet}\n  (attachment_read id="${id}" offset=${hit.start} limit=${Math.min(12_000, Math.max(1, hit.end - hit.start + 200))} for the full passage)`,
+      ),
+    ].join('\n');
+  },
+});
+
+registerTool({
+  name: 'attachment_read',
+  description:
+    'Read a bounded character window from one uploaded attachment. ' +
+    'Use offset/limit to page through a large document; the result states the next offset.',
+  category: 'workflow',
+  inputSchema: z.object({
+    id: z.string().min(1).describe('Attachment ID from the [Attachments] manifest'),
+    offset: z.number().min(0).optional().describe('Character offset to start at (default 0)'),
+    limit: z.number().min(1).max(40_000).optional().describe('Maximum characters (default 12000, max 40000)'),
+  }),
+  endsAgentStep: false,
+  run: async (args) => {
+    const { id, offset, limit } = args as { id: string; offset?: number; limit?: number };
+    const { getAttachmentStore } = await import('../web-dashboard/attachment-store.js');
+    return getAttachmentStore().read(id, { offset, limit });
+  },
 });
 
 // Lazy Deps tool

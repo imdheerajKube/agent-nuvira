@@ -32,8 +32,34 @@ export const DEFAULT_ATTACHMENT_MAX_BYTES = 300_000;
  */
 export const MAX_EXTRACT_MAX_CHARS_CEILING = 8_000_000;
 
-/** Ceiling on the attachment cap, in bytes (256 MB). */
+/** Ceiling on the legacy inline attachment cap, in bytes (256 MB). */
 export const MAX_ATTACHMENT_MAX_BYTES_CEILING = 256 * 1024 * 1024;
+
+/**
+ * Default cap for a STREAMED upload, in bytes (2 GB).
+ *
+ * The old 300 KB constant applied to a JSON body that carried the file inline,
+ * which conflated "what can be uploaded" with "what can be put in a prompt". A
+ * streamed upload is stored as an artifact and read through retrieval tools, so
+ * its limit is a disk/quota decision rather than a context-window decision.
+ */
+export const DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES = 2 * 1024 * 1024 * 1024;
+
+/** Ceiling on a streamed upload, in bytes (8 GB). */
+export const MAX_ATTACHMENT_UPLOAD_MAX_BYTES_CEILING = 8 * 1024 * 1024 * 1024;
+
+/**
+ * Default character budget for INGESTING an attachment (20M chars).
+ *
+ * This is deliberately much larger than one tool result: ingestion stores the
+ * whole extracted document in chunks, while `attachment_read` returns a bounded
+ * window. The old 40K budget was applied at ingestion time, so the rest of a
+ * document never existed anywhere and could never be retrieved later.
+ */
+export const DEFAULT_ATTACHMENT_INGEST_MAX_CHARS = 20_000_000;
+
+/** Ceiling on ingestion text, in characters (100M). */
+export const MAX_ATTACHMENT_INGEST_MAX_CHARS_CEILING = 100_000_000;
 
 /** Read an integer from the environment, falling back to `fallback` on anything invalid. */
 function intFromEnv(names: string[], fallback: number, min: number, max: number): number {
@@ -74,5 +100,25 @@ export function resolveAttachmentMaxBytes(): number {
     DEFAULT_ATTACHMENT_MAX_BYTES,
     1,
     MAX_ATTACHMENT_MAX_BYTES_CEILING,
+  );
+}
+
+/** The size cap for one streamed attachment upload, in bytes. */
+export function resolveAttachmentUploadMaxBytes(): number {
+  return intFromEnv(
+    ['NUVIRA_ATTACHMENT_UPLOAD_MAX_BYTES', 'BUFF_ATTACHMENT_UPLOAD_MAX_BYTES'],
+    DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES,
+    1,
+    MAX_ATTACHMENT_UPLOAD_MAX_BYTES_CEILING,
+  );
+}
+
+/** The character budget used while INDEXING an attachment. */
+export function resolveAttachmentIngestMaxChars(): number {
+  return intFromEnv(
+    ['NUVIRA_ATTACHMENT_INGEST_MAX_CHARS', 'BUFF_ATTACHMENT_INGEST_MAX_CHARS'],
+    DEFAULT_ATTACHMENT_INGEST_MAX_CHARS,
+    1,
+    MAX_ATTACHMENT_INGEST_MAX_CHARS_CEILING,
   );
 }

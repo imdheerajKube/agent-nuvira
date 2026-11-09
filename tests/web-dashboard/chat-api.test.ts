@@ -338,6 +338,57 @@ describe('/api/chat', () => {
     expect(engine.calls[0].message).toBe('hello agent');
   });
 
+  it('P9 — streams an upload, then gives the model a bounded id manifest on later turns', async () => {
+    const sessionId = 'attachment-api-session';
+    const secret = 'SECRET-BODY-MARKER-' + 'x'.repeat(5000);
+    const upload = await fetch(`${baseUrl}/api/attachments?sessionId=${encodeURIComponent(sessionId)}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'text/plain',
+        'x-attachment-name': encodeURIComponent('large-notes.txt'),
+        'x-attachment-mime': 'text/plain',
+        'x-attachment-kind': 'file',
+        Authorization: `Bearer ${token}`,
+      },
+      body: new Uint8Array(Buffer.from(`page one\n${secret}\npage two\n`)),
+    });
+    expect(upload.status).toBe(201);
+    const uploaded = (await upload.json()) as { ok: boolean; attachment: { id: string; status: string } };
+    expect(uploaded.ok).toBe(true);
+    expect(uploaded.attachment.id).toMatch(/^[a-f0-9-]{36}$/i);
+
+    // The chat request carries the ID, not the bytes. The first turn gets a
+    // manifest; the body is only available through attachment_read/search.
+    const first = await authedFetch('/api/chat', 'POST', {
+      sessionId,
+      message: 'summarize this file',
+      attachmentIds: [uploaded.attachment.id],
+    });
+    expect(first.status).toBe(200);
+    const firstCall = engine.calls[engine.calls.length - 1];
+    const firstContext = String((firstCall.opts as { projectContext?: string } | undefined)?.projectContext ?? '');
+    expect(firstContext).toContain('[Attachments]');
+    expect(firstContext).toContain(uploaded.attachment.id);
+    expect(firstContext).not.toContain('SECRET-BODY-MARKER');
+
+    // A later turn with no attachmentIds still rebuilds the manifest from the
+    // conversation's persisted IDs — no re-upload required.
+    const second = await authedFetch('/api/chat', 'POST', {
+      sessionId,
+      message: 'what did page two say?',
+    });
+    expect(second.status).toBe(200);
+    const secondCall = engine.calls[engine.calls.length - 1];
+    const secondContext = String((secondCall.opts as { projectContext?: string } | undefined)?.projectContext ?? '');
+    expect(secondContext).toContain(uploaded.attachment.id);
+
+    const del = await fetch(`${baseUrl}/api/attachments/${uploaded.attachment.id}`, {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(del.status).toBe(200);
+  });
+
   it('WS5 — passes the GUI`s isolation request to the engine and reports the worktree it ran in', async () => {
     engine.worktreeAnswer = {
       dir: '/tmp/profile/.nuvira/worktrees/fix-the-retry-bug-abc',

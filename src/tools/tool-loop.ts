@@ -8265,11 +8265,19 @@ export function trimThreadBudget(
   const out = [...thread];
   // Indices eligible for trimming: skip the system prompt, the first user
   // message, the RECENT_KEEP tail, and everything the watermark already froze.
+  //
+  // The first user message is protected because it is normally the ASK. A
+  // synthetic context block (`[Project context]`, `[Attachments]`, …) is not an
+  // ask: it is injected reference material, and exempting it was how an
+  // oversized attachment/project block could sit in the prompt forever while
+  // `trimThreadBudget` reported that it had made room.
   const firstUserIdx = thread.findIndex((m) => m.role === 'user');
+  const firstUserIsContext = firstUserIdx >= 0 &&
+    /^\[(?:Project context|Attachment context|Attachments|File context|Recalled project context)\]/i.test(thread[firstUserIdx].content);
   const eligible: number[] = [];
   for (let i = sealed; i < out.length - RECENT_KEEP; i++) {
     if (out[i].role === 'system') continue;
-    if (i === firstUserIdx) continue;
+    if (i === firstUserIdx && !firstUserIsContext) continue;
     eligible.push(i);
   }
 

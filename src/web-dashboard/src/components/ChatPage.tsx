@@ -12,19 +12,10 @@
  *
  * P8 — smart-rail history + real composer: the sessions sidebar collapses to
  * a rail while the agent works (results own the full window), and the
- * composer accepts file / paste / drag-drop attachments that ride into the
- * turn as [Attachment: <name>] context.
+ * composer accepts file / paste / drag-drop attachments. P9 uploads the bytes to
+ * the durable attachment store and sends only the returned IDs; the server gives
+ * the model a bounded manifest plus `attachment_search` / `attachment_read`.
  */
-
-// P8 — attachment caps (composer). Files are read client-side and travel
-// inline; pasted text beyond the threshold is offered as an attachment so the
-// input box stays a message box, not a document.
-//
-// The byte cap is only the FALLBACK: the effective limit is read from the server
-// (`/api/limits`) on mount, so a user who raised NUVIRA_ATTACHMENT_MAX_BYTES is
-// not blocked by a stale client constant before the file is ever sent. A server
-// too old to answer leaves this default in place rather than accepting anything.
-const DEFAULT_MAX_ATTACHMENT_BYTES = 300_000; // ~300 KB per attachment, 10 max
 
 /**
  * How often the ceiling recovery re-reads the session for its answer.
@@ -52,6 +43,15 @@ const CEILING_RECOVERY_MAX_MISSES = 10;
  */
 const LIVE_TICK_MS = 1000;
 const PASTE_ATTACH_THRESHOLD = 2_000; // chars — larger pastes are offered as a chip
+
+/** Compact byte label for an attachment chip. */
+function formatAttachmentBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
 
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { dashboardAPI, type PendingQuestion } from '../api';
@@ -136,76 +136,20 @@ interface ChatMessage {
 
 /** P8 — one composer attachment (file / paste / drop). */
 interface AttachmentChip {
+  /** Durable store id once uploaded. Absent while the upload is still in flight. */
+  id?: string;
   name: string;
-  content: string;
+  /** Legacy inline content; empty for a durable upload (the server owns the text). */
+  content?: string;
   kind: 'file' | 'paste' | 'drop';
-  /**
-   * P2 — how `content` is encoded.
-   *
-   * 'text' (or absent): decodable text, sent inline as before.
-   * 'base64': the file's BYTES. The server extracts them with `read_extract` — the
-   * same reader the agent uses for a file in the project folder — so a PDF becomes
-   * its text (or an explicit refusal), never mojibake.
-   */
-  encoding?: 'text' | 'base64';
-}
-
-/**
- * P2 — binary document types the server can extract. These are sent as bytes; they are
- * never decoded as text here.
- */
-const BINARY_DOC_PATTERN = /\.(pdf|docx|xlsx|pptx)$/i;
-/** Image types: readable in a project folder (describe_image), not through this composer. */
-const IMAGE_PATTERN = /\.(png|jpe?g|gif|webp|bmp|tiff?)$/i;
-/** Extensions that are text even if the head sniffs oddly (e.g. a UTF-16 BOM). */
-const TEXT_PATTERN = /\.(txt|md|markdown|text|log|csv|tsv|json|xml|yaml|yml|html?|htaccess|css|js|mjs|cjs|jsx|ts|tsx|py|rb|go|rs|java|kt|c|h|cpp|cs|php|sh|bash|zsh|sql|ini|toml|cfg|conf|env)$/i;
-
-/** Base64 for bytes — chunked so a 300 KB file cannot blow the argument stack. */
-function bytesToBase64(bytes: Uint8Array): string {
-  let binary = '';
-  const chunk = 0x8000;
-  for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
-  }
-  return btoa(binary);
-}
-
-/**
- * P2 — decide how to send a file, and refuse the ones that cannot be read at all.
- *
- * A NUL byte in the first 8 KB means the file is not text, whatever its name claims.
- * Decoding such a file as UTF-8 is exactly how a PDF reached the model as mojibake,
- * so this returns a decision rather than a guess. Mirrors `looksBinary` in the
- * server's `coding-tools.ts`, and the same probe the extractor uses.
- */
-function classifyAttachment(
-  name: string,
-  head: Uint8Array,
-): { how: 'text' | 'binary' } | { how: 'unsupported'; reason: string } {
-  const hasNul = head.includes(0);
-  const printableFraction = head.length === 0
-    ? 1
-    : head.reduce((n, b) => (b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127) || b >= 128 ? n + 1 : n), 0) / head.length;
-
-  if (!hasNul && printableFraction > 0.9) return { how: 'text' };
-  if (BINARY_DOC_PATTERN.test(name)) return { how: 'binary' };
-  if (TEXT_PATTERN.test(name)) return { how: 'text' };
-
-  if (IMAGE_PATTERN.test(name)) {
-    return {
-      how: 'unsupported',
-      reason:
-        `"${name}" is an image, and this composer only sends text and documents. ` +
-        'Save it into the project folder and ask me to describe it — I can read images from there.',
-    };
-  }
-
-  return {
-    how: 'unsupported',
-    reason:
-      `"${name}" is not a text file and not a document type I can read. ` +
-      'Attach a PDF, DOCX, XLSX, PPTX, or a text/CSV/JSON/Markdown file — or put the file in the project folder and ask me to read it.',
-  };
+  /** Server-side ingest status. */
+  status?: 'uploading' | 'processing' | 'ready' | 'partial' | 'failed';
+  /** Original bytes, for the chip label. */
+  sizeBytes?: number;
+  /** Extracted characters, once indexed. */
+  chars?: number;
+  /** Upload/ingest error, shown on the chip rather than swallowed. */
+  error?: string;
 }
 
 /** P0.7 — plan-step status as the checklist renders it. */
@@ -1242,15 +1186,6 @@ export interface ChatPageProps {
 export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [auth, setAuth] = useState<AuthState | null>(null);
   const authVersion = useAuthVersion();
-  /** The effective attachment cap, read from the server; the built-in default until it answers. */
-  const [maxAttachmentBytes, setMaxAttachmentBytes] = useState(DEFAULT_MAX_ATTACHMENT_BYTES);
-
-  useEffect(() => {
-    void dashboardAPI.fetchLimits().then((l) => {
-      if (l && l.attachmentMaxBytes > 0) setMaxAttachmentBytes(l.attachmentMaxBytes);
-    });
-  }, []);
-
   // Read the effective capability mode once, so the composer toggle opens on the
   // mode the runs actually use. Best-effort: an old server or a signed-out page
   // leaves the default (balanced), which is what an unset value means anyway.
@@ -1692,39 +1627,54 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   }, []);
 
   /**
-   * P8 + P2 — file picker: send text inline, or send BYTES for server-side extraction.
+   * P9 — file picker: stream the file to the durable attachment store.
    *
-   * This used to be `await file.text()` for every file, which produced mojibake for a
-   * PDF (the 2026-09-27 incident). Binary documents now ride as base64 and are
-   * extracted by the server; anything unreadable is refused HERE, with a message that
-   * names a path that works, instead of being silently turned into noise.
+   * The old path read the whole file client-side and sent it as one JSON string
+   * (text or base64), so the 1.5 MB chat body limit was the real upload limit
+   * and a PDF's extraction was capped at 40K chars. Now the bytes never enter
+   * the chat request; only the returned id does.
    */
-  const pickFile = useCallback(async (file: File) => {
+  const pickFile = useCallback(async (file: File, kind: 'file' | 'paste' | 'drop' = 'file') => {
     if (!file) return;
-    if (file.size > maxAttachmentBytes) {
-      setError(
-        `Attachment "${file.name}" is too large (max ${Math.round(maxAttachmentBytes / 1024)} KB). `
-        + 'Raise the cap in Admin → Process Environment (NUVIRA_ATTACHMENT_MAX_BYTES).',
-      );
+    const local: AttachmentChip = {
+      name: file.name || (kind === 'paste' ? 'pasted-text.txt' : 'attachment'),
+      content: '',
+      kind,
+      status: 'uploading',
+      sizeBytes: file.size,
+    };
+    addAttachment(local);
+    const result = await dashboardAPI.uploadAttachment(sessionIdRef.current, file);
+    if (!result.ok) {
+      setAttachments((prev) => prev.map((chip) => (chip === local ? { ...chip, status: 'failed', error: result.error } : chip)));
+      setError(`Could not upload "${local.name}": ${result.error}`);
       return;
     }
-
-    const head = new Uint8Array(await file.slice(0, 8192).arrayBuffer());
-    const decision = classifyAttachment(file.name, head);
-
-    if (decision.how === 'unsupported') {
-      setError(decision.reason);
-      return;
+    const uploaded = result.attachment;
+    setAttachments((prev) => prev.map((chip) => (chip === local
+      ? {
+          ...chip,
+          id: uploaded.id,
+          name: uploaded.name,
+          status: uploaded.status,
+          sizeBytes: uploaded.size,
+          chars: uploaded.chars,
+          error: uploaded.error,
+        }
+      : chip)));
+    // Indexing is asynchronous. A text file is usually ready before the user
+    // sends; a large PDF may still be processing. Refresh once so the chip says
+    // which one it is instead of leaving "uploading" forever.
+    if (uploaded.status === 'processing') {
+      setTimeout(() => {
+        void dashboardAPI.getAttachment(uploaded.id).then((fresh) => {
+          if (!fresh) return;
+          setAttachments((prev) => prev.map((chip) => (chip.id === fresh.id
+            ? { ...chip, status: fresh.status, chars: fresh.chars, error: fresh.error }
+            : chip)));
+        });
+      }, 1500);
     }
-
-    if (decision.how === 'binary') {
-      const bytes = new Uint8Array(await file.arrayBuffer());
-      addAttachment({ name: file.name, content: bytesToBase64(bytes), kind: 'file', encoding: 'base64' });
-      return;
-    }
-
-    const text = await file.text();
-    addAttachment({ name: file.name, content: text, kind: 'file', encoding: 'text' });
   }, [addAttachment]);
 
   /** P8 — the textarea's paste handler: remember the cursor so the offer can
@@ -1740,7 +1690,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
 
   /** P8 — accept the paste offer: strip the pasted text out of the box and
    *  turn it into an attachment chip. */
-  const acceptPasteOffer = useCallback(() => {
+  const acceptPasteOffer = useCallback(async () => {
     const offer = pasteOffer;
     if (!offer) return;
     const pos = pastePosRef.current;
@@ -1748,10 +1698,10 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       if (!pos) return prev;
       return prev.slice(0, pos.start) + prev.slice(pos.end);
     });
-    addAttachment({ name: `pasted-text.txt`, content: offer.text, kind: 'paste', encoding: 'text' });
     setPasteOffer(null);
     pastePosRef.current = null;
-  }, [pasteOffer, addAttachment]);
+    await pickFile(new File([offer.text], 'pasted-text.txt', { type: 'text/plain' }), 'paste');
+  }, [pasteOffer, pickFile]);
 
   /** P8 — rename a session (sidebar pencil). */
   const startRename = useCallback((s: { id: string; title: string }) => {
@@ -2377,14 +2327,10 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // hold a pin this client believes it released. `false` is that statement.
           ...(pinnedModel ? { strict: strictPin } : {}),
           projectPath: turn?.projectPath ?? attachedProject?.path,
-          // `encoding` rides along so the server knows whether to read the content as
-          // text or to decode base64 and extract it (P2).
-          attachments: chipList.map((c) => ({
-            name: c.name,
-            content: c.content,
-            kind: c.kind,
-            encoding: c.encoding ?? 'text',
-          })),
+          // P9 — only durable IDs ride in the chat request. The file bytes and
+          // extraction stay server-side, so this body stays small regardless of
+          // attachment size.
+          attachmentIds: chipList.map((c) => c.id).filter((id): id is string => !!id),
           // WS5 (#27) — isolation for this turn, as the toggle asks. Both are sent
           // ONLY while the toggle is on: with it off the keys are omitted, so the
           // server's `NUVIRA_ISOLATE` still decides (a control that never expressed
@@ -3354,8 +3300,13 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                       </summary>
                       {m.attachments.map((a, ai) => (
                         <div key={ai} className="chat-attach-content">
-                          <div className="admin-hint">{a.name} — {formatCount(a.content.length)} chars</div>
-                          <pre>{a.content}</pre>
+                          <div className="admin-hint">
+                            {a.name} — {a.sizeBytes !== undefined ? formatAttachmentBytes(a.sizeBytes) : ''}
+                            {a.status ? ` · ${a.status}` : ''}
+                            {a.chars !== undefined ? ` · ${formatCount(a.chars)} chars` : ''}
+                            {a.error ? ` · ${a.error}` : ''}
+                          </div>
+                          {a.content ? <pre>{a.content}</pre> : null}
                         </div>
                       ))}
                     </details>
@@ -3728,15 +3679,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                   <span
                     key={`${a.name}-${i}`}
                     className="chat-attach-chip"
-                    title={a.encoding === 'base64'
-                      ? `${a.name} (${formatCount(a.content.length)} base64 chars — read on the server)`
-                      : `${a.name} (${formatCount(a.content.length)} chars)`}
+                    title={`${a.name}${a.sizeBytes !== undefined ? ` (${formatAttachmentBytes(a.sizeBytes)})` : ''}${a.status ? ` — ${a.status}` : ''}${a.error ? ` — ${a.error}` : ''}`}
                   >
                     📎 {a.name}
                     <span className="admin-hint">
-                      {a.encoding === 'base64'
-                        ? `${Math.round((a.content.length * 3) / 4096)} KB`
-                        : `${formatCount(a.content.length)}c`}
+                      {a.status === 'uploading' ? 'uploading…' : a.status === 'processing' ? 'indexing…' : a.status === 'failed' ? 'failed' : formatAttachmentBytes(a.sizeBytes ?? 0)}
                     </span>
                     <button type="button" className="chat-mini-action" onClick={() => removeAttachment(i)}>✕</button>
                   </span>
@@ -3747,10 +3694,9 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
               <input
                 ref={fileInputRef}
                 type="file"
-                // P2 — the picker offers what the pipeline can actually read: text and
-                // the four OOXML/PDF containers. Images and anything else are refused
-                // with guidance rather than silently mangled.
-                accept=".pdf,.docx,.xlsx,.pptx,.txt,.md,.markdown,.text,.log,.csv,.tsv,.json,.xml,.yaml,.yml,.html,.htm,text/*"
+                // P9 — any file can be uploaded. The server indexes what it can
+                // read and records an explicit refusal for the rest; the composer
+                // no longer decides the universe of attachable data.
                 style={{ display: 'none' }}
                 onChange={(e) => {
                   const f = e.target.files?.[0];
@@ -3761,7 +3707,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
               <button
                 type="button"
                 className="chat-attach-btn"
-                title="Attach a file (up to 300 KB): PDF, DOCX, XLSX, PPTX or text — documents are read on the server"
+                title="Attach a file — uploaded to the durable store, then searched/read through attachment tools. No base64 and no 300 KB composer cap."
                 disabled={busy || attachments.length >= 10}
                 onClick={() => fileInputRef.current?.click()}
               >

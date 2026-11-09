@@ -3308,6 +3308,9 @@ export class ChatCommand extends BaseCommand {
       // the dashboard process's own directory — a place that belongs to nobody.
       // A write there must ask; see `unscopedWriteRefusal` in coding-tools.ts.
       ...(ctxOverrides?.unscopedWorkspace ? { workspaceUnscoped: true } : {}),
+      // Uploaded files are per-conversation artifacts. The tool layer uses this
+      // only to scope `attachment_list`; IDs remain opaque.
+      ...(ctxOverrides?.debugSession ? { attachmentSessionId: ctxOverrides.debugSession } : {}),
       // P7 — is a PERSON watching this turn? It decides `run_terminal`'s DEFAULT
       // command timeout (60s here vs 120s unattended): two minutes of silence in
       // front of someone is not patience, it is a bug — the live run spent four

@@ -691,6 +691,17 @@ describe('ChatConsole', () => {
       expect(ctx).toContain('line one\nline two');
     });
 
+    it('P9 — attachment ids persist with the turn and are reused across turns', async () => {
+      const id = '11111111-1111-4111-8111-111111111111';
+      await console_.answer('s1', 'read the file', { attachmentIds: [id] });
+      expect(console_.attachmentIds('s1')).toEqual([id]);
+      expect(console_.get('s1')?.turns[0].attachmentIds).toEqual([id]);
+
+      await console_.answer('s1', 'what did page 2 say?');
+      expect(console_.attachmentIds('s1')).toEqual([id]);
+      expect(console_.history('s1')[0].attachmentIds).toEqual([id]);
+    });
+
     it('P8 — attachments merge with project context into one block', async () => {
       await console_.answer('s1', 'go', {
         projectContext: '[Project context]\nfiles: 12',

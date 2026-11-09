@@ -78,6 +78,15 @@ export interface ExtractOptions {
   ocr?: boolean;
   /** Passed through to the OCR route (probe injection for tests). */
   ocrOptions?: import('./extract/pdf-ocr.js').PdfOcrOptions;
+  /**
+   * Override the extraction budget for THIS call.
+   *
+   * The normal `read_extract` path uses `resolveExtractMaxChars()` (40K by
+   * default), because its result goes straight into a prompt. Ingestion uses a
+   * much larger value: the result is written to a durable chunk store and only
+   * a bounded window reaches the model later.
+   */
+  maxChars?: number;
 }
 
 // ─── Budgets ────────────────────────────────────────────────────────────────
@@ -210,28 +219,28 @@ class ReadExtractManager {
         case '.markdown':
         case '.text':
         case '.log':
-          return this.extractPlainText(filePath);
+          return this.extractPlainText(filePath, opts);
         case '.html':
         case '.htm':
-          return this.extractHTML(filePath);
+          return this.extractHTML(filePath, opts);
         case '.csv':
         case '.tsv':
-          return this.extractDelimited(filePath, ext === '.tsv' ? '\t' : ',');
+          return this.extractDelimited(filePath, ext === '.tsv' ? '\t' : ',', opts);
         case '.json':
-          return this.extractJSON(filePath);
+          return this.extractJSON(filePath, opts);
         case '.xml':
-          return this.extractXML(filePath);
+          return this.extractXML(filePath, opts);
         case '.yaml':
         case '.yml':
-          return this.extractYAML(filePath);
+          return this.extractYAML(filePath, opts);
         case '.pdf':
           return await this.extractPdf(filePath, opts);
         case '.docx':
-          return await this.extractDocx(filePath);
+          return await this.extractDocx(filePath, opts);
         case '.xlsx':
-          return await this.extractXlsx(filePath);
+          return await this.extractXlsx(filePath, opts);
         case '.pptx':
-          return await this.extractPptx(filePath);
+          return await this.extractPptx(filePath, opts);
         default:
           return this.refused(ext, `Unsupported format: ${ext}`, []);
       }
@@ -256,7 +265,7 @@ class ReadExtractManager {
       return this.notConfigured('.pdf', 'the PDF reader (pdfjs-dist)', err);
     }
 
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     let result: import('./extract/pdf.js').PdfExtractResult;
     try {
       result = await mod.extractPdfText(new Uint8Array(fs.readFileSync(filePath)), {
@@ -302,7 +311,7 @@ class ReadExtractManager {
     };
   }
 
-  private async extractDocx(filePath: string): Promise<ExtractResult> {
+  private async extractDocx(filePath: string, opts: ExtractOptions = {}): Promise<ExtractResult> {
     let mod: typeof import('./extract/docx.js');
     try {
       mod = await import('./extract/docx.js');
@@ -311,7 +320,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractDocxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
+      const result = await mod.extractDocxText(fs.readFileSync(filePath), { maxChars: opts.maxChars ?? resolveExtractMaxChars() });
       return {
         text: result.text,
         format: 'docx',
@@ -334,7 +343,7 @@ class ReadExtractManager {
     }
   }
 
-  private async extractXlsx(filePath: string): Promise<ExtractResult> {
+  private async extractXlsx(filePath: string, opts: ExtractOptions = {}): Promise<ExtractResult> {
     let mod: typeof import('./extract/xlsx.js');
     try {
       mod = await import('./extract/xlsx.js');
@@ -343,7 +352,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractXlsxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
+      const result = await mod.extractXlsxText(fs.readFileSync(filePath), { maxChars: opts.maxChars ?? resolveExtractMaxChars() });
       if (result.text.trim().length === 0) {
         return {
           text: '',
@@ -381,7 +390,7 @@ class ReadExtractManager {
     }
   }
 
-  private async extractPptx(filePath: string): Promise<ExtractResult> {
+  private async extractPptx(filePath: string, opts: ExtractOptions = {}): Promise<ExtractResult> {
     let mod: typeof import('./extract/pptx.js');
     try {
       mod = await import('./extract/pptx.js');
@@ -390,7 +399,7 @@ class ReadExtractManager {
     }
 
     try {
-      const result = await mod.extractPptxText(fs.readFileSync(filePath), { maxChars: resolveExtractMaxChars() });
+      const result = await mod.extractPptxText(fs.readFileSync(filePath), { maxChars: opts.maxChars ?? resolveExtractMaxChars() });
       if (result.text.trim().length === 0) {
         return {
           text: '',
@@ -539,7 +548,7 @@ class ReadExtractManager {
     }
   }
 
-  private extractPlainText(filePath: string): ExtractResult {
+  private extractPlainText(filePath: string, opts: ExtractOptions = {}): ExtractResult {
     if (this.looksBinary(filePath)) {
       return this.refused(
         'text',
@@ -548,7 +557,7 @@ class ReadExtractManager {
       );
     }
     const content = fs.readFileSync(filePath, 'utf-8');
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(content, content.length, limit);
     return {
       text: capped.text,
@@ -566,9 +575,9 @@ class ReadExtractManager {
    * table's value/column pairing survives. Layout (CSS) is not reconstructed and is
    * not claimed to be.
    */
-  private extractHTML(filePath: string): ExtractResult {
+  private extractHTML(filePath: string, opts: ExtractOptions = {}): ExtractResult {
     const text = htmlToText(fs.readFileSync(filePath, 'utf-8'));
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(text, text.length, limit);
     return {
       text: capped.text,
@@ -587,7 +596,7 @@ class ReadExtractManager {
    * `Glucose,112,"HIGH, range 70-99"` became four fields with the reference range torn
    * apart, while the result still reported success.
    */
-  private extractDelimited(filePath: string, delimiter: string): ExtractResult {
+  private extractDelimited(filePath: string, delimiter: string, opts: ExtractOptions = {}): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
     const lines = content.split(/\r?\n/).filter((l) => l.trim());
     const rows = lines.map((line) => parseDelimitedRow(line, delimiter));
@@ -595,7 +604,7 @@ class ReadExtractManager {
     // Rows stay themselves — separated by newlines, cells by ` | ` — so the table
     // shape the file encoded is the shape the model reads.
     const text = rows.map((cells) => cells.join(' | ')).join('\n');
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(text, text.length, limit);
 
     return {
@@ -610,7 +619,7 @@ class ReadExtractManager {
     };
   }
 
-  private extractJSON(filePath: string): ExtractResult {
+  private extractJSON(filePath: string, opts: ExtractOptions = {}): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
     let text: string;
     let valid = true;
@@ -621,7 +630,7 @@ class ReadExtractManager {
       text = content;
       valid = false;
     }
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(text, text.length, limit);
     return {
       text: capped.text,
@@ -636,10 +645,10 @@ class ReadExtractManager {
     };
   }
 
-  private extractXML(filePath: string): ExtractResult {
+  private extractXML(filePath: string, opts: ExtractOptions = {}): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
     const text = htmlToText(content);
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(text, text.length, limit);
     return {
       text: capped.text,
@@ -649,9 +658,9 @@ class ReadExtractManager {
     };
   }
 
-  private extractYAML(filePath: string): ExtractResult {
+  private extractYAML(filePath: string, opts: ExtractOptions = {}): ExtractResult {
     const content = fs.readFileSync(filePath, 'utf-8');
-    const limit = resolveExtractMaxChars();
+    const limit = opts.maxChars ?? resolveExtractMaxChars();
     const capped = capText(content, content.length, limit);
     return {
       text: capped.text,

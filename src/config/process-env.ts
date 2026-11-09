@@ -169,15 +169,39 @@ export const PROCESS_ENV_VARS: readonly ProcessEnvVarSpec[] = [
   },
   {
     name: 'NUVIRA_ATTACHMENT_MAX_BYTES',
-    label: 'Attachment size cap (bytes)',
+    label: 'Legacy inline attachment cap (bytes)',
     group: 'turn',
     kind: 'text',
     placeholder: '300000',
     valueLabel: 'Save',
     description:
-      'The largest single file the dashboard composer will accept, in bytes. A file over this cap is refused before it is sent. Raise it for a project file larger than ~300 KB (up to 268435456 = 256 MB).',
-    unsetMeans: '300,000 bytes (~293 KB) per attachment, 10 attachments per turn.',
+      'The size cap for an attachment sent inline in a JSON chat request (legacy API callers). The dashboard composer no longer uses this path: it streams files to the durable attachment store under NUVIRA_ATTACHMENT_UPLOAD_MAX_BYTES.',
+    unsetMeans: '300,000 bytes (~293 KB) per inline attachment, 10 per turn.',
     cliEquivalent: 'nuvira config limit set attachment-max-kb <n>  ·  NUVIRA_ATTACHMENT_MAX_BYTES',
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_UPLOAD_MAX_BYTES',
+    label: 'Streamed upload cap (bytes)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '2147483648',
+    valueLabel: 'Save',
+    description:
+      'The largest single file the durable attachment uploader will accept, in bytes. Uploads are streamed to disk and indexed out-of-band, so this is a quota rather than a model-context limit (up to 8589934592 = 8 GB).',
+    unsetMeans: '2,147,483,648 bytes (2 GB) per file.',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_UPLOAD_MAX_BYTES',
+  },
+  {
+    name: 'NUVIRA_ATTACHMENT_INGEST_MAX_CHARS',
+    label: 'Attachment indexing budget (characters)',
+    group: 'turn',
+    kind: 'text',
+    placeholder: '20000000',
+    valueLabel: 'Save',
+    description:
+      'How much extracted text is stored for one attachment. Unlike NUVIRA_EXTRACT_MAX_CHARS, this is not a prompt budget: the full document is chunked on disk and retrieved in bounded windows by attachment_search / attachment_read (up to 100,000,000).',
+    unsetMeans: '20,000,000 characters per attachment.',
+    cliEquivalent: 'NUVIRA_ATTACHMENT_INGEST_MAX_CHARS',
   },
   {
     name: 'NUVIRA_CAPABILITY_MODE',

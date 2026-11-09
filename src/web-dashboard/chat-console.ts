@@ -38,6 +38,12 @@ import { withStrictModel } from '../inference/route-resolver.js';
 export interface ChatTurn {
   role: 'user' | 'assistant';
   content: string;
+  /**
+   * Uploaded attachment IDs that belong to this turn. They are durable, so a
+   * later turn can retrieve the file without asking the user to upload it
+   * again. Only IDs live in history — never the file bytes or the full text.
+   */
+  attachmentIds?: string[];
 }
 
 /** The slice of ChatCommand the console drives (answerOnce satisfies it). */
@@ -345,6 +351,8 @@ export interface ChatSessionSummary {
 export interface ChatAttachment {
   /** Display name, e.g. `requirements.md` or `pasted-text.txt`. */
   name: string;
+  /** Durable store id, when this came through `/api/attachments`. */
+  attachmentId?: string;
   /**
    * The content the model sees.
    *
@@ -357,6 +365,12 @@ export interface ChatAttachment {
   content: string;
   /** Source for the chip: 'file' | 'paste' | 'drop'. */
   kind?: 'file' | 'paste' | 'drop';
+  /** Ingest status, for a durable attachment (ready/partial/processing/failed). */
+  status?: string;
+  /** Original byte size, for display. */
+  sizeBytes?: number;
+  /** Extracted character count, when indexed. */
+  chars?: number;
 }
 
 /** A live event for one session (P3 progress streaming). */
@@ -626,6 +640,23 @@ export class ChatConsole {
   }
 
   /**
+   * Every attachment id this conversation has used, oldest first.
+   *
+   * The turn context is rebuilt from these on every request, so a follow-up
+   * like "what did page 42 say?" can retrieve the file uploaded three turns
+   * ago. Only IDs are stored; the bytes remain in the attachment store.
+   */
+  attachmentIds(sessionId: string): string[] {
+    const ids = new Set<string>();
+    for (const turn of this.sessions.get(sessionId)?.turns ?? []) {
+      for (const id of turn.attachmentIds ?? []) {
+        if (typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)) ids.add(id);
+      }
+    }
+    return Array.from(ids);
+  }
+
+  /**
    * P4 — sidebar summaries, most recently updated first. The server exposes
    * these via `GET /api/sessions`.
    */
@@ -806,6 +837,8 @@ export class ChatConsole {
       /** Cluster G — no workspace for this turn: writes must ask where. */
       unscopedWorkspace?: boolean;
       attachments?: ChatAttachment[];
+      /** Durable attachment ids to persist with this turn. */
+      attachmentIds?: string[];
       recordTurn?: boolean;
       /** WS1 — a finding was recorded this turn, with the gate's verdict. */
       onFinding?: (finding: import('../findings/verdicts.js').WireFinding) => void;
@@ -1082,7 +1115,18 @@ export class ChatConsole {
         });
         return { ok: false, error: 'The turn was cancelled.', cancelled: true };
       }
-      const turns: ChatTurn[] = [...history, { role: 'user', content: clean }];
+      const turnAttachmentIds = Array.from(new Set([
+        ...(opts.attachmentIds ?? []),
+        ...(opts.attachments ?? []).map((a) => a.attachmentId).filter((id): id is string => !!id),
+      ]));
+      const turns: ChatTurn[] = [
+        ...history,
+        {
+          role: 'user',
+          content: clean,
+          ...(turnAttachmentIds.length > 0 ? { attachmentIds: turnAttachmentIds } : {}),
+        },
+      ];
       if (answer.content && answer.content.trim()) {
         turns.push({ role: 'assistant', content: answer.content });
       }
@@ -1454,7 +1498,15 @@ function formatTurnContext(projectContext: string | undefined, attachments: Chat
   const parts: string[] = [];
   if (projectContext) parts.push(projectContext);
   for (const a of attachments ?? []) {
-    parts.push(`[Attachment: ${a.name}]\n${a.content}`);
+    // A legacy inline attachment is capped here as a last line of defence. A
+    // durable attachment already arrives as a bounded manifest + excerpts; its
+    // full text is never in this string.
+    const body = a.content.length > 20_000
+      ? `${a.content.slice(0, 20_000)}\n…[attachment context truncated — use attachment_read for the rest]`
+      : a.content;
+    parts.push(
+      `[Attachment: ${a.name}${a.attachmentId ? ` (id: ${a.attachmentId})` : ''}]\n${body}`,
+    );
   }
   return parts.join('\n\n');
 }

@@ -7418,15 +7418,28 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // the switches. Open, like the other read paths: it exposes a number, no data.
   if (pathname === '/api/limits') {
     void (async () => {
-      const { resolveExtractMaxChars, resolveAttachmentMaxBytes, DEFAULT_EXTRACT_MAX_CHARS, DEFAULT_ATTACHMENT_MAX_BYTES } =
-        await import('../config/limits.js');
+      const {
+        resolveExtractMaxChars,
+        resolveAttachmentMaxBytes,
+        resolveAttachmentUploadMaxBytes,
+        DEFAULT_EXTRACT_MAX_CHARS,
+        DEFAULT_ATTACHMENT_MAX_BYTES,
+        DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES,
+      } = await import('../config/limits.js');
       const attachmentMaxBytes = resolveAttachmentMaxBytes();
+      const attachmentUploadMaxBytes = resolveAttachmentUploadMaxBytes();
       writeJson(res, 200, {
+        // Legacy inline attachment cap (still used by API callers that send
+        // `attachments` in the JSON body).
         attachmentMaxBytes,
         attachmentMaxKb: Math.round(attachmentMaxBytes / 1024),
+        // Durable streaming upload cap — this is the one the composer uses.
+        attachmentUploadMaxBytes,
+        attachmentUploadMaxKb: Math.round(attachmentUploadMaxBytes / 1024),
         extractMaxChars: resolveExtractMaxChars(),
         defaults: {
           attachmentMaxBytes: DEFAULT_ATTACHMENT_MAX_BYTES,
+          attachmentUploadMaxBytes: DEFAULT_ATTACHMENT_UPLOAD_MAX_BYTES,
           extractMaxChars: DEFAULT_EXTRACT_MAX_CHARS,
         },
       });
@@ -8874,6 +8887,131 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
+  // ─── Uploaded attachments: streaming in, metadata/list/search out ─────────
+  //
+  // The chat endpoint carries attachment IDS, never file bytes. This route is
+  // deliberately raw (`application/octet-stream`) rather than multipart: the
+  // request stream goes straight to disk through a metered transform, so a
+  // multi-GB upload never becomes a JSON string or a base64 expansion.
+  if (pathname === '/api/attachments' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, {
+          ok: false,
+          error: `Access denied — role '${session.role}' cannot upload attachments (requires admin or operator).`,
+        });
+        return;
+      }
+      const sessionId = url.searchParams.get('sessionId') || 'dashboard-upload';
+      if (sessionId.length > 64) {
+        writeJson(res, 400, { ok: false, error: 'Invalid session id.' });
+        return;
+      }
+      const headerValue = (name: string): string => {
+        const raw = req.headers[name];
+        return Array.isArray(raw) ? raw[0] ?? '' : raw ?? '';
+      };
+      const rawName = headerValue('x-attachment-name');
+      let name = 'attachment';
+      try {
+        name = rawName ? decodeURIComponent(rawName) : 'attachment';
+      } catch {
+        name = rawName || 'attachment';
+      }
+      const mime = headerValue('x-attachment-mime') || req.headers['content-type'] || 'application/octet-stream';
+      const kindRaw = headerValue('x-attachment-kind');
+      const kind = kindRaw === 'paste' || kindRaw === 'drop' ? kindRaw : 'file';
+      const { getAttachmentStore, AttachmentUploadError } = await import('./attachment-store.js');
+      const store = getAttachmentStore();
+      try {
+        const receipt = await store.receiveUpload(req);
+        const attachment = await store.finalizeUpload({ sessionId, name, mime, kind, receipt });
+        writeJson(res, 201, { ok: true, attachment });
+      } catch (error) {
+        if (error instanceof AttachmentUploadError) {
+          const status = error.code === 'too_large' ? 413 : 400;
+          writeJson(res, status, { ok: false, code: error.code, error: error.message });
+          return;
+        }
+        writeJson(res, 500, { ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    })();
+    return;
+  }
+
+  if (pathname === '/api/attachments' && req.method === 'GET') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot read attachments.` });
+        return;
+      }
+      const { getAttachmentStore } = await import('./attachment-store.js');
+      const sessionId = url.searchParams.get('sessionId') || undefined;
+      writeJson(res, 200, { ok: true, attachments: getAttachmentStore().list(sessionId) });
+    })();
+    return;
+  }
+
+  if (pathname.startsWith('/api/attachments/')) {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot read attachments.` });
+        return;
+      }
+      const { getAttachmentStore } = await import('./attachment-store.js');
+      const store = getAttachmentStore();
+      const rest = pathname.slice('/api/attachments/'.length);
+      const [rawId, action] = rest.split('/');
+      const id = decodeURIComponent(rawId || '');
+      if (!id) {
+        writeJson(res, 400, { ok: false, error: 'Missing attachment id.' });
+        return;
+      }
+      if (req.method === 'DELETE') {
+        if (!roleCan(session.role, 'routing.operate')) {
+          writeJson(res, 403, { ok: false, error: 'Access denied — cannot delete attachments.' });
+          return;
+        }
+        const removed = store.delete(id);
+        writeJson(res, removed ? 200 : 404, removed ? { ok: true } : { ok: false, error: 'No such attachment.' });
+        return;
+      }
+      if (req.method !== 'GET') {
+        writeJson(res, 405, { ok: false, error: 'Method not allowed.' });
+        return;
+      }
+      if (action === 'chunks') {
+        const query = url.searchParams.get('query') || '';
+        const limit = Number(url.searchParams.get('limit') || 5);
+        const found = store.search(id, query, Number.isFinite(limit) ? limit : 5);
+        if ('error' in found) {
+          writeJson(res, 404, { ok: false, error: found.error });
+          return;
+        }
+        writeJson(res, 200, { ok: true, ...found });
+        return;
+      }
+      const attachment = store.get(id);
+      writeJson(res, attachment ? 200 : 404, attachment ? { ok: true, attachment } : { ok: false, error: 'No such attachment.' });
+    })();
+    return;
+  }
+
   // POST /api/chat — send one message { sessionId?, message, provider?, model? }.
   if (pathname.startsWith('/api/steering')) {
     void handleSteeringApi(req, res, pathname, url).catch((error) => {
@@ -8971,7 +9109,32 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // PDF arrived as `%PDF-1.4 …` with nothing indicating extraction had failed
       // (TOOL_TRUTHFULNESS_TRACKER.md findings #1/#7 and P2).
       const { hydrateAttachments } = await import('./attachment-extract.js');
-      const attachments = await hydrateAttachments(body?.attachments);
+      const legacyAttachments = await hydrateAttachments(body?.attachments);
+      // P9 — durable attachments. The request carries IDs (see
+      // `/api/attachments`), and this turn gets a BOUNDED context: one manifest
+      // per file plus a few query-relevant excerpts. The full extraction stays
+      // on disk for `attachment_search` / `attachment_read`, including on later
+      // turns, because the IDs are persisted with the conversation.
+      const { getAttachmentStore } = await import('./attachment-store.js');
+      const attachmentStore = getAttachmentStore();
+      const requestedIds = Array.isArray(body?.attachmentIds)
+        ? body.attachmentIds.filter((id): id is string => typeof id === 'string' && /^[a-f0-9-]{36}$/i.test(id)).slice(0, 10)
+        : [];
+      const previousIds = chatConsole.attachmentIds(sessionId);
+      const allAttachmentIds = Array.from(new Set([...previousIds, ...requestedIds])).slice(-10);
+      await Promise.all(allAttachmentIds.map((id) => attachmentStore.waitFor(id, 1200)));
+      const attachmentBundle = attachmentStore.buildContext(allAttachmentIds, message, { maxChars: 14_000 });
+      const attachments = [
+        ...legacyAttachments,
+        ...(attachmentBundle.context
+          ? [{
+              name: 'Uploaded files',
+              content: attachmentBundle.context,
+              kind: 'file' as const,
+              attachmentId: undefined,
+            }]
+          : []),
+      ];
       // P3 — an attached project's bounded snapshot rides into the turn as
       // `[Project context]`, so "assess THIS project" works without the user
       // describing the codebase. Cache misses rebuild automatically.
@@ -9157,6 +9320,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           // dashboard process was started from (see `unscopedWriteRefusal`).
           ...(workspace.unscoped ? { unscopedWorkspace: true } : {}),
           attachments,
+          attachmentIds: allAttachmentIds,
           ...(pinnedSkills.length > 0 ? { skills: pinnedSkills } : {}),
           ...(worktree === undefined ? {} : { worktree }),
           ...(keepWorktree === undefined ? {} : { keepWorktree }),
