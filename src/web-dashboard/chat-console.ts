@@ -640,6 +640,45 @@ export class ChatConsole {
   }
 
   /**
+   * Bind an attached folder to its conversation the moment the attach succeeds.
+   *
+   * The composer used to keep this only in React state and re-send it with each
+   * request; a send racing the attach response (or a reload) left the server
+   * folder-less even though the UI showed the folder. Persisting it here makes
+   * the conversation itself the source of truth for the next turn.
+   */
+  setProjectPath(sessionId: string, projectPath: string): { ok: boolean; error?: string } {
+    const id = sessionId.trim();
+    const path = projectPath.trim();
+    if (!id || !path) return { ok: false, error: 'sessionId and projectPath are required.' };
+    const existing = this.sessions.get(id);
+    const now = Date.now();
+    this.sessions.set(id, {
+      turns: existing?.turns ?? [],
+      title: existing?.title ?? '',
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: existing?.updatedAt ?? now,
+      ...(existing?.followups && existing.followups.length > 0 ? { followups: existing.followups } : {}),
+      ...(existing?.pinnedProvider && existing.pinnedModel
+        ? { pinnedProvider: existing.pinnedProvider, pinnedModel: existing.pinnedModel }
+        : {}),
+      ...(existing?.pinnedStrict === true ? { pinnedStrict: true } : {}),
+      projectPath: path,
+    });
+    this.persist();
+    return { ok: true };
+  }
+
+  /** Explicitly detach the folder from a conversation (the composer's ✕). */
+  clearProjectPath(sessionId: string): { ok: boolean } {
+    const rec = this.sessions.get(sessionId.trim());
+    if (!rec) return { ok: true };
+    delete rec.projectPath;
+    this.persist();
+    return { ok: true };
+  }
+
+  /**
    * Every attachment id this conversation has used, oldest first.
    *
    * The turn context is rebuilt from these on every request, so a follow-up

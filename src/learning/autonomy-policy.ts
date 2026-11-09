@@ -217,7 +217,7 @@ const MAINTENANCE_VERB_RE = new RegExp(`\\b(?:${MAINTENANCE_VERB_BODY})${VERB_SU
  * most common phrasing unauthorized.
  */
 const ANALYSIS_OPENER_RE =
-  /^\s*(?:how|why|what|when|which|who|whom|whose|explain|describe|summari[sz]e|compare|tell\s+me|walk\s+me|help\s+me\s+understand)\b/i;
+  /^\s*(?:how|why|what|which|who|whom|whose|explain|describe|summari[sz]e|compare|tell\s+me|walk\s+me|help\s+me\s+understand|when\s+(?:should|shall|will|would|do|does|did|can|could|is|are|was|were|has|have|am))\b/i;
 
 /** "yes", "go ahead", "do it" — a confirmation of work already proposed. */
 const SHORT_AFFIRMATIVE_RE =
@@ -368,6 +368,37 @@ export function requestForbidsWrites(request: string): boolean {
 export function isAffirmativeReply(request: string): boolean {
   const text = (request || '').trim();
   return text.length <= 40 && SHORT_AFFIRMATIVE_RE.test(text);
+}
+
+/**
+ * A clarification/refinement of work already in progress — not a fresh ask.
+ *
+ * `when i said add images to website i meand to say as background` is the live
+ * shape: the user is correcting the ACTIVE task, not asking a question about it.
+ * The old analysis-opener list treated the leading `when` as interrogative and
+ * revoked write authorization for the whole turn, so the agent refused its own
+ * planned edits. `ANALYSIS_OPENER_RE` now requires `when` to be followed by an
+ * auxiliary (`when should…`), and this predicate covers the remaining
+ * clarifications that name no create verb of their own (`i meant as background`,
+ * `make it the backdrop`, `to clarify…`).
+ *
+ * Deliberately evidence-only and conservative: the loop may use it to INHERIT
+ * authorization from an active, unfinished plan, never to invent a new task.
+ * A request that forbids writes is still a veto.
+ */
+const TASK_REFINEMENT_RE =
+  /\b(?:when\s+i\s+said|i\s+(?:meant|mean)|i\s+was\s+trying\s+to\s+say|to\s+clarify|to\s+be\s+clear|as\s+(?:a\s+)?background|not\s+that\b[^.]{0,40}\b(?:but|instead)|(?:make|change|use|put|add|move)\s+(?:it|them|that|this))\b/i;
+
+export function isTaskRefinement(request: string): boolean {
+  const text = (request || '').trim();
+  if (!text) return false;
+  if (requestForbidsWrites(text)) return false;
+  // A question that merely mentions a pronoun ("why did you use it?") is not a
+  // correction. Only a first-person clarification earns the exemption; a real
+  // question about the work still revokes authorization for that turn.
+  const firstPersonCorrection = /\b(?:i\s+(?:meant|mean)|when\s+i\s+said|to\s+clarify|to\s+be\s+clear)\b/i.test(text);
+  if (ANALYSIS_OPENER_RE.test(text) && !firstPersonCorrection) return false;
+  return TASK_REFINEMENT_RE.test(text);
 }
 
 /**

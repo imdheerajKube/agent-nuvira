@@ -4,6 +4,7 @@ import {
   requestAuthorizesWrites,
   detectPermissionSeeking,
   decideWriteConfirmation,
+  isTaskRefinement,
   IRREVERSIBLE_ACTION_RE,
 } from '../../src/learning/autonomy-policy.js';
 
@@ -56,6 +57,14 @@ describe('requestAuthorizesWrites', () => {
     // "created" are how people actually write, and `\bupdate\b` missed them.
     ['updating the converter styles', 'inflected directive verb'],
     ['fixing the divide-by-zero path', 'inflected maintenance verb'],
+    // A clarification of the active task opens with `when`, but it is not a
+    // question: "when I said add images…" carries a create verb and a website.
+    // Treating the subordinate `when` as an analysis opener revoked the whole
+    // turn's write authorization and blocked the edits the plan already named.
+    [
+      'when i said add images to website i meand to say as background',
+      'a clarification beginning with when is not a question',
+    ],
   ];
 
   for (const [request, why] of authorized) {
@@ -72,6 +81,7 @@ describe('requestAuthorizesWrites', () => {
     ['compare vite and webpack', 'analysis opener'],
     ['why is the build failing?', 'a question with no directive clause stays a question'],
     ['how do I update the parser?', 'analysis opener + directive verb is still a question'],
+    ['when should I create the file?', 'when + auxiliary is still a question'],
     ['read the story and tell me what you think', 'no creation verb'],
     ['thanks, that looks great', 'no request at all'],
   ];
@@ -86,6 +96,26 @@ describe('requestAuthorizesWrites', () => {
     expect(requestAuthorizesWrites('write a 12 page story').reason).toMatch(/deliverable/);
     expect(requestAuthorizesWrites('what does X do?').reason).toMatch(/about the work/i);
     expect(requestAuthorizesWrites('').reason).toMatch(/no request text/);
+  });
+});
+
+describe('isTaskRefinement', () => {
+  it('recognises a correction/refinement of the active task', () => {
+    for (const text of [
+      'when i said add images to website i meand to say as background',
+      'i meant as background',
+      'to clarify, use the photo behind the cards',
+      'make it the backdrop instead',
+    ]) {
+      expect(isTaskRefinement(text)).toBe(true);
+    }
+  });
+
+  it('does not treat an unrelated question or a write veto as a refinement', () => {
+    expect(isTaskRefinement('why is the build failing?')).toBe(false);
+    expect(isTaskRefinement('what does the writer agent do?')).toBe(false);
+    expect(isTaskRefinement('why did you use it?')).toBe(false);
+    expect(isTaskRefinement('i meant as background — do not write any files')).toBe(false);
   });
 });
 

@@ -1351,6 +1351,8 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const [scratchWorkspace, setScratchWorkspace] = useState<string | null>(null);
   /** The composer's path box, so the scratch banner can point at it. */
   const projectPathInputRef = useRef<HTMLInputElement | null>(null);
+  /** The main composer, so a backlog item can hand its task to a new chat. */
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   // Resume the session open before a reload when one was stored; otherwise a
   // brand-new id.
   /**
@@ -1432,6 +1434,16 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const pastePosRef = useRef<{ start: number; end: number } | null>(null);
   // P3 — the attached project (its bounded context rides into every turn).
   const [attachedProject, setAttachedProject] = useState<{ path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean } | null>(null);
+  /**
+   * The folder this chat is attached to, readable synchronously. A send can
+   * happen in the same tick as the Attach click (before React applies the
+   * attach response), and the server now persists the session binding too —
+   * but the first turn must still carry the path.
+   */
+  const attachedPathRef = useRef<string | null>(null);
+  useEffect(() => {
+    attachedPathRef.current = attachedProject?.path ?? null;
+  }, [attachedProject]);
   // P4b — the project path from a resumed session (used to show a mismatch banner).
   const [sessionProjectPath, setSessionProjectPath] = useState<string | null>(null);
   const [projectPick, setProjectPick] = useState<Array<{ path: string; name: string; kind: string }>>([]);
@@ -1582,6 +1594,8 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
       void attachProjectRef.current?.(storedPath);
     } else {
       setSessionProjectPath(null);
+      attachedPathRef.current = null;
+      setAttachedProject(null);
     }
   }, [attachedProject]);
 
@@ -1600,6 +1614,8 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     sessionIdRef.current = newSessionId();
     persistSessionId(sessionIdRef.current);
     setSessionProjectPath(null);
+    attachedPathRef.current = null;
+    setAttachedProject(null);
     setPinnedModel(null);
     setMessages([]);
     setLiveSteps([]);
@@ -1627,6 +1643,20 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
     setContinuationNotice(null);
     void refreshAttachmentQuota();
   }, [refreshAttachmentQuota]);
+
+  /**
+   * A backlog item's "Start as new task": replace the session AND put the task in
+   * the composer. Deliberately not auto-sent — the user sees the prompt, can add
+   * the target folder or attachments, and presses send themselves.
+   */
+  const startTaskFromBacklog = useCallback(
+    (prompt: string) => {
+      newChat();
+      setInput(prompt);
+      window.setTimeout(() => composerRef.current?.focus(), 0);
+    },
+    [newChat],
+  );
 
   /** P8 — add an attachment chip (file picker / drag-drop / paste-as-text). */
   const addAttachment = useCallback((chip: AttachmentChip) => {
@@ -1863,16 +1893,38 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
   const attachProject = useCallback(async (path: string) => {
     const clean = path.trim();
     if (!clean) return;
+    // Arm the path BEFORE the request: the composer must be able to send the
+    // folder even if the user hits Enter while the attach response is in flight.
+    attachedPathRef.current = clean;
     setProjectError('');
-    const r = await dashboardAPI.attachProject(clean);
+    const r = await dashboardAPI.attachProject(clean, sessionIdRef.current);
     if (r.ok && r.project) {
+      // A newer attach won while this one was in flight; do not undo it.
+      if (attachedPathRef.current && attachedPathRef.current !== clean) return;
+      attachedPathRef.current = r.project.path;
       setAttachedProject(r.project);
+      setSessionProjectPath(r.project.path);
       setProjectPathInput('');
+      // The "no folder" caption described the turn that started before this
+      // attachment; keeping it beside a now-attached chip is the confusing state
+      // the user reported.
+      setWorkspaceNotice(null);
+      setScratchWorkspace(null);
       const p = await dashboardAPI.listProjects();
       if (Array.isArray(p)) setProjectPick(p);
     } else {
+      attachedPathRef.current = null;
       setProjectError(r.error || 'Could not attach that directory.');
     }
+  }, []);
+
+  /** Detach the folder from this conversation, server-side too. */
+  const detachProject = useCallback(() => {
+    attachedPathRef.current = null;
+    setAttachedProject(null);
+    setSessionProjectPath(null);
+    setWorkspaceNotice(null);
+    void dashboardAPI.detachProject(sessionIdRef.current);
   }, []);
   // P4b — keep the ref in sync so resumeSession can call attachProject without a direct dependency.
   attachProjectRef.current = attachProject;
@@ -2395,7 +2447,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
           // a chat whose user turned the lock OFF must SAY so, or the server would
           // hold a pin this client believes it released. `false` is that statement.
           ...(pinnedModel ? { strict: strictPin } : {}),
-          projectPath: turn?.projectPath ?? attachedProject?.path,
+          projectPath: turn?.projectPath ?? attachedPathRef.current ?? attachedProject?.path,
           // P9 — only durable IDs ride in the chat request. The file bytes and
           // extraction stay server-side, so this body stays small regardless of
           // attachment size.
@@ -3084,7 +3136,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
                   {attachedProject.fileCount} files · {attachedProject.symbolCount} symbols{attachedProject.truncated ? ' · truncated map' : ''}
                 </span>
                 <span className="chat-project-path" title={attachedProject.path}>{attachedProject.path}</span>
-                <button type="button" className="admin-mini-btn" onClick={() => setAttachedProject(null)}>✕ detach</button>
+                <button type="button" className="admin-mini-btn" onClick={detachProject}>✕ detach</button>
               </div>
             ) : (
               <div className="chat-project-pick">
@@ -3718,7 +3770,11 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
 
           {/* Separate guidance lane. The composer below stays locked while a turn
               runs; this is the only input that reaches the run during execution. */}
-          <SteeringPanel sessionId={sessionIdRef.current} busy={busy} />
+          <SteeringPanel
+            sessionId={sessionIdRef.current}
+            busy={busy}
+            onStartTask={startTaskFromBacklog}
+          />
           <form
             className={`chat-composer${dragOver ? ' chat-composer-drag' : ''}`}
             onSubmit={(e) => { e.preventDefault(); void send(input); }}
@@ -3964,6 +4020,7 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
             </div>
             <div className="chat-input-row">
               <textarea
+                ref={composerRef}
                 className="chat-input-box"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}

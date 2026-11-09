@@ -12,7 +12,7 @@
  * ordinary keyboard-focusable buttons.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   steeringBacklog,
@@ -23,11 +23,17 @@ import {
   steeringGuide,
   steeringInterpret,
 } from '../api';
-import type { SteeringChangeRecord, SteeringProjection } from '../types';
+import type { SteeringBacklogItem, SteeringChangeRecord, SteeringProjection } from '../types';
 
 interface SteeringPanelProps {
   sessionId: string;
   busy: boolean;
+  /**
+   * Hand a backlog item's prompt to a fresh chat. The page owns "new chat"
+   * (session id, persisted id, cleared transcript), so the panel only states the
+   * intent and the page decides how to realise it.
+   */
+  onStartTask?: (prompt: string) => void;
 }
 
 function statusChip(status: string): string {
@@ -146,7 +152,10 @@ function ChangeRow({
           ) : null}
         </>
       ) : null}
-      {change.decision?.reason ? <div className="steering-reason">{change.decision.reason}</div> : null}
+      {change.decision?.reason &&
+      change.decision.reason.trim() !== change.assessment?.rationale?.trim() ? (
+        <div className="steering-reason">{change.decision.reason}</div>
+      ) : null}
       {change.decision?.escalations?.length ? (
         <div className="steering-escalation">
           Why this needs you: {escalationTexts(change.decision.escalations).join(' · ')}
@@ -228,7 +237,7 @@ function ChangeRow({
   );
 }
 
-export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
+export default function SteeringPanel({ sessionId, busy, onStartTask }: SteeringPanelProps) {
   const [view, setView] = useState<SteeringProjection | null>(null);
   const [runs, setRuns] = useState<
     Array<{ runId: string; status: string; goal: string; stale?: boolean }>
@@ -237,10 +246,13 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
   const [text, setText] = useState('');
   const [discuss, setDiscuss] = useState('');
   const [answer, setAnswer] = useState('');
+  const [answerSource, setAnswerSource] = useState<'model' | 'deterministic' | ''>('');
   const [receipt, setReceipt] = useState('');
   const [error, setError] = useState('');
   const [sending, setSending] = useState(false);
+  const guidanceRef = useRef<HTMLTextAreaElement>(null);
   const [copied, setCopied] = useState('');
+  const [backlogBusy, setBacklogBusy] = useState('');
 
   // P2.2 cross-surface continuity: the same durable run is readable from the
   // dashboard, the CLI and any gateway sender. The picker lists every run this
@@ -311,7 +323,10 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
       // authority to change the plan.
       if (intentHint === 'question') {
         const answered = await steeringDiscuss({ runId: activeRunId, question: value });
-        if (answered.ok) setAnswer(answered.answer ?? '');
+        if (answered.ok) {
+          setAnswer(answered.answer ?? '');
+          setAnswerSource(answered.source ?? '');
+        }
       }
     }
     setSending(false);
@@ -333,7 +348,10 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     if (result.projection) setView(result.projection);
     if (choice === 'question' && result.change) {
       const answered = await steeringDiscuss({ runId: activeRunId, question: result.change.rawText });
-      if (answered.ok) setAnswer(answered.answer ?? '');
+      if (answered.ok) {
+        setAnswer(answered.answer ?? '');
+        setAnswerSource(answered.source ?? '');
+      }
     }
   };
 
@@ -363,13 +381,36 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     if (!question) return;
     setError('');
     setAnswer('…');
+    setAnswerSource('');
     const result = await steeringDiscuss({ runId: activeRunId, question });
     if (!result.ok) {
       setAnswer('');
       setError(result.error ?? 'Could not answer that question.');
     } else {
       setAnswer(result.answer ?? '');
+      setAnswerSource(result.source ?? '');
     }
+  };
+
+  /**
+   * Move the read-only answer's question into the guidance field.
+   *
+   * The button used to set a textarea that was not rendered while this chat's
+   * turn was busy, so it looked like it did nothing. The field is now always
+   * available during a live run; this moves the text there, focuses it, and
+   * says plainly that it has not been sent yet.
+   */
+  const promote = () => {
+    const value = discuss.trim();
+    if (!value) return;
+    setText(value);
+    setDiscuss('');
+    setAnswer('');
+    setAnswerSource('');
+    setReceipt(
+      '🧭 Moved the question into the guidance field — edit it into an instruction, then press Send guidance.',
+    );
+    requestAnimationFrame(() => guidanceRef.current?.focus());
   };
 
   const capture = async (changeId: string) => {
@@ -383,20 +424,63 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
     void refresh();
   };
 
-  const createTask = async (backlogId: string) => {
-    const result = await steeringBacklog({ runId: activeRunId, backlogId, action: 'create-task' });
+  const createTask = async (item: SteeringBacklogItem) => {
+    setBacklogBusy(item.id);
+    setError('');
+    const result = await steeringBacklog({ runId: activeRunId, backlogId: item.id, action: 'create-task' });
+    setBacklogBusy('');
     if (!result.ok) {
       setError(result.error ?? 'Could not prepare the task.');
       return;
     }
-    setReceipt(`🗂 Task prepared: ${result.command ?? result.prompt ?? ''}`);
+    setReceipt(
+      item.status === 'scheduled'
+        ? '🗂 Command copied again — this task is still waiting for you to start it.'
+        : '🗂 Task prepared and its command copied. Start it in a new chat when ready.',
+    );
+    if (result.projection) setView(result.projection);
     try {
       await navigator.clipboard?.writeText(result.command ?? result.prompt ?? '');
-      setCopied(backlogId);
+      setCopied(item.id);
     } catch {
       setCopied('');
     }
     void refresh();
+  };
+
+  /**
+   * "Start as new task": mark the item scheduled (the same durable handoff as
+   * Create task), then hand its prompt to a fresh chat. The prompt is the
+   * server's canonical one, so the new chat says exactly what the backlog holds.
+   */
+  const startTask = async (item: SteeringBacklogItem) => {
+    setBacklogBusy(item.id);
+    setError('');
+    const result = await steeringBacklog({ runId: activeRunId, backlogId: item.id, action: 'create-task' });
+    setBacklogBusy('');
+    if (!result.ok) {
+      setError(result.error ?? 'Could not prepare the task.');
+      return;
+    }
+    if (result.projection) setView(result.projection);
+    setReceipt('🧭 Starting a new chat with this task…');
+    onStartTask?.(
+      result.prompt ?? [item.title, item.description].filter(Boolean).join('\n\n'),
+    );
+  };
+
+  const dismissTask = async (item: SteeringBacklogItem) => {
+    setBacklogBusy(item.id);
+    setError('');
+    const result = await steeringBacklog({ runId: activeRunId, backlogId: item.id, action: 'dismiss' });
+    setBacklogBusy('');
+    if (!result.ok) {
+      setError(result.error ?? `Could not dismiss ${item.id}.`);
+      return;
+    }
+    setReceipt(`🗂 ${item.id} dismissed — it stays in the run journal.`);
+    if (result.projection) setView(result.projection);
+    else void refresh();
   };
 
   // P3.1: closing is only offered for a stale run; the server refuses a live
@@ -415,12 +499,24 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
 
   if (!view) return null;
   if (!view.enabled) return null;
+  // A fresh chat has no run of its own, even when the durable store still lists
+  // older runs. Rendering this panel then put a dead guidance composer above the
+  // normal task box, and its Pause/Stop buttons targeted a run id that did not
+  // exist yet.
+  if (!view.run) return null;
+
+  // The chat composer is the guidance input while THIS run is live. Keeping a
+  // second guidance box here made the dashboard show three text fields at once
+  // (panel guidance, read-only discuss, main composer) for one task.
+  const currentRunBusy = busy && activeRunId === sessionId;
+  const runActive = view.run.status === 'running' || view.run.status === 'paused';
 
   const counts = view.counts;
   const open = view.changes.filter(
     (change) => change.status !== 'applied' && change.status !== 'rejected' && change.status !== 'withdrawn',
   );
   const recentApplied = view.changes.filter((change) => change.status === 'applied').slice(-4).reverse();
+  const visibleBacklog = view.backlog.filter((item) => item.status !== 'dismissed');
   const plan = view.plan;
   const done = plan?.steps.filter((step) => step.status === 'done').length ?? 0;
 
@@ -473,37 +569,46 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
         {view.metrics.lowConfidenceCount} low-confidence assessments
       </div>
 
-      <div className="steering-compose">
-        <textarea
-          className="steering-input"
-          value={text}
-          maxLength={8000}
-          rows={2}
-          placeholder="Guide the run: add a requirement, correct an assumption, say what not to touch…"
-          onChange={(event) => setText(event.target.value)}
-          aria-label="Guidance text"
-        />
-        <div className="steering-actions">
-          <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('guidance')}>
-            Send guidance
-          </button>
-          <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('question')}>
-            Ask a question
-          </button>
-          <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('new_task')}>
-            New task
-          </button>
-          <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('pause')}>
-            ⏸ Pause run
-          </button>
-          <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('stop')}>
-            ⏹ Stop run
-          </button>
+      {!runActive ? (
+        <div className="steering-compose-hint admin-hint">
+          This run is {view.run.status}; guidance is closed. Start a new turn to steer it.
         </div>
-        <div className="admin-hint">
-          Guidance is assessed, then applied at the next safe point. New tasks go to the backlog, never this run.
+      ) : (
+        <div className="steering-compose">
+          <textarea
+            ref={guidanceRef}
+            className="steering-input"
+            value={text}
+            maxLength={8000}
+            rows={2}
+            placeholder="Guide the run: add a requirement, correct an assumption, say what not to touch…"
+            onChange={(event) => setText(event.target.value)}
+            aria-label="Guidance text"
+          />
+          <div className="steering-actions">
+            <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('guidance')}>
+              Send guidance
+            </button>
+            <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('question')}>
+              Ask a question
+            </button>
+            <button type="button" className="admin-refresh-btn" disabled={sending || !text.trim()} onClick={() => void send('new_task')}>
+              New task
+            </button>
+            <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('pause')}>
+              ⏸ Pause run
+            </button>
+            <button type="button" className="admin-refresh-btn" disabled={sending} onClick={() => void control('stop')}>
+              ⏹ Stop run
+            </button>
+          </div>
+          <div className="admin-hint">
+            {currentRunBusy
+              ? 'The chat composer below also adds to this run. These buttons work while it is busy.'
+              : 'Guidance is assessed, then applied at the next safe point. New tasks go to the backlog, never this run.'}
+          </div>
         </div>
-      </div>
+      )}
 
       <div className="steering-live" aria-live="polite" role="status">
         {receipt}
@@ -543,52 +648,56 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
         </details>
       ) : null}
 
-      <div className="steering-discuss">
-        <label className="admin-hint" htmlFor={`steering-discuss-${sessionId}`}>
-          Discuss (read-only — never changes the plan)
-        </label>
-        <div className="steering-actions">
-          <input
-            id={`steering-discuss-${sessionId}`}
-            className="steering-input"
-            value={discuss}
-            placeholder="e.g. what is left, and why is step 4 blocked?"
-            onChange={(event) => setDiscuss(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                void ask();
-              }
-            }}
-          />
-          <button type="button" className="admin-refresh-btn" disabled={!discuss.trim()} onClick={() => void ask()}>
-            Ask
-          </button>
-        </div>
-        {answer ? (
-          <div className="steering-answer">
-            {answer}
-            <div className="steering-actions">
-              <button
-                type="button"
-                className="chat-chip"
-                onClick={() => {
-                  setText(discuss);
-                  setDiscuss('');
-                }}
-              >
-                Promote to guidance
-              </button>
-            </div>
+      <details className="steering-discuss">
+        <summary className="admin-hint">Ask about this run (read-only — never changes the plan)</summary>
+        <div className="steering-discuss-body">
+          <div className="steering-actions">
+            <input
+              id={`steering-discuss-${sessionId}`}
+              className="steering-input"
+              value={discuss}
+              aria-label="Read-only question about this run"
+              placeholder="e.g. what is left, and why is step 4 blocked?"
+              onChange={(event) => setDiscuss(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  void ask();
+                }
+              }}
+            />
+            <button type="button" className="admin-refresh-btn" disabled={!discuss.trim()} onClick={() => void ask()}>
+              Ask
+            </button>
           </div>
-        ) : null}
-      </div>
+          {answer ? (
+            <div className="steering-answer">
+              {answer}
+              {answerSource === 'deterministic' ? (
+                <div className="admin-hint">
+                  Answered from the run record — the model was unavailable for this question.
+                </div>
+              ) : null}
+              <div className="steering-actions">
+                <button
+                  type="button"
+                  className="chat-chip"
+                  disabled={!discuss.trim()}
+                  onClick={promote}
+                >
+                  Promote to guidance
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </div>
+      </details>
 
-      {view.backlog.length > 0 ? (
+      {visibleBacklog.length > 0 ? (
         <div className="steering-backlog">
           <span className="admin-hint">Backlog (separate tasks — never absorbed into this run)</span>
           <ul className="steering-list">
-            {view.backlog.slice(-8).map((item) => (
+            {visibleBacklog.slice(-8).map((item) => (
               <li key={item.id} className="steering-row">
                 <div className="steering-row-head">
                   <span className="steering-id">{item.id}</span>
@@ -600,10 +709,28 @@ export default function SteeringPanel({ sessionId, busy }: SteeringPanelProps) {
                   <button
                     type="button"
                     className="admin-refresh-btn"
-                    disabled={item.status !== 'open'}
-                    onClick={() => void createTask(item.id)}
+                    disabled={backlogBusy === item.id}
+                    onClick={() => void createTask(item)}
                   >
-                    Create task
+                    {item.status === 'scheduled' ? 'Copy task again' : 'Create task'}
+                  </button>
+                  {onStartTask ? (
+                    <button
+                      type="button"
+                      className="admin-refresh-btn"
+                      disabled={backlogBusy === item.id}
+                      onClick={() => void startTask(item)}
+                    >
+                      Start as new task
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    className="admin-refresh-btn"
+                    disabled={backlogBusy === item.id}
+                    onClick={() => void dismissTask(item)}
+                  >
+                    Dismiss
                   </button>
                   {copied === item.id ? <span className="admin-hint">command copied</span> : null}
                 </div>

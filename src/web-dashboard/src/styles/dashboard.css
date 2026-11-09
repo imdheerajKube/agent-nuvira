@@ -9129,6 +9129,21 @@ html[data-compact='on'] .empty-state-mark {
   flex-direction: column;
   gap: 6px;
 }
+.steering-compose-hint {
+  padding: 8px 10px;
+  border: 1px dashed var(--border, #2a2f3a);
+  border-radius: 8px;
+}
+.steering-discuss > summary {
+  cursor: pointer;
+  user-select: none;
+}
+.steering-discuss-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
 .steering-input {
   width: 100%;
   box-sizing: border-box;

@@ -709,10 +709,12 @@ describe('ChatPage', () => {
 
     fireEvent.change(screen.getByPlaceholderText(/Message the agent/), { target: { value: 'hi' } });
     fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
-    await waitFor(() => expect(screen.getByRole('button', { name: /Working/ })).toBeTruthy());
+    await waitFor(() => expect(screen.getByRole('button', { name: /Add to task/ })).toBeTruthy());
     // The send button shows the busy label while a turn is in flight.
-    expect((screen.getByRole('button', { name: /Working/ }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByPlaceholderText(/Message the agent/) as HTMLInputElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: /Add to task/ }) as HTMLButtonElement).disabled).toBe(true);
+    // The composer stays writable while a turn runs — that text is the steering
+    // lane, so only the send button is locked.
+    expect((screen.getByPlaceholderText(/Add to the current task/) as HTMLTextAreaElement).disabled).toBe(false);
 
     resolveSend(OK_RESPONSE);
     await waitFor(() => expect(screen.getByText('I checked the repo — the build is green.')).toBeTruthy());
@@ -1378,6 +1380,7 @@ describe('ChatPage', () => {
       ok: true,
       project: { path: '/tmp/my-app', name: 'my-app', fileCount: 42, symbolCount: 120, truncated: false },
     });
+    const detach = vi.spyOn(dashboardAPI, 'detachProject').mockResolvedValue({ ok: true });
     render(<ChatPage />);
     await waitFor(() => expect(screen.getByPlaceholderText(/Message the agent/)).toBeTruthy());
 
@@ -1386,7 +1389,7 @@ describe('ChatPage', () => {
     fireEvent.click(screen.getByRole('button', { name: /my-app/ }));
 
     // Attached state shows the project + its stats.
-    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/my-app'));
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/my-app', expect.any(String)));
     await waitFor(() => expect(screen.getByText('my-app')).toBeTruthy());
     expect(screen.getByText(/42 files · 120 symbols/)).toBeTruthy();
 
@@ -1399,6 +1402,7 @@ describe('ChatPage', () => {
     // Detaching clears the bar back to the picker.
     fireEvent.click(screen.getByRole('button', { name: /detach/ }));
     await waitFor(() => expect(screen.getByText(/Select Project Folder/)).toBeTruthy());
+    expect(detach).toHaveBeenCalled();
   });
 
   it('Phase 4 — the session sidebar lists past conversations and resumes them', async () => {
@@ -2088,7 +2092,7 @@ describe('Cluster G — the temporary (scratch) workspace', () => {
 
     // One click keeps it: the folder is attached to this chat.
     fireEvent.click(screen.getByText(/Use as my project path/));
-    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/nuvira-scratch/chat-1'));
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/nuvira-scratch/chat-1', expect.any(String)));
     await waitFor(() => expect(screen.queryByTestId('chat-scratch-notice')).toBeNull());
   });
 
@@ -2115,7 +2119,7 @@ describe('Cluster G — the temporary (scratch) workspace', () => {
     });
     fireEvent.submit(screen.getByPlaceholderText(/Message the agent/).closest('form')!);
 
-    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/named-app'));
+    await waitFor(() => expect(attach).toHaveBeenCalledWith('/tmp/named-app', expect.any(String)));
     expect(screen.queryByTestId('chat-scratch-notice')).toBeNull();
   });
 });

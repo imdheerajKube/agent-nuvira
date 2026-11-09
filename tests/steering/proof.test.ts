@@ -178,6 +178,34 @@ describe('stale run reaping (P3.1)', () => {
     expect(readJournal(runId).some((event) => event.type === 'run.closed_stale')).toBe(true);
   });
 
+  it('projects derived staleness so a surface can actually offer the close action', () => {
+    const runId = freshRun();
+    submitGuidance({ runId, text: 'Create a projected-stale fixture.', now: 1_000 });
+    patchRun(
+      runId,
+      {
+        status: 'running',
+        updatedAt: new Date(1_000).toISOString(),
+        lease: {
+          pid: 999_997,
+          hostname: 'test-host',
+          acquiredAt: new Date(1_000).toISOString(),
+          expiresAt: new Date(5_000).toISOString(),
+        },
+      },
+      1_000,
+    );
+
+    // The dashboard banner is gated on view.run.stale. Reading the raw manifest
+    // here left that banner unreachable, so the close action could never appear.
+    const view = projectRun(runId);
+    expect(view.run?.stale).toBe(true);
+    expect(view.run?.staleSince).toBe(new Date(5_000).toISOString());
+
+    closeSteeringRun(runId, 'user', 10_000);
+    expect(projectRun(runId).run?.stale).toBe(false);
+  });
+
   it('refuses to close a run with a live lease', () => {
     const runId = freshRun();
     submitGuidance({ runId, text: 'Create a live-run fixture.', now: 1_000 });

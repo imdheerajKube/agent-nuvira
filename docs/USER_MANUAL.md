@@ -311,7 +311,7 @@ nuvira dashboard stop                # graceful SIGTERM, from any terminal
 
 | Page | Route | What it is for |
 |---|---|---|
-| 💬 Chat | `/` | Dashboard console — same engine as `nuvira chat` |
+| 💬 Chat | `/chat` | Dashboard console — same engine as `nuvira chat`; the main composer plus the Guidance panel (see [steering](#steering-a-run-the-main-composer-vs-the-guidance-panel)) |
 | 📊 Overview | `/overview` | Run summary, KPIs |
 | 🔀 Execution | `/dag` | Task DAG for a pipeline |
 | 🚀 Tasks | `/tasks` | Live and past task runs |
@@ -727,6 +727,96 @@ therefore runs in a real, temporary folder and is told so plainly:
   than from the model's own claim. A reply too long for the channel (WhatsApp ~4096 characters, SMS
   1600) is written into that same workspace in full and delivered as a head plus the path, instead of
   being cut off — so a long answer is never silently truncated.
+
+### Steering a run: the main composer vs the Guidance panel
+
+While a run is busy the console shows two places to type: the normal composer (its button reads
+**🧭 Add to task**) and the **Guidance** panel. They write to the same durable guidance inbox,
+but they are not the same surface: the composer is the shortcut, the panel is the control and
+audit surface.
+
+**What “Add to task” already does.** It does not start a second turn. It performs the same core
+action as guidance — sends the text to the run's durable guidance inbox, keeps the original task
+locked, assesses the text, applies it at the next safe point, and shows a one-line receipt. For a
+simple instruction — “use the existing config loader”, “don't touch the tests”, “also update the
+README” — the composer is enough, on purpose.
+
+**What the Guidance panel adds.**
+
+1. **It shows what the system understood** — whether the text is a requirement, a correction, a
+   question or an unrelated task; how important it is; which plan steps it affects; whether it
+   conflicts with something already approved; and the confidence level.
+2. **It lets you choose the intent explicitly.** **Current task** changes the run in progress,
+   **New task** sends the item to the backlog instead of absorbing it into this run, and **Just a
+   question** answers only and never changes the plan. Everything typed into the composer is
+   treated as current-task guidance; it cannot make that distinction.
+3. **It gives you the approval step.** Guidance that is high-impact, conflicts with an approved
+   requirement, removes completed work, or is not reversible is marked *needs approval*, and the
+   panel offers **Approve / Reject / Defer / Withdraw**. A quick “Add to task” message has no such
+   review step.
+4. **It shows the result** — queued, applied, deferred, rejected, stale or failed; the plan diff
+   (what was added, changed, removed or cancelled); the actual directive the executor received;
+   why something needs your approval; and failures instead of a silently lost instruction.
+5. **It steers runs that did not start in this chat.** A run can be started by the CLI or another
+   dashboard session; the panel lists those runs and can steer them. The composer only talks to
+   the current chat session.
+6. **It handles the end states** — close a stale run whose lease expired, send rejected or stale
+   guidance to the backlog, and turn a backlog item into its own task: copy its command, or open a
+   fresh chat with the prompt already filled in.
+
+**What it looks like.** Four states of the panel (sample data):
+
+![An assessed change in the Guidance panel](screenshots/steering-assessed.png)
+
+*Assessed — what the text was understood as (relation, kind, impact, confidence, affected
+step), with only the actions still open.*
+
+![A change that needs approval in the Guidance panel](screenshots/steering-approval.png)
+
+*Needs approval — a high-impact change that removes completed work, with the exact effect of
+approving it.*
+
+![Backlog items in the Guidance panel](screenshots/steering-backlog.png)
+
+*Backlog — a new task kept out of the run, with its own **Create task**, **Start as new task** and **Dismiss** actions.*
+
+![A stale change in the Guidance panel](screenshots/steering-stale.png)
+
+*Stale — the plan moved before the change could apply; the item is kept, not silently dropped,
+and can still be sent to the backlog.*
+
+**What the Guidance buttons mean.**
+
+| Button | What it does |
+|---|---|
+| **Send guidance** | Treat the text as a change to the current run |
+| **Ask a question** | Answer only; no plan change |
+| **New task** | Not part of the current run; put it in the backlog |
+| **Pause run** | Hold at the next safe point; the run stays resumable |
+| **Stop run** | End at the next safe point; the plan and queue are preserved |
+| **Current task / New task / Just a question** | Appears when the system is unsure how to interpret something you submitted |
+| **Approve / Reject / Defer / Withdraw** | Decide a change that needs approval |
+| **Send to backlog** | Keep a rejected, stale or failed item as future work instead of losing it |
+| **Create task / Copy task again** | Prepare the backlog item's prompt and copy its `nuvira chat` command. Clicking again re-copies it — it does not start anything, so a scheduled item stays actionable |
+| **Start as new task** | Open a fresh chat with the item's prompt filled in (not sent), ready for you to choose the folder and press send |
+| **Dismiss** | Remove the item from the backlog list; the run journal keeps the record |
+| **Close stale run** | Cleanly close a run that is no longer alive |
+| **Ask about this run** | Read-only Q&A; it cannot change the plan. *Promote to guidance* moves the question into the guidance field for editing — it is not sent automatically |
+
+**Why it can feel redundant.** For a straightforward running task it is redundant on purpose: the
+composer is the one-box shortcut. The panel exists for the cases where a one-line “add to task” is
+too blunt — a new task, a question, a high-impact change, an approval decision, or a run started
+somewhere else.
+
+**While the turn is busy.** The Guidance panel keeps its controls available, and the main composer
+also adds to the same run; both lanes feed one durable guidance queue. If the panel shows a run that
+is paused or running outside this chat's current busy turn, only the panel's lane applies to that run.
+
+The same engine is on the CLI: `nuvira steer` (`--text`, `--question`, `--new-task`,
+`--approve|--reject|--defer|--withdraw`, `--pause`, `--stop`, `--close`, `--proof`, `--list`) — see
+§3.5b of the command reference in [COMMANDS.md](COMMANDS.md#35b-mid-run-steering--guide-a-run-that-is-already-working).
+Steering is on by default; a deployment that must never mutate plans turns it off with
+`nuvira config set steering.enabled false` or `NUVIRA_STEERING=0`.
 
 ### Run it at login (optional)
 
@@ -1656,7 +1746,9 @@ nuvira retrieval stats
 
 | You want to … | Dashboard | CLI |
 |---|---|---|
-| Chat with the agent | Chat (`/`) | `nuvira chat` |
+| Chat with the agent | Chat (`/chat`) | `nuvira chat` |
+| Steer a busy run (guidance, question, new task, pause/stop) | Chat (`/chat`) — Guidance panel | `nuvira steer` |
+| Approve or reject a high-impact change | Chat (`/chat`) — Guidance panel | `nuvira steer --approve\|--reject\|--defer\|--withdraw <changeId>` |
 | Run a pipeline | Tasks (`/tasks`), Execution (`/dag`) | `nuvira execute` |
 | See why a model was chosen | Routing (`/routing`) | `nuvira models excluded`, `nuvira learn stats` |
 | Manage providers/keys | Environment (`/env`), Models (`/models`) | `nuvira config`, `nuvira config vault` |

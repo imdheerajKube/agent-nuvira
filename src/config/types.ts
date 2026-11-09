@@ -150,13 +150,13 @@ export interface HistoryConfig {
  * Set via `nuvira config set memory.<key> <value>` or directly in .nuviraconfig.json.
  */
 /**
- * Mid-run steering. OFF by default: the rollback contract is one flag.
+ * Mid-run steering. ON by default; the rollback contract is still one flag.
  *
  * See docs/ADR-steering-control-plane.md and src/steering/. A run's plan is only
  * mutated at a safe point, by the run process, through an immutable plan version.
  */
 export interface SteeringConfig {
-  /** Enable the durable guidance channel + governed plan changes. Default false. */
+  /** Enable the durable guidance channel + governed plan changes. Default true. */
   enabled?: boolean;
   /** Below this confidence the user is asked to confirm the interpretation. */
   minConfidence?: number;
@@ -580,7 +580,7 @@ export interface BuffConfig {
   history?: HistoryConfig;
   /** Memory / vector-store configuration */
   memory?: MemoryConfig;
-  /** Mid-run interactive guidance (steering). OFF by default. */
+  /** Mid-run interactive guidance (steering). ON by default; one flag disables it. */
   steering?: SteeringConfig;
   /** Per-provider pricing overrides for Auto model routing cost scoring */
   pricing?: PricingConfigMap;

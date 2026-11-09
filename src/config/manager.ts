@@ -92,10 +92,11 @@ const DEFAULT_CONFIG: BuffConfig = {
   memory: {
     vectorBackend: 'auto',
   },
-  // Mid-run steering is OPT-IN. A feature that can change a running plan must
-  // default to off, and rollback must be one flag (see `src/steering/`).
+  // Mid-run steering is ON by default (the dashboard's guidance lane is part
+  // of the product). Rollback is still one flag: set `steering.enabled: false`
+  // or NUVIRA_STEERING=0 (see `src/steering/`).
   steering: {
-    enabled: false,
+    enabled: true,
   },
   // Empty by default: the fallback chain is derived at runtime from what the
   // user has configured + verified (rankAvailableProviders), never a fixed

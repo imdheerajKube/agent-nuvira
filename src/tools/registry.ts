@@ -454,14 +454,34 @@ const buildArgs: ZodType = ACTION_BY_INTENT.create.inputSchema;
 const resumeArgs: ZodType = ACTION_BY_INTENT.continue.inputSchema;
 const repairArgs: ZodType = ACTION_BY_INTENT.fix.inputSchema;
 
+/**
+ * A clarification prompt is a UI question, not a document. The live trace sent
+ * one so large that the provider cut the arguments off and the question never
+ * reached the user; these bounds make the wire shape explicit in the schema the
+ * model is given, and reject an overlong payload with an actionable error.
+ */
+const ASK_QUESTION_MAX_CHARS = 500;
+const ASK_CHOICE_LABEL_MAX_CHARS = 80;
+const ASK_CHOICE_DESCRIPTION_MAX_CHARS = 160;
+
 /** Clarify contract: question + ≤4 choices + multi_select. */
 const askUserSchema = z.object({
-  question: z.string().describe('The clarifying question to ask the user'),
+  question: z
+    .string()
+    .trim()
+    .min(1)
+    .max(ASK_QUESTION_MAX_CHARS)
+    .describe('The clarifying question to ask the user — under 500 characters; never paste file contents or code'),
   choices: z
     .array(
       z.object({
-        label: z.string().describe('Short choice label'),
-        description: z.string().optional().describe('Optional one-line detail shown on focus'),
+        label: z.string().trim().min(1).max(ASK_CHOICE_LABEL_MAX_CHARS).describe('Short choice label'),
+        description: z
+          .string()
+          .trim()
+          .max(ASK_CHOICE_DESCRIPTION_MAX_CHARS)
+          .optional()
+          .describe('Optional one-line detail shown on focus'),
       }),
     )
     .min(2)
@@ -1051,6 +1071,10 @@ registerTool({
   endsAgentStep: false,
   run: async (args, ctx) => {
     const { question, choices, multi_select } = askUserSchema.parse(args);
+    // Captured BEFORE the repetition gate: an unanswered TOOL-DEMANDED
+    // confirmation is not a completed question, so it is allowed exactly one
+    // retry instead of being suppressed as a repeat.
+    const pending = ctx.pendingConfirmation;
     // ── Stage 2: REPETITION gate — never re-ask a question already answered ──
     // Checked FIRST, before the authorization suppression below, because asking
     // the same question twice is a defect on its own terms whatever the request
@@ -1064,8 +1088,26 @@ registerTool({
     // user asking why it kept asking. Irreversible choices are exempt: "which of
     // these two files should I delete?" is a genuine new decision each time.
     const priorAsks = ctx.runTrace?.priorAskMatches(question) ?? [];
-    if (priorAsks.length > 0 && !IRREVERSIBLE_ACTION_RE.test(question)) {
-      const answer = ctx.runTrace?.priorAnswer(question);
+    const priorAnswer = ctx.runTrace?.priorAnswer(question);
+    const unansweredGateAsks = pending
+      ? priorAsks.filter((ask) => ask.shown && !ask.answer).length
+      : 0;
+    // Two unanswered gate confirmations is a real stop: the action remains
+    // blocked and the model must say so, not assume a yes.
+    if (pending && !priorAnswer && unansweredGateAsks >= 2) {
+      return (
+        'The approval question was shown twice and was NOT answered. The action is STILL BLOCKED — ' +
+        'do not write anything, do not retry with confirm:true, and do not assume approval. Stop and tell ' +
+        'the user exactly which action needs their approval.'
+      );
+    }
+    // A gate confirmation that was shown but unanswered gets ONE retry. Without
+    // this, a skipped/cancelled question was treated as a repeated question and
+    // the model was told to proceed on its own judgment — the exact path that
+    // abandoned the live website edits.
+    const gateRetry = Boolean(pending) && !priorAnswer && unansweredGateAsks === 1;
+    if (priorAsks.length > 0 && !IRREVERSIBLE_ACTION_RE.test(question) && !gateRetry) {
+      const answer = priorAnswer;
       ctx.runTrace?.recordAsk(question, false, answer);
       ctx.emit?.('autonomy:repeat-suppressed', {
         question,
@@ -1095,7 +1137,6 @@ registerTool({
     // must not be swallowed by this gate — that is the deadlock fixed in
     // ToolContext.pendingConfirmation. Consume the flag and fall through so the
     // question reaches the user once.
-    const pending = ctx.pendingConfirmation;
     if (
       !pending &&
       // Cluster G — an UNSCOPED turn is asking for a required INPUT, not for
@@ -1173,6 +1214,13 @@ registerTool({
     if (answer.unattended) {
       ctx.runTrace?.recordAssumption(question, picked);
       ctx.emit?.('autonomy:assumed-default', { question, assumed: picked }, 'tool-loop');
+      if (pending) {
+        return (
+          'No user was reachable to approve this action, so it is STILL BLOCKED — the unattended ' +
+          'default is NOT approval. Do not write anything and do not retry with confirm:true. Stop and ' +
+          'tell the user exactly which action needs their approval.'
+        );
+      }
       return (
         `No user was reachable to answer, so "${picked}" was ASSUMED — it is NOT their answer. ` +
         (answer.custom ??
@@ -1194,6 +1242,14 @@ registerTool({
     // what to do instead: state an assumption, or stop.
     if (!picked && !answer.custom) {
       ctx.runTrace?.recordAsk(question, true, '');
+      if (pending) {
+        return (
+          'The approval question was shown but NOT answered — the action is STILL BLOCKED. ' +
+          'Do not write anything, do not assume approval, and do not retry with confirm:true. ' +
+          'Ask the same question once more as a SHORT ask_user (question under 500 characters, 2 choices). ' +
+          'If it is not answered again, stop and tell the user exactly what needs approval.'
+        );
+      }
       return (
         'The question was shown and the user did NOT answer it (they skipped it, or the turn was cancelled ' +
         'while it waited). Do not record it as their decision, and do not re-ask the same question. Either pick ' +

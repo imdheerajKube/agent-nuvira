@@ -16,6 +16,7 @@ import {
   readContract,
   readJournal,
   readRun,
+  runStaleness,
 } from './store.js';
 import type {
   ApprovalRecord,
@@ -151,6 +152,9 @@ export function projectRun(runId: string, options: { enabled?: boolean } = {}): 
   const backlog = run ? readBacklog(runId) : [];
   const contract = run ? readContract(runId) : null;
   const recentEvents = run ? readJournal(runId, 60).reverse() : [];
+  // Derived at read time, never persisted: a surface cannot offer "close stale
+  // run" unless the projection says the lease is actually dead.
+  const staleness = run ? runStaleness(run) : null;
   const count = (status: ChangeRequestRecord['status']): number =>
     changes.filter((c) => c.status === status).length;
   const open = changes.filter(
@@ -162,7 +166,14 @@ export function projectRun(runId: string, options: { enabled?: boolean } = {}): 
   ).length;
   return {
     enabled: options.enabled ?? true,
-    run,
+    run:
+      run && staleness
+        ? {
+            ...run,
+            stale: staleness.stale,
+            ...(staleness.staleSince ? { staleSince: staleness.staleSince } : {}),
+          }
+        : null,
     plan,
     contract,
     changes,

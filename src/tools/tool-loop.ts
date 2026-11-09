@@ -120,6 +120,7 @@ import { faultAt } from '../runtime/fault-injection.js';
 import {
   detectPermissionSeeking,
   isAffirmativeReply,
+  isTaskRefinement,
   replyAsksTheReader,
   requestAuthorizesWrites,
   requestForbidsWrites,
@@ -2433,6 +2434,10 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // escalation itself cannot loop.
   let malformedToolCalls = 0;
   let malformedCallNudges = 0;
+  // The most recent malformed call's name. A payload that fails to arrive is
+  // remedied differently for a question than for a document: ask_user needs a
+  // SHORT question, not `write_file` in sections.
+  let malformedCallTool: string | undefined;
   // S5 — the plan_todo loop guard is split by ACTION (see the guard below):
   // repeated CREATES were the observed planner loop; UPDATES are the tracking
   // that keeps the user's checklist honest. Counted across the whole turn, like
@@ -2482,7 +2487,26 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
   // pass no messages (direct tool tests) get `undefined`, which preserves the
   // gate exactly as it was.
   const requestText = lastUserText(opts.messages);
-  const authorization = requestAuthorizesWrites(requestText);
+  let authorization = requestAuthorizesWrites(requestText);
+  // A CLARIFICATION CONTINUES THE ACTIVE TASK. The per-turn verdict only reads
+  // the current sentence, so "i meant as background" looks unauthorized even
+  // though it refines a plan the user is already running. Inherit the active
+  // plan's authorization — but only while it still has work open, and only for
+  // a message that actually reads as a refinement (not a question about it).
+  // This is deliberately NOT a blanket envelope: the individual gates still
+  // decide, and irreversible/external actions still ask.
+  const planForAuthorization = opts.context?.planStore?.snapshot?.() ?? null;
+  if (
+    !authorization.authorized &&
+    planForAuthorization &&
+    planForAuthorization.steps.some((step) => step.status === 'pending' || step.status === 'running') &&
+    isTaskRefinement(requestText)
+  ) {
+    authorization = {
+      authorized: true,
+      reason: 'the request refines the active plan — that work is already authorized',
+    };
+  }
   /**
    * COVERAGE LEDGER — assessment turns only (see `learning/coverage-ledger.ts`).
    *
@@ -5166,6 +5190,7 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
         // call that "ran" with no input, hid the real cause (an output-budget
         // truncation) from the model, and burned 59 round trips in one turn.
         malformedToolCalls += 1;
+        malformedCallTool = call.name;
         return {
           call,
           refuse: malformedToolCallRefusal(
@@ -6013,14 +6038,19 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
       malformedCallNudges += 1;
       stepLimit += 1;
       deps.onEvent?.(
-        `   📦 ${malformedToolCalls} calls arrived with no usable arguments — telling the model to build the artifact in sections.`,
+        malformedCallTool === 'ask_user'
+          ? `   📦 ${malformedToolCalls} calls arrived with no usable arguments — telling the model to send a SHORT question instead.`
+          : `   📦 ${malformedToolCalls} calls arrived with no usable arguments — telling the model to build the artifact in sections.`,
       );
       traceEvent({
         kind: 'gate',
         gate: 'malformed-call',
-        summary: `${malformedToolCalls} tool calls this turn carried no usable arguments (payload larger than one model output) — one bounded nudge to deliver in sections`,
+        summary:
+          malformedCallTool === 'ask_user'
+            ? `${malformedToolCalls} tool calls this turn carried no usable arguments — one bounded nudge to send a SHORT question`
+            : `${malformedToolCalls} tool calls this turn carried no usable arguments (payload larger than one model output) — one bounded nudge to deliver in sections`,
       });
-      harness.push(thread, 'malformed-call', malformedCallNudge(malformedToolCalls));
+      harness.push(thread, 'malformed-call', malformedCallNudge(malformedToolCalls, malformedCallTool));
     }
 
     if (diagnosisNudges < 1) {
@@ -7834,11 +7864,15 @@ export function malformedToolCallRefusal(
   // audit report ended up split across three files. Splitting stays as the
   // fallback for the case the cap cannot save.
   const escape =
-    opts.budgetAfter !== undefined
-      ? `Re-send the SAME call once: the output cap for this model is now ${opts.budgetAfter} tokens (it was raised because this payload did not fit), so it may still arrive whole — a document delivered in ONE file is what you want. If it is cut again, then split it: \`write_file\` the FIRST section, then \`write_file\` with mode:"append" for each further section.`
-      : 'Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call `write_file` again ' +
-        'with mode:"append" for each further section (or write a smaller file and grow it with `edit_file`). ' +
-        'Do NOT re-send this call unchanged — it cannot succeed, and every attempt is a full round trip.';
+    call.name === 'ask_user'
+      ? 'Re-send ask_user as a SMALL call: a question under 500 characters and 2–4 short labels. ' +
+        'Do NOT put file contents, code, or a long explanation in the question or a choice description — ' +
+        'that is what made the call too large to arrive.'
+      : opts.budgetAfter !== undefined
+        ? `Re-send the SAME call once: the output cap for this model is now ${opts.budgetAfter} tokens (it was raised because this payload did not fit), so it may still arrive whole — a document delivered in ONE file is what you want. If it is cut again, then split it: \`write_file\` the FIRST section, then \`write_file\` with mode:"append" for each further section.`
+        : 'Send the payload in PIECES instead of one call: `write_file` the FIRST section, then call `write_file` again ' +
+          'with mode:"append" for each further section (or write a smaller file and grow it with `edit_file`). ' +
+          'Do NOT re-send this call unchanged — it cannot succeed, and every attempt is a full round trip.';
   const escalation =
     attempt >= 3
       ? ` (This is time ${attempt} this turn that a call arrived with no usable arguments — change the SHAPE of the call, not its wording.)`
@@ -7880,7 +7914,14 @@ function toolRequiresArguments(name: string): boolean {
  * the step that produced it — so a model that keeps re-sending a payload too large
  * for one output is told the strategy, not merely that it failed again.
  */
-export function malformedCallNudge(attempts: number): string {
+export function malformedCallNudge(attempts: number, tool?: string): string {
+  if (tool === 'ask_user') {
+    return (
+      `Your last ${attempts} ask_user call(s) this turn arrived WITHOUT usable arguments — the payload did not fit in ` +
+      'one model output and was cut off. Do NOT write a document instead. Re-send ONE ask_user containing only a ' +
+      'question under 500 characters and 2–4 short labels; no file contents, code, or long description.'
+    );
+  }
   return (
     `Your last ${attempts} tool call(s) this turn arrived WITHOUT usable arguments — the payload did not fit in one ` +
     'model output and was cut off. Nothing is wrong with your plan; the DELIVERY shape is. Build the artifact in ' +

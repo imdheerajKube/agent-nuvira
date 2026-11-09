@@ -339,10 +339,18 @@ export const DEFAULT_STEERING_POLICY: SteeringPolicy = {
   maxChangesPerPlan: 5,
 };
 
+/**
+ * The run as a surface sees it: the durable manifest plus derived freshness.
+ *
+ * `stale` is never written to run.json — it is a fact about the lease at read
+ * time (see `runStaleness`), so it lives only in the read model.
+ */
+export type SteeringRunView = RunRecord & { stale?: boolean; staleSince?: string };
+
 /** The read model every surface renders. */
 export interface SteeringProjection {
   enabled: boolean;
-  run: RunRecord | null;
+  run: SteeringRunView | null;
   plan: SteeringPlan | null;
   contract: TaskContract | null;
   changes: ChangeRequestRecord[];
@@ -413,6 +421,8 @@ export interface DiscussAnswer {
   answer: string;
   context: string;
   promotedPrompt?: string;
+  /** Whether a model produced the answer or the durable record did. */
+  source: 'model' | 'deterministic';
 }
 
 /** The engine-neutral plan contract. Policy and UI never know the engine. */

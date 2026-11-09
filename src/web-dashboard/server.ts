@@ -155,6 +155,7 @@ import {
   listSteeringRuns,
   openSteeringRun,
   projectRun,
+  readRun,
   setBacklogStatus,
   steeringEnabled,
   submitSteeringGuidance,
@@ -3956,6 +3957,11 @@ function bearerToken(req: IncomingMessage): string | null {
  * These routes NEVER mutate a plan: they append a change request or an approval
  * decision. The run process applies accepted changes at its next safe point.
  */
+const STEERING_DISABLED_ERROR =
+  'Mid-run guidance is disabled on this deployment. Your message was not sent. ' +
+  'Enable it with `nuvira config set steering.enabled true` (or NUVIRA_STEERING=1) and ' +
+  'restart the dashboard, or wait for the current turn to finish and send it as the next message.';
+
 async function handleSteeringApi(
   req: IncomingMessage,
   res: ServerResponse,
@@ -3996,7 +4002,7 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/close' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
@@ -4021,7 +4027,7 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/guidance' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
@@ -4036,15 +4042,25 @@ async function handleSteeringApi(
       rawHint === 'guidance' || rawHint === 'question' || rawHint === 'new_task' ? rawHint : undefined;
     const targetStepId = typeof body.targetStepId === 'string' ? body.targetStepId : undefined;
     const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined;
-    const handleBefore = getSteeringRun(runId);
-    if (!handleBefore) {
+    if (!getSteeringRun(runId)) {
+      // Guidance attaches to an EXISTING durable run. Auto-opening one here
+      // turned a stale/fresh dashboard's Pause or Stop button into a phantom run
+      // with its own plan and guidance history.
+      const existing = readRun(runId);
+      if (!existing) {
+        writeJson(res, 404, {
+          ok: false,
+          error: `No steering run ${runId}. Start a turn before sending guidance.`,
+        });
+        return;
+      }
       openSteeringRun({
         runId,
-        goal: text.trim(),
-        cwd: process.cwd(),
-        engine: 'loop',
-        surface: 'dashboard',
-        sessionId: runId,
+        goal: existing.goal,
+        cwd: existing.cwd,
+        engine: existing.engine,
+        surface: existing.surface,
+        ...(existing.sessionId ? { sessionId: existing.sessionId } : {}),
       });
     }
     const result = submitSteeringGuidance({
@@ -4080,7 +4096,7 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/decision' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
@@ -4121,7 +4137,7 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/interpretation' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
@@ -4165,7 +4181,7 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/discuss' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
@@ -4188,14 +4204,14 @@ async function handleSteeringApi(
   if (pathname === '/api/steering/backlog' && req.method === 'POST') {
     if (!authenticate()) return;
     if (!enabled) {
-      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      writeJson(res, 400, { ok: false, error: STEERING_DISABLED_ERROR });
       return;
     }
     const body = (await readJsonBody(req)) ?? {};
     const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
     const action = typeof body.action === 'string' ? body.action.trim() : '';
-    if (!runId || (action !== 'create-task' && action !== 'capture')) {
-      writeJson(res, 400, { ok: false, error: 'runId and action=create-task|capture are required.' });
+    if (!runId || (action !== 'create-task' && action !== 'capture' && action !== 'dismiss')) {
+      writeJson(res, 400, { ok: false, error: 'runId and action=create-task|capture|dismiss are required.' });
       return;
     }
     if (action === 'capture') {
@@ -4227,13 +4243,30 @@ async function handleSteeringApi(
       writeJson(res, 404, { ok: false, error: `No backlog item ${backlogId} for this run.` });
       return;
     }
+    if (action === 'dismiss') {
+      const dismissed = setBacklogStatus(runId, item.id, 'dismissed');
+      if (!dismissed) {
+        writeJson(res, 500, { ok: false, error: 'Could not persist the dismissal.' });
+        return;
+      }
+      writeJson(res, 200, {
+        ok: true,
+        item: dismissed,
+        projection: projectRun(runId, { enabled: true }),
+      });
+      return;
+    }
+    // Idempotent: clicking again re-copies the same prompt. It does not start
+    // anything, so a `scheduled` item must stay actionable rather than becoming
+    // a one-way state with no visible next step.
     const prepared = createBacklogTaskPrompt(item);
-    setBacklogStatus(runId, item.id, 'scheduled');
+    const scheduled = setBacklogStatus(runId, item.id, 'scheduled');
     writeJson(res, 200, {
       ok: true,
       command: prepared.command,
       prompt: prepared.prompt,
-      item: { ...item, status: 'scheduled' },
+      item: scheduled ?? { ...item, status: 'scheduled' },
+      projection: projectRun(runId, { enabled: true }),
     });
     return;
   }
@@ -8275,9 +8308,36 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
     return;
   }
 
-  // POST /api/projects/attach — validate a directory and build (or reuse) its
-  // bounded context bundle. The bundle itself stays server-side; it is
-  // injected into chat turns that carry this projectPath.
+  // POST /api/projects/detach — clear the folder bound to a conversation.
+  // Without this, detaching in the composer would be undone by the server's
+  // session fallback on the very next turn.
+  if (pathname === '/api/projects/detach' && req.method === 'POST') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (!roleCan(session.role, 'routing.operate')) {
+        writeJson(res, 403, { ok: false, error: `Access denied — role '${session.role}' cannot detach projects.` });
+        return;
+      }
+      const body = await readJsonBody(req);
+      const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : '';
+      if (!sessionId) {
+        writeJson(res, 400, { ok: false, error: 'Missing sessionId — expected { sessionId: string }.' });
+        return;
+      }
+      chatConsole.clearProjectPath(sessionId);
+      writeJson(res, 200, { ok: true });
+    })();
+    return;
+  }
+
+  // POST /api/projects/attach — validate a directory, build (or reuse) its
+  // bounded context bundle, and bind it to the conversation. The bundle itself
+  // stays server-side; it is injected into chat turns that carry this
+  // projectPath (or whose session already has it).
   if (pathname === '/api/projects/attach' && req.method === 'POST') {
     void (async () => {
       const session = adminSessions.validate(bearerToken(req));
@@ -8291,6 +8351,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       }
       const body = await readJsonBody(req);
       const path = typeof body?.path === 'string' ? body.path.trim() : '';
+      const sessionId = typeof body?.sessionId === 'string' ? body.sessionId.trim() : '';
       if (!path) {
         writeJson(res, 400, { ok: false, error: 'Missing path — expected { path: string }.' });
         return;
@@ -8310,6 +8371,9 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
         return;
       }
       recentProjects.add(bundle.path);
+      // Bind it BEFORE the response: the next turn can then resolve the folder
+      // from the conversation even if the browser never re-sends projectPath.
+      if (sessionId) chatConsole.setProjectPath(sessionId, bundle.path);
       writeJson(res, 200, {
         ok: true,
         project: {

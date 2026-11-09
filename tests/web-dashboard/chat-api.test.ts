@@ -35,6 +35,9 @@ process.env.NUVIRA_CONFIG_DIR = join(testDir, '.nuvira');
 // HOME pin keeps homedir()-resolved stores (SkillStore, drafts) off the
 // developer's real ~/.nuvira — the P6a accept path writes both.
 process.env.HOME = testDir;
+// Steering is ON by default; pin it so the guidance-route tests cannot be
+// skipped by a developer's shell-wide NUVIRA_STEERING=0.
+process.env.NUVIRA_STEERING = '1';
 
 const { createDashboardServer, setChatConsoleForTest, runChatRetryDrainForTest } = await import('../../src/web-dashboard/server.js');
 const { ChatConsole } = await import('../../src/web-dashboard/chat-console.js');
@@ -1311,6 +1314,43 @@ describe('/api/projects — P3 project attach', () => {
     expect(badBody.error).not.toMatch(/not a readable directory/i);
   });
 
+  it('binds an attached folder to its conversation, so the next turn is scoped without re-sending it', async () => {
+    const sessionId = 'attach-bound-session';
+    const attach = await authedFetch('/api/projects/attach', 'POST', { path: testDir, sessionId });
+    expect(attach.status).toBe(200);
+
+    // `null` is the explicit "nothing attached this request" signal; omit the
+    // key and the test harness injects its own fixture project.
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId,
+      message: 'assess the folder I just attached',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { workspaceSource?: string; workspacePath?: string };
+    expect(d.workspaceSource).toBe('session');
+    expect(d.workspacePath).toBe(testDir);
+
+    const call = engine.calls.find((c) => c.message === 'assess the folder I just attached');
+    expect((call?.opts as { projectPath?: string } | undefined)?.projectPath).toBe(testDir);
+  });
+
+  it('detaching clears the conversation binding', async () => {
+    const sessionId = 'attach-detach-session';
+    expect((await authedFetch('/api/projects/attach', 'POST', { path: testDir, sessionId })).status).toBe(200);
+    expect((await authedFetch('/api/projects/detach', 'POST', { sessionId })).status).toBe(200);
+
+    const res = await authedFetch('/api/chat', 'POST', {
+      sessionId,
+      message: 'summarise repositories briefly',
+      projectPath: null,
+    });
+    expect(res.status).toBe(200);
+    const d = (await res.json()) as { workspaceSource?: string; workspaceNotice?: string };
+    expect(d.workspaceSource).toBeUndefined();
+    expect(d.workspaceNotice).toMatch(/UNSCOPED/);
+  });
+
   it('reports a FILE as a file, not as an unreadable directory', async () => {
     const filePath = join(testDir, 'attach-file-fixture.txt');
     writeFileSync(filePath, 'not a directory\n', 'utf-8');
@@ -2044,5 +2084,21 @@ describe('/api/chat — deferred retries', () => {
     expect(sessionBody.session.turns.filter((t) => t.content.includes('Trying again now')).length).toBe(1);
     expect(sessionBody.session.turns.filter((t) => t.content === 'echo: explain the cache').length).toBe(0);
     stream.close();
+  });
+});
+
+describe('/api/steering — guidance requires a real run', () => {
+  it('rejects guidance for an unknown run instead of creating a phantom run', async () => {
+    const runId = `missing-steering-${Date.now()}`;
+    const res = await authedFetch('/api/steering/guidance', 'POST', { runId, text: 'stop' });
+    expect(res.status).toBe(404);
+    const body = (await res.json()) as { ok: boolean; error?: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('No steering run');
+
+    const listed = await authedFetch('/api/steering', 'GET');
+    expect(listed.status).toBe(200);
+    const data = (await listed.json()) as { ok: boolean; runs: Array<{ runId: string }> };
+    expect(data.runs.some((run) => run.runId === runId)).toBe(false);
   });
 });

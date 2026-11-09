@@ -45,6 +45,7 @@ import type {
   TaskStatus,
   SkillEnvVarRow,
   ProcessEnvVarRow,
+  SteeringBacklogItem,
   SteeringChangeRecord,
   SteeringProjection,
   SteeringResponse,
@@ -1964,18 +1965,35 @@ export class DashboardAPI {
    * P3 — attach a project directory (server builds the bounded context
    * snapshot: code map + file tree, cached by path).
    */
-  async attachProject(path: string): Promise<{ ok: boolean; project?: { path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean }; error?: string }> {
+  async attachProject(path: string, sessionId?: string): Promise<{ ok: boolean; project?: { path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean }; error?: string }> {
     const token = getAdminToken();
     try {
       const res = await fetch(`${this.baseUrl}/api/projects/attach`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-        body: JSON.stringify({ path }),
+        body: JSON.stringify({ path, ...(sessionId ? { sessionId } : {}) }),
         signal: AbortSignal.timeout(30_000),
       });
       const d = (await res.json()) as { ok?: boolean; project?: { path: string; name: string; fileCount: number; symbolCount: number; truncated: boolean }; error?: string };
       if (res.status === 200 && d.ok && d.project) return { ok: true, project: d.project };
       return { ok: false, error: typeof d.error === 'string' ? d.error : 'Attach failed.' };
+    } catch {
+      return { ok: false, error: 'Could not reach the dashboard server.' };
+    }
+  }
+
+  /** Clear the folder bound to a conversation (the composer's detach). */
+  async detachProject(sessionId: string): Promise<{ ok: boolean; error?: string }> {
+    const token = getAdminToken();
+    try {
+      const res = await fetch(`${this.baseUrl}/api/projects/detach`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ sessionId }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const d = (await res.json()) as { ok?: boolean; error?: string };
+      return { ok: res.status === 200 && d.ok === true, ...(d.error ? { error: d.error } : {}) };
     } catch {
       return { ok: false, error: 'Could not reach the dashboard server.' };
     }
@@ -3419,7 +3437,12 @@ export async function steeringInterpret(body: {
 export async function steeringDiscuss(body: {
   runId: string;
   question: string;
-}): Promise<{ ok: boolean; answer?: string; error?: string }> {
+}): Promise<{
+  ok: boolean;
+  answer?: string;
+  source?: 'model' | 'deterministic';
+  error?: string;
+}> {
   const r = await dashboardAPI.sendAdminRequest('/api/steering/discuss', 'POST', body);
   if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
   return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
@@ -3433,8 +3456,15 @@ export async function steeringBacklog(body: {
   runId: string;
   backlogId?: string;
   changeId?: string;
-  action: 'create-task' | 'capture';
-}): Promise<{ ok: boolean; command?: string; prompt?: string; error?: string }> {
+  action: 'create-task' | 'capture' | 'dismiss';
+}): Promise<{
+  ok: boolean;
+  command?: string;
+  prompt?: string;
+  error?: string;
+  item?: SteeringBacklogItem;
+  projection?: SteeringProjection;
+}> {
   const r = await dashboardAPI.sendAdminRequest('/api/steering/backlog', 'POST', body);
   if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
   return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
@@ -3442,5 +3472,7 @@ export async function steeringBacklog(body: {
     command?: string;
     prompt?: string;
     error?: string;
+    item?: SteeringBacklogItem;
+    projection?: SteeringProjection;
   };
 }

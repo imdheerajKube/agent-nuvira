@@ -9,8 +9,9 @@
  * contract. A CLI run that did not wrap itself still gets a run, keyed by its trace
  * id, so `nuvira steer` can find and join it.
  *
- * FEATURE FLAG. Off by default (`steering.enabled = false`), as the safety
- * checklist requires. A single flag turns the whole feature off: no plans are
+ * FEATURE FLAG. On by default (`steering.enabled = true`) because the dashboard
+ * exposes guidance in the composer. A single flag still turns the whole feature
+ * off: `steering.enabled = false` or `NUVIRA_STEERING=0` means no plans are
  * mutated, no inbox is read, and a turn is byte-identical to one from before.
  */
 
@@ -51,7 +52,7 @@ let configuredFlag: boolean | undefined;
 /**
  * Resolve the feature flag. An explicit environment value wins (so an operator can
  * disable a broken deployment without editing config); otherwise config; otherwise
- * OFF. Defaulting off is the documented rollback contract.
+ * ON. The one-flag off switch remains the documented rollback contract.
  */
 export function steeringEnabled(configManager?: { getAll(): { steering?: { enabled?: boolean } } } | null): boolean {
   const raw = process.env.NUVIRA_STEERING;

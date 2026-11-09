@@ -469,7 +469,9 @@ nuvira models excluded         # show what routing is skipping, and WHY
   ```
 - **Notes:** A separate `nuvira steer` process writes a durable change record; the run
   owner assesses it at its next safe point. `--proof` prints the exact bounded directive
-  the executor received — raw guidance is never injected into the live thread.
+  the executor received — raw guidance is never injected into the live thread. Steering is
+  on by default; disable it for a deployment with `nuvira config set steering.enabled false`
+  or `NUVIRA_STEERING=0` (then no plan is mutated and the run is unchanged).
 
 ### 3.6 Animated video — render, revise, inspect (no model in the loop)
 

@@ -30,6 +30,8 @@ import {
   detectSelfDeclaredOmission,
   detectUnverifiedFileClaim,
   detectArtifactShortfall,
+  malformedCallNudge,
+  malformedToolCallRefusal,
   type LoopTraceEvent,
   type ToolLoopDeps,
   type StepResponse,
@@ -4306,5 +4308,122 @@ describe('tool loop — one turn builds a complete document in sections', () => 
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * A clarification of an ACTIVE task is not a new request for permission.
+ *
+ * Reproduces the live website turn: the user had already asked for images, then
+ * wrote "i meant as background". `requestAuthorizesWrites` cannot see a create
+ * verb in that sentence, so the loop must inherit authorization from the open
+ * plan — otherwise both the new component and the planned edits are refused
+ * while the user is merely correcting the task.
+ */
+describe('tool loop — a clarification inherits the active plan authorization', () => {
+  it('creates and edits the files the open plan already asked for', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'nuvira-loop-refine-'));
+    // Large enough that the one-line change is recognisably SURGICAL: the
+    // inheritance test must not trip the separate "rewrites most of the file"
+    // guard, which correctly asks even under an authorized plan.
+    writeFileSync(
+      join(root, 'App.tsx'),
+      `${Array.from({ length: 40 }, (_, i) => `export const value${i} = ${i};`).join('\n')}\n` +
+        'export const shell = <main>Plan</main>;\n',
+      'utf-8',
+    );
+    const CLARIFICATION = 'i meant as background';
+    const turnCtx: ToolContext = {
+      configManager: {},
+      cwd: root,
+      // The per-turn verdict is FALSE: no create verb. This is the exact reason
+      // the old gate refused the work.
+      writesAuthorized: requestAuthorizesWrites(CLARIFICATION),
+      authorizationRequest: CLARIFICATION,
+      planStore: {
+        snapshot: () => ({
+          goal: 'Add food photos as backgrounds to the website',
+          revision: 5,
+          steps: [
+            { id: 'surface', description: 'Add PhotoSurface components', status: 'pending' },
+            { id: 'apply', description: 'Wire the backdrop into the app', status: 'pending' },
+          ],
+        }),
+      } as unknown as ToolContext['planStore'],
+    };
+    const results: string[] = [];
+    const deps = mockDeps(
+      [
+        {
+          content: 'Creating the surface.',
+          toolCalls: [
+            {
+              id: 'c1',
+              name: 'write_file',
+              arguments: { path: 'PhotoSurface.tsx', content: 'export const PhotoSurface = () => null;\n' },
+            },
+          ],
+        },
+        {
+          content: 'Wiring it in.',
+          toolCalls: [
+            {
+              id: 'c2',
+              name: 'edit_file',
+              arguments: {
+                path: 'App.tsx',
+                old_string: '<main>Plan</main>',
+                new_string: '<main className="photo-surface">Plan</main>',
+              },
+            },
+          ],
+        },
+        { content: 'Done.', toolCalls: [] },
+      ],
+      async (name, args, toolCtx) => {
+        // Use the LOOP's context, not the input one: the inherited authorization
+        // is added by `runToolLoop` to its per-turn copy.
+        const result = await realExecute(name, args, toolCtx);
+        results.push(result);
+        return result;
+      },
+    );
+
+    try {
+      await runToolLoop({
+        messages: [{ role: 'user', content: CLARIFICATION }],
+        context: turnCtx,
+        deps,
+        tools: ['write_file', 'edit_file'],
+        requirePlan: false,
+        requireVerification: false,
+        requireDeliverable: false,
+        requireAction: false,
+        requireCompletion: false,
+        requireSelfReview: false,
+        selfReviewWhenUnchanged: false,
+        requireDocsAudit: false,
+      });
+
+      expect(results).toHaveLength(2);
+      expect(results[0]).toContain("created 'PhotoSurface.tsx'");
+      expect(results[1]).toContain("applied to 'App.tsx'");
+      for (const result of results) expect(result).not.toContain('state-changing — NOT applied');
+      expect(readFileSync(join(root, 'App.tsx'), 'utf-8')).toContain('photo-surface');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('a malformed ask_user payload gets question guidance, not document guidance', () => {
+  it('tells the model to send a short question and short labels', () => {
+    const refusal = malformedToolCallRefusal({ name: 'ask_user', argumentsError: 'unparseable' });
+    expect(refusal).toContain('under 500 characters');
+    expect(refusal).not.toContain('write_file` the FIRST section');
+
+    const nudge = malformedCallNudge(3, 'ask_user');
+    expect(nudge).toContain('under 500 characters');
+    expect(nudge).toContain('Do NOT write a document');
   });
 });

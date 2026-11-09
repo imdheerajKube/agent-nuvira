@@ -143,6 +143,36 @@ describe('ask_user — the repetition gate', () => {
     expect(second).toContain('already asked this once');
   });
 
+  it('retries a gate confirmation that was shown but NOT answered, then stops', async () => {
+    const trace = new RunTrace();
+    const askUser = vi.fn(async () => ({ answer: '', index: -1 }));
+    const ctx: ToolContext = { configManager: {}, cwd: root, runTrace: trace, askUser };
+    const q = {
+      question: 'Create src/components/PhotoSurface.tsx?',
+      choices: [{ label: 'Yes, create it' }, { label: 'No' }],
+    };
+
+    // First refusal → the gate asks; the answer comes back empty.
+    ctx.pendingConfirmation = { tool: 'write_file', command: 'src/components/PhotoSurface.tsx', category: 'write' };
+    const first = await callAskUser(q, ctx);
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(first).toContain('STILL BLOCKED');
+    expect(first).toContain('Ask the same question once more');
+
+    // The write tool refuses again and asks again — this is the ONE retry.
+    ctx.pendingConfirmation = { tool: 'write_file', command: 'src/components/PhotoSurface.tsx', category: 'write' };
+    const second = await callAskUser(q, ctx);
+    expect(askUser).toHaveBeenCalledTimes(2);
+    expect(second).toContain('STILL BLOCKED');
+
+    // A third attempt is refused by the repetition gate; the action never runs.
+    ctx.pendingConfirmation = { tool: 'write_file', command: 'src/components/PhotoSurface.tsx', category: 'write' };
+    const third = await callAskUser(q, ctx);
+    expect(askUser).toHaveBeenCalledTimes(2);
+    expect(third).toContain('shown twice');
+    expect(third).toContain('STILL BLOCKED');
+  });
+
   it('behaves exactly as before when no trace is present (back-compat)', async () => {
     const askUser = vi.fn(async () => ({ answer: 'Yes', index: 0 }));
     const ctx: ToolContext = { configManager: {}, cwd: root, askUser };
