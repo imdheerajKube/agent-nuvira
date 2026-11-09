@@ -14,7 +14,7 @@ import { mkdtempSync, existsSync, rmSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { classifyCommand, runTerminalTool } from '../../src/tools/run-terminal.js';
+import { classifyCommand, describeDenial, runTerminalTool } from '../../src/tools/run-terminal.js';
 import { getTool, listTools } from '../../src/tools/registry.js';
 import { toolsetForTool, filterToolsByToolsets, TOOLSETS } from '../../src/tools/toolsets.js';
 import type { ToolContext } from '../../src/tools/registry.js';
@@ -77,6 +77,81 @@ describe('classifyCommand — deny-first three-class model', () => {
     expect(classifyCommand('echo $(rm -rf /)')).toBe('deny');
     expect(classifyCommand('echo hi | sudo rm -rf /')).toBe('deny');
     expect(classifyCommand('cat x && git push origin main')).toBe('deny');
+  });
+
+  it('denies `init` only in COMMAND position — not as a word inside a command', () => {
+    // MEASURED (trace-1794043535467-kl6mwh, 2026-11-07): `npx cap init` was
+    // refused outright — `cap init --help` too — so an Android setup turn could
+    // never run the command it was asked for, hand-wrote the config instead and
+    // reported the step blocked. `deny` cannot be overridden by confirm:true.
+    for (const cmd of [
+      'npx cap init divya com.divya.app --web-dir dist',
+      './node_modules/.bin/cap init divya com.divya.app --web-dir dist',
+      'npx cap init divya com.divya.app --web-dir dist && npx cap add android',
+      'npm init -y',
+      'git init',
+      'node init.js',
+      'echo init',
+    ]) {
+      expect(classifyCommand(cmd), cmd).not.toBe('deny');
+    }
+
+    // The runlevel command stays denied, including behind a separator, an env
+    // assignment or a substitution — narrowing the match must not open a hole.
+    for (const cmd of ['init 0', 'init 6', 'true; init 3', 'echo $(init 3)', 'FOO=1 init 3']) {
+      expect(classifyCommand(cmd), cmd).toBe('deny');
+    }
+
+    // A refusal names the rule that fired, so a reader can tell a policy from a
+    // regex false positive.
+    expect(describeDenial('init 0')).toBe('system-level destruction');
+    expect(describeDenial('npx cap init x')).toBeUndefined();
+  });
+
+  it('never denies a SAFE command — only the destructive ACTION itself', () => {
+    // A deny is unpromptable, so matching a WORD anywhere refused ordinary work
+    // with no way to approve it: `rm -rf ./dist`, `rm -rf *.log`, `git clean -n`,
+    // `echo "sudo …"`, `grep "git push"`. Measured on trace-1794043535467-kl6mwh,
+    // where `npx cap init` was refused six times.
+    for (const cmd of [
+      'rm -rf ./dist',
+      'rm -rf ./node_modules',
+      'rm -rf *.log',
+      'rm -rf /tmp/build',
+      'rm -rf ~/Library/Caches/npm',
+      'npm run build && rm -rf ./dist',
+      'git clean -n',
+      'git clean --dry-run',
+      'git clean -nd',
+      'echo "sudo rm -rf /"',
+      'grep -r "git push" .',
+      'echo "kill -9 123"',
+      'echo ":(){ :|:& };:"',
+      'bash -c "echo hi"',
+    ]) {
+      expect(classifyCommand(cmd), cmd).not.toBe('deny');
+    }
+
+    // The action itself stays denied — including inside a loop, a substitution
+    // and a shell wrapper, so anchoring opened no hole.
+    for (const cmd of [
+      'rm -rf /',
+      'rm -rf ~',
+      'rm -rf ~/*',
+      'rm -rf *',
+      'rm -rf .',
+      'rm -rf ./',
+      'rm -rf /etc',
+      'rm -rf /etc/nginx',
+      'rm -rf /home',
+      'git clean -fd',
+      'git push origin main',
+      'cat x && git push origin main',
+      'for x in 1; do sudo rm -rf /; done',
+      'bash -c "rm -rf /"',
+    ]) {
+      expect(classifyCommand(cmd), cmd).toBe('deny');
+    }
   });
 
   it('classifies verify-class commands (tests/typecheck/build/git-readonly)', () => {

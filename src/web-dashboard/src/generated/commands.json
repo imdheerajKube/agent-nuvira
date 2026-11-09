@@ -2,8 +2,8 @@
   "source": "src/cli/cli-program.ts (createCLI) — do not edit by hand",
   "regenerate": "node scripts/generate-commands-surface.mjs",
   "prefixNote": "Names omit the program name: the console runs `node dist/index.js <name>`.",
-  "commandCount": 314,
-  "groupCount": 61,
+  "commandCount": 322,
+  "groupCount": 62,
   "groups": [
     {
       "name": "admin",
@@ -315,6 +315,51 @@
           "name": "config catalog-feed refresh",
           "description": "Fetch a fresh catalogue snapshot now (never runs during a turn)",
           "flags": []
+        },
+        {
+          "name": "config policy",
+          "description": "Show or change what the agent may run (allow / approve / deny)",
+          "flags": []
+        },
+        {
+          "name": "config policy list",
+          "description": "Show the built-in floor and your overrides",
+          "flags": [
+            "--json"
+          ]
+        },
+        {
+          "name": "config policy path",
+          "description": "Print the policy file path",
+          "flags": []
+        },
+        {
+          "name": "config policy allow",
+          "description": "Run without asking (a built-in floor command still asks once)",
+          "flags": []
+        },
+        {
+          "name": "config policy approve",
+          "description": "Ask once per session, then run (relaxes a built-in denial)",
+          "flags": []
+        },
+        {
+          "name": "config policy deny",
+          "description": "Never run, whatever the request says",
+          "flags": []
+        },
+        {
+          "name": "config policy remove",
+          "description": "Remove a prefix from every list",
+          "flags": []
+        },
+        {
+          "name": "config policy clear",
+          "description": "Remove your overrides (all three lists, or one with --kind)",
+          "flags": [
+            "--kind <kind>",
+            "--yes"
+          ]
         }
       ]
     },
@@ -2479,6 +2524,11 @@
           ]
         }
       ]
+    },
+    {
+      "name": "steer",
+      "description": "Guide a run that is already in progress. The main task stays locked; guidance is triaged and applied at the next safe point.",
+      "commands": []
     },
     {
       "name": "website",

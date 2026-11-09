@@ -89,6 +89,7 @@ export class ConfigCommand extends BaseCommand {
       .addCommand(this.createLimitCommand())
       .addCommand(this.createCapabilityCommand())
       .addCommand(this.catalogFeedCommand())
+      .addCommand(this.createPolicyCommand())
       .action(() => {
         // Show current config when no subcommand is given
         this.displayConfig();
@@ -1338,6 +1339,179 @@ export class ConfigCommand extends BaseCommand {
    * Configuration section writes — the CLI is never deprecated, so one command
    * configures a backend for both surfaces. Values land in ~/.nuvira/.env.
    */
+  /**
+   * `${getCliName()} config policy` — the user-owned half of command safety.
+   *
+   * The built-in floor in `run-terminal.ts` is NOT editable from here (that is
+   * the point: `rm -rf /` does not become allowed because a settings file says
+   * so). This command owns the OVERRIDE: `allow` runs a command without asking,
+   * `approve` downgrades a built-in denial to one approval, and `deny` refuses
+   * even a command the built-in class would confirm. On a floor command, `allow`
+   * behaves like `approve` — it asks once, never runs silently.
+   *
+   * It writes the same `<config dir>/command-policy.json` the dashboard's
+   * Command Policy page edits, so the two surfaces cannot drift apart.
+   */
+  private createPolicyCommand(): Command {
+    const policy = new Command('policy').description(
+      'Show or change what the agent may run (allow / approve / deny)',
+    );
+
+    policy
+      .command('list', { isDefault: true })
+      .description('Show the built-in floor and your overrides')
+      .option('--json', 'Machine-readable output (JSON on stdout)')
+      .action((opts: { json?: boolean }) => void this.listCommandPolicy(opts));
+
+    policy
+      .command('path')
+      .description('Print the policy file path')
+      .action(async () => {
+        const { commandPolicyFile } = await import('../tools/command-policy.js');
+        console.log(commandPolicyFile());
+      });
+
+    const add = (kind: 'allow' | 'approve' | 'deny', description: string) =>
+      new Command(kind)
+        .description(description)
+        .argument('<command...>', 'A command prefix, e.g. "git push"')
+        .action((parts: string[]) => void this.setCommandPolicyEntry(kind, parts.join(' ')));
+
+    policy.addCommand(add('allow', 'Run without asking (a built-in floor command still asks once)'));
+    policy.addCommand(add('approve', 'Ask once per session, then run (relaxes a built-in denial)'));
+    policy.addCommand(add('deny', 'Never run, whatever the request says'));
+
+    policy
+      .command('remove')
+      .description('Remove a prefix from every list')
+      .argument('<command...>', 'A command prefix, e.g. "git push"')
+      .action((parts: string[]) => void this.removeCommandPolicyEntry(parts.join(' ')));
+
+    policy
+      .command('clear')
+      .description('Remove your overrides (all three lists, or one with --kind)')
+      .option('--kind <kind>', 'allow | approve | deny')
+      .option('-y, --yes', 'Do not ask for confirmation')
+      .action((opts: { kind?: string; yes?: boolean }) => void this.clearCommandPolicyCommand(opts));
+
+    return policy;
+  }
+
+  private async listCommandPolicy(opts: { json?: boolean } = {}): Promise<void> {
+    const { commandPolicyStatus } = await import('../tools/command-policy.js');
+    const { BUILT_IN_DENY_SUMMARY } = await import('../tools/run-terminal.js');
+    const status = commandPolicyStatus();
+
+    // `--json` is the script/CI contract: the effective policy, the floor and
+    // the precedence in ONE object. A malformed file is reported in `error`
+    // (and the policy is empty) rather than being written to stderr only —
+    // a caller must be able to see that the file it set is not in force.
+    if (opts.json) {
+      console.log(
+        JSON.stringify(
+          {
+            file: status.file,
+            exists: status.exists,
+            error: status.error ?? null,
+            policy: status.policy,
+            builtIn: BUILT_IN_DENY_SUMMARY,
+            precedence: ['policy-deny', 'floor-approved', 'policy-allow', 'built-in-class'],
+          },
+          null,
+          2,
+        ),
+      );
+      return;
+    }
+    const labels: Record<'allow' | 'approve' | 'deny', string> = {
+      allow: 'run WITHOUT asking',
+      approve: 'ask once, then run',
+      deny: 'NEVER run',
+    };
+    console.log('\n  Command policy');
+    console.log(`    file: ${status.file}`);
+    console.log(`    user overrides: ${status.exists ? 'yes' : 'none — the built-in defaults apply'}`);
+    if (status.error) {
+      console.log(`    ⚠ ${status.error}`);
+      console.log('      The file is ignored until it parses; the built-in defaults are in force.');
+    }
+    for (const kind of ['allow', 'approve', 'deny'] as const) {
+      const list = status.policy[kind];
+      console.log(`    ${kind.padEnd(8)} (${labels[kind]}): ${list.length ? list.join(', ') : '—'}`);
+    }
+    console.log('\n  Precedence');
+    console.log('    your deny  >  a floor command you approved/allowed (one approval)  >  your allow  >  built-in class');
+    console.log('    `allow` means "I am fine with this", not "this is safe": on a floor command it still asks once.');
+    console.log('\n  Built-in floor (never runs unless you approve or allow THAT prefix)');
+    for (const rule of BUILT_IN_DENY_SUMMARY) {
+      console.log(`    ${rule.rule.padEnd(34)} e.g. ${rule.example}`);
+    }
+    console.log(
+      `\n  Change it: \`${getCliName()} config policy allow|approve|deny "<command>"\` or the dashboard's Command Policy page.\n`,
+    );
+  }
+
+  private async setCommandPolicyEntry(
+    kind: 'allow' | 'approve' | 'deny',
+    raw: string,
+  ): Promise<void> {
+    const { addCommandPolicyEntry } = await import('../tools/command-policy.js');
+    const result = addCommandPolicyEntry(kind, raw);
+    if (!result.ok) {
+      logger.error(result.error ?? 'Could not write the command policy.');
+      return;
+    }
+    logger.success(`✅ ${kind}: "${result.prefix}" — written to ${result.file}`);
+    logger.info('Applies to the next command; no restart. On a built-in floor command, allow still asks once.');
+  }
+
+  private async removeCommandPolicyEntry(raw: string): Promise<void> {
+    const { removeCommandPolicyEntry } = await import('../tools/command-policy.js');
+    const result = removeCommandPolicyEntry(raw);
+    if (!result.ok) {
+      logger.error(result.error ?? 'Could not write the command policy.');
+      return;
+    }
+    if (!result.removed || result.removed.length === 0) {
+      logger.info(`"${result.prefix}" was not in any list — nothing changed.`);
+      return;
+    }
+    logger.success(`✅ removed "${result.prefix}" from ${result.removed.join(', ')}.`);
+  }
+
+  private async clearCommandPolicyCommand(opts: { kind?: string; yes?: boolean }): Promise<void> {
+    const kind = opts.kind?.trim().toLowerCase();
+    if (kind && !['allow', 'approve', 'deny'].includes(kind)) {
+      logger.error(`Unknown kind '${opts.kind}'. Use allow, approve or deny.`);
+      return;
+    }
+    if (!opts.yes && process.stdin.isTTY) {
+      const { confirm } = await inquirer.prompt<{ confirm: boolean }>([
+        {
+          type: 'confirm',
+          name: 'confirm',
+          message: kind
+            ? `Clear your ${kind} list?`
+            : 'Delete the whole command policy file (back to the built-in defaults)?',
+          default: false,
+        },
+      ]);
+      if (!confirm) {
+        logger.info('Aborted.');
+        return;
+      }
+    }
+    const { clearCommandPolicy } = await import('../tools/command-policy.js');
+    const result = clearCommandPolicy(kind as 'allow' | 'approve' | 'deny' | undefined);
+    if (!result.ok) {
+      logger.error(result.error ?? 'Could not clear the command policy.');
+      return;
+    }
+    logger.success(
+      kind ? `✅ ${kind} list cleared.` : '✅ Command policy file removed — the built-in defaults apply.',
+    );
+  }
+
   /**
    * `config limit` — the two size limits a user can move.
    *

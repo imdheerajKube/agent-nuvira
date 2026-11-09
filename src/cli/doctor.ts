@@ -39,6 +39,7 @@ import { recordRegistryFailure } from '../learning/provider-fallback.js';
 import { getQuotaLedger } from '../learning/quota-ledger.js';
 import { getCostTracker } from '../learning/cost-tracker.js';
 import { acceptanceSummary, MIN_LABELS_FOR_FIT, MIN_PER_CLASS } from '../learning/acceptance-model.js';
+import { diagnoseCommandPolicy } from '../tools/command-policy-diagnostics.js';
 import { verifyAuditFile } from '../enterprise/audit-chain.js';
 import { resolve } from 'node:path';
 import { readLockfile, buildSbom, verifySbom, parseSbom } from '../enterprise/sbom.js';
@@ -1021,6 +1022,10 @@ export async function runSystemChecks(
   // 7. Acceptance / quality-fit readiness (Bundle 35). Informational: the product
   // works with no labels, so this is a WARN until enough turns are RATED — it says
   // whether the read-only acceptance fit has a corpus to train on, and nothing more.
+  // 7b. The USER command policy — malformed files, and entries whose effect is
+  // weaker than the user assumes (allow on a floor command, shadowed entries).
+  checks.push(checkCommandPolicy());
+
   checks.push(checkAcceptanceReadiness());
 
   // 8. Runtime dependencies (the software Nuvira uses but does not ship):
@@ -1030,6 +1035,30 @@ export async function runSystemChecks(
   checks.push(...dependencyCheckResults(deps));
 
   return checks;
+}
+
+/**
+ * The user-owned command policy, as a doctor check.
+ *
+ * Healthy states are quiet: no file is a PASS (the built-in floor is the
+ * intended default), and a valid file is a PASS. Everything that makes the file
+ * do LESS than the user thinks — a parse error, a shadowed entry, `allow` on a
+ * floor command, a broad one-token grant — is a WARN with the exact fix.
+ */
+export function checkCommandPolicy(): CheckResult {
+  const d = diagnoseCommandPolicy();
+  const glyph = (level: 'pass' | 'warn' | 'fail') => (level === 'pass' ? '✅' : level === 'warn' ? '⚠️' : '❌');
+  const detail = [
+    d.file,
+    ...d.findings.map((f) => `${glyph(f.level)} ${f.message}${f.detail ? `\n   ${f.detail}` : ''}`),
+  ].join('\n');
+  return {
+    name: 'Command policy',
+    status: d.level,
+    message: d.summary,
+    detail,
+    fix: d.findings.find((f) => f.fix)?.fix,
+  };
 }
 
 /**

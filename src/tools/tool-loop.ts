@@ -172,6 +172,10 @@ import { createHarnessDirectiveSink, type HarnessObservation } from './harness-d
 // `thinkingModeSeen`).
 import { REASONING_NOT_RETAINED } from '../inference/thinking-replay.js';
 import type { PlanEvidence, PlanSnapshot } from './plan-store.js';
+import { defaultPlanStore } from './plan-store.js';
+// Mid-run steering: a durable guidance channel that applies accepted changes at
+// this loop's safe points only. Off by default (see src/steering/runtime.ts).
+import { steeringSafePointForLoop } from '../steering/runtime.js';
 import { effectiveToolJsonSchemas, coreToolJsonSchemas, isToolEnabled, toolsetForTool } from './toolsets.js';
 import { deliverablesNamedIn, recordStepHandoff } from '../agents/step-handoff.js';
 import { checkDeliverableShape, describeShapeGaps } from '../learning/deliverable-shape.js';
@@ -3681,6 +3685,57 @@ async function runToolLoopInner(opts: ToolLoopOptions, progress: ToolLoopProgres
     // model as a harness directive THE MOMENT it appears, while there is still
     // budget to act on it. Delivering at the ceiling would be a receipt, not a
     // requirement. See `learning/change-request.ts`.
+    // ── MID-RUN STEERING (the durable guidance channel) ────────────────────
+    //
+    // This is a SAFE POINT: the previous step's tool results are already in the
+    // thread and no model call or file write is in flight. User guidance is never
+    // injected raw; an accepted change can only reach the model as a bounded
+    // directive from an applied plan version. A stop/pause ends the turn here,
+    // before any further work is admitted.
+    //
+    // A no-op when the feature flag is off, so an ordinary turn is byte-identical
+    // to one from before this channel existed.
+    try {
+      const steering = await steeringSafePointForLoop({
+        ...(opts.runId ? { runId: opts.runId } : {}),
+        goal: requestText || lastUserText(opts.messages) || '',
+        cwd: ctx.cwd ?? process.cwd(),
+        planStore: ctx.planStore ?? defaultPlanStore(),
+        generate: async (messages) => {
+          const response = await deps.callModel(messages, [], undefined, opts.signal);
+          return typeof response?.content === 'string' ? response.content : '';
+        },
+      });
+      if (steering.directive) {
+        harness.push(
+          thread,
+          steering.key ?? `steering:${steering.appliedChangeIds.join(',')}`,
+          steering.directive,
+        );
+        deps.onEvent?.(
+          `   🧭 Steering applied — ${steering.appliedChangeIds.length} change(s) committed as a new plan version and handed to the model as a bounded directive.`,
+        );
+        traceEvent({
+          kind: 'gate',
+          gate: 'steering',
+          summary: `mid-run guidance applied at step ${steps}: ${steering.appliedChangeIds.join(', ')}`,
+        });
+      }
+      if (steering.stop) {
+        lastContent =
+          'Run stopped at your request. The plan version and guidance queue are preserved; nothing further was admitted.';
+        deps.onEvent?.('   ⏹ Steering: stop requested — the turn ended at this safe point.');
+        break;
+      }
+      if (steering.pause) {
+        lastContent =
+          'Run paused at your request. The plan version and guidance queue are preserved so the run can be resumed.';
+        deps.onEvent?.('   ⏸ Steering: pause requested — the turn ended at this safe point.');
+        break;
+      }
+    } catch {
+      // A steering failure must never break the turn it is steering.
+    }
     if (opts.watchChangeRequests !== false) {
       const request = readChangeRequest(ctx.cwd ?? process.cwd());
       if (request && request.signature !== changeRequestSeen) {

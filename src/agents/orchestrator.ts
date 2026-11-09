@@ -34,6 +34,10 @@ import { shouldPromptWeakModel, promptWeakModelChoice, type WeakModelChoice } fr
 import { logger } from '../utils/logger.js';
 
 import { ContextVault } from './context-vault.js';
+// Mid-run steering for the pipeline engine. The safe point is between task
+// batches: no task is running, so a plan version can be adopted without
+// rewriting work in flight. Off by default (src/steering/runtime.ts).
+import { steeringSafePointForPipeline } from '../steering/runtime.js';
 import {
   saveCheckpoint,
   loadCheckpoint,
@@ -1541,6 +1545,34 @@ export class Orchestrator {
 
     for (let iteration = 0; iteration < 50; iteration++) {
       if (vault.isComplete) break;
+
+      // ── MID-RUN STEERING — apply BEFORE admitting the next batch ──────────
+      // Between batches is the pipeline's safe point: no task is running, so a
+      // committed version can be adopted without mutating work in flight. A
+      // pending task is never rewritten mid-execution; a cancelled step simply
+      // never becomes runnable. Stop/pause ends the pipeline here.
+      const steering = await steeringSafePointForPipeline({
+        goal: vault.context.goal,
+        cwd: vault.context.workingDirectory,
+        vault,
+        generate: async (messages) => {
+          const prompt = messages.map((m) => `${m.role.toUpperCase()}:\n${m.content}`).join('\n\n');
+          return defaultCallLLM(prompt);
+        },
+      });
+      if (steering.directive) {
+        logger.info(
+          `   🧭 Steering applied at batch ${iteration + 1} — ${steering.appliedChangeIds.length} change(s) committed as a new plan version.`,
+        );
+      }
+      if (steering.stop || steering.pause) {
+        const reason = steering.stop ? 'Stopped by user guidance' : 'Paused by user guidance';
+        for (const step of vault.context.taskPlan.filter((s) => s.status === 'pending')) {
+          vault.updateTaskStatus(step.id, 'failed', reason);
+        }
+        logger.info(`   ${steering.stop ? '⏹' : '⏸'} Steering: ${reason.toLowerCase()} — no further batch was admitted.`);
+        break;
+      }
 
       const runnableTasks = vault.getRunnableTasks();
       const routingContext = vault.getMeta<{ taskProfile?: { intent?: string; requiresVerification?: boolean } }>('routingContext');

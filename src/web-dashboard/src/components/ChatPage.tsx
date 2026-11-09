@@ -1226,6 +1226,8 @@ function groupSessions(
   return groups;
 }
 
+import SteeringPanel from './SteeringPanel';
+
 export interface ChatPageProps {
   /**
    * Test seam, in the spirit of TaskRunner's injectable spawn target: how long
@@ -3693,6 +3695,9 @@ export default function ChatPage({ ceilingRecovery }: ChatPageProps = {}) {
             </div>
           ) : null}
 
+          {/* Separate guidance lane. The composer below stays locked while a turn
+              runs; this is the only input that reaches the run during execution. */}
+          <SteeringPanel sessionId={sessionIdRef.current} busy={busy} />
           <form
             className={`chat-composer${dragOver ? ' chat-composer-drag' : ''}`}
             onSubmit={(e) => { e.preventDefault(); void send(input); }}

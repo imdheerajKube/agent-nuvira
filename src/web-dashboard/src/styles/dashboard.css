@@ -9058,3 +9058,107 @@ html[data-compact='on'] .empty-state-mark {
   width: 44px;
   height: 44px;
 }
+
+/* ─── Mid-run steering (guidance lane) ─────────────────────────────────────── */
+.steering-panel {
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin: 8px 0;
+  background: var(--panel, rgba(255, 255, 255, 0.02));
+}
+.steering-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.steering-counts {
+  margin: 2px 0 8px;
+}
+.steering-compose,
+.steering-discuss {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.steering-input {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 6px 8px;
+  border-radius: 8px;
+  border: 1px solid var(--border, #2a2f3a);
+  background: var(--input-bg, rgba(0, 0, 0, 0.15));
+  color: inherit;
+  font: inherit;
+}
+.steering-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+.steering-live {
+  min-height: 18px;
+  margin: 6px 0;
+  font-size: 0.9em;
+}
+.steering-list {
+  list-style: none;
+  padding: 0;
+  margin: 6px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.steering-row {
+  border: 1px solid var(--border, #2a2f3a);
+  border-radius: 8px;
+  padding: 8px 10px;
+}
+.steering-row-head {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.steering-id {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.85em;
+  opacity: 0.85;
+}
+.steering-chip {
+  font-size: 0.8em;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border, #2a2f3a);
+}
+.steering-chip-needs_approval {
+  border-style: solid;
+  font-weight: 600;
+}
+.steering-text {
+  margin: 4px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.steering-reason {
+  font-size: 0.9em;
+  opacity: 0.9;
+  margin: 2px 0;
+}
+.steering-answer {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-left: 3px solid var(--border, #2a2f3a);
+  white-space: pre-wrap;
+}
+.steering-error {
+  color: #e06c75;
+}
+.steering-applied,
+.steering-backlog {
+  margin-top: 8px;
+}

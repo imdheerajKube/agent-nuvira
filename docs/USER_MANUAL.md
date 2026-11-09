@@ -185,6 +185,45 @@ in `.env`.
 
 ---
 
+### What the agent may run — the command policy
+
+Out of the box, the **built-in floor** decides what the agent may run. It refuses privilege
+escalation (`sudo`), remote mutation (`git push`), history/working-tree destruction, forced kills,
+`rm -rf` at a root/home/system target, and fork bombs. Everything else is either verification
+(runs without asking) or confirmation (asks first).
+
+You can override the built-in **class** for a command prefix without touching source. The override
+lives in `<config dir>/command-policy.json` (`~/.nuvira/command-policy.json` by default, honouring
+`NUVIRA_CONFIG_DIR` and `NUVIRA_COMMAND_POLICY`):
+
+| List | What it does |
+|---|---|
+| `allow` | The command runs **without asking** (ordinary commands only). |
+| `approve` | A built-in denial becomes **one human approval** — this is the `git push` / `kill -9` case, and once approved the session grant may cover the rest of the session. |
+| `deny` | **Never runs**, whatever the request says. Beats every other list. |
+
+```bash
+nuvira config policy                       # the floor + your current lists
+nuvira config policy approve "git push"     # one approval, then it holds for the session
+nuvira config policy allow "npm run build"  # stop asking for this one
+nuvira config policy deny "rm -rf build"    # never, whatever the model decides
+nuvira config policy clear --yes            # remove the file: the defaults apply again
+```
+
+**Precedence:** your `deny` → a floor command you approved/allowed (one approval) → your `allow` →
+the built-in class. Two things this deliberately cannot do: make `rm -rf /` (or `sudo`, a fork bomb,
+a history rewrite) run silently, and make a `deny` approvable. `allow` on a floor command still asks
+once — permission is not the same claim as safety.
+
+The same file is editable in the dashboard's **Command Policy** page (`/policy`), which also lists
+the floor rule by rule; saving there needs an admin session. Either surface takes effect on the next
+command, with no restart. `nuvira doctor` reports a malformed file and entries that cannot do what
+you expect (an `allow` that still asks, a permission shadowed by a broader deny, a one-token grant
+such as `npm`).
+
+For the full matching rules, the complete floor table, 15 worked examples with their impact, eight
+ready-made configurations and the security limits, see [COMMAND_POLICY.md](./COMMAND_POLICY.md).
+
 ## 4. The CLI in depth
 
 ### 4.1 Anatomy
@@ -268,7 +307,7 @@ nuvira dashboard --no-gateway       # do not start messaging alongside
 nuvira dashboard stop                # graceful SIGTERM, from any terminal
 ```
 
-### The 23 pages
+### The 24 pages
 
 | Page | Route | What it is for |
 |---|---|---|
@@ -295,6 +334,7 @@ nuvira dashboard stop                # graceful SIGTERM, from any terminal
 | 📈 Benchmarks | `/benchmarks` | Model benchmark charts |
 | ⚙️ System | `/system` | Doctor checks (pass/warn/fail), live stream state, agent stats |
 | 🛠️ Admin | `/admin` | Governance policy (RBAC, allow/deny, cost cap) |
+| 🛡️ Command Policy | `/policy` | What the agent may run: allow / approve / deny, plus the built-in floor |
 
 There is also a `/bedrock` onboarding route that is not in the left nav.
 

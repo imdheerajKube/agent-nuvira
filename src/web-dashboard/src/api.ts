@@ -29,6 +29,8 @@ import type {
   AdminWorkspace,
   AdminWriteResult,
   BedrockStatus,
+  CommandPolicy,
+  CommandPolicyView,
   DashboardData,
   DAGData,
   HubChannelPolicy,
@@ -1478,6 +1480,40 @@ export class DashboardAPI {
     const d = (r.data ?? {}) as AdminWriteResult;
     if (r.status === 200 && d.ok) return d;
     return { ok: false, error: d.error || 'Failed to save policies.', unauthorized: r.status === 401, forbidden: r.status === 403 };
+  }
+
+  /**
+   * The command policy — the same `<config dir>/command-policy.json` the CLI's
+   * `nuvira config policy` writes. Read requires a session; saving is gated on
+   * `policy.write` (admin), and the server reports `writable` so the page can
+   * render read-only instead of offering a button that will 403.
+   */
+  async fetchCommandPolicy(): Promise<CommandPolicyView> {
+    const r = await this.sendAdminRequest('/api/admin/command-policy', 'GET');
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as CommandPolicyView;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ...d,
+      ok: false,
+      error: d.error || 'Failed to read the command policy.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
+  }
+
+  async saveCommandPolicy(policy: CommandPolicy): Promise<CommandPolicyView> {
+    const r = await this.sendAdminRequest('/api/admin/command-policy', 'PUT', policy);
+    if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+    const d = (r.data ?? {}) as CommandPolicyView;
+    if (r.status === 200 && d.ok) return d;
+    return {
+      ...d,
+      ok: false,
+      error: d.error || 'Failed to save the command policy.',
+      unauthorized: r.status === 401,
+      forbidden: r.status === 403,
+    };
   }
 
   /** Fetch paginated gateway conversations with optional search. */
@@ -3148,4 +3184,99 @@ export async function uninstallMcpServer(name: string): Promise<{ ok: boolean; r
   const r = await dashboardAPI.sendAdminRequest('/api/mcp/uninstall', 'POST', { name });
   if (!r) return { ok: false, reason: 'Could not reach the dashboard server.' };
   return (r.data ?? { ok: false, reason: `Server returned HTTP ${r.status}` }) as { ok: boolean; reason?: string };
+}
+
+// ─── Mid-run steering ────────────────────────────────────────────────────────
+// The guidance lane's only transport. It writes to the durable inbox and the
+// approval queue; it never mutates a plan directly.
+
+export async function steeringGet(runId?: string): Promise<SteeringResponse> {
+  const suffix = runId ? `?runId=${encodeURIComponent(runId)}` : '';
+  const r = await dashboardAPI.sendAdminRequest(`/api/steering${suffix}`, 'GET');
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: r.status === 200, error: `Server returned HTTP ${r.status}` }) as SteeringResponse;
+}
+
+export async function steeringGuide(body: {
+  runId: string;
+  text: string;
+  intentHint?: 'guidance' | 'question' | 'new_task';
+  targetStepId?: string;
+  idempotencyKey?: string;
+}): Promise<{
+  ok: boolean;
+  change?: SteeringChangeRecord;
+  deduped?: boolean;
+  projection?: SteeringProjection;
+  error?: string;
+}> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/guidance', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    change?: SteeringChangeRecord;
+    deduped?: boolean;
+    projection?: SteeringProjection;
+    error?: string;
+  };
+}
+
+export async function steeringDecide(body: {
+  runId: string;
+  changeId: string;
+  action: 'approve' | 'reject' | 'defer' | 'withdraw';
+  note?: string;
+}): Promise<{ ok: boolean; change?: SteeringChangeRecord; projection?: SteeringProjection; error?: string }> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/decision', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    change?: SteeringChangeRecord;
+    projection?: SteeringProjection;
+    error?: string;
+  };
+}
+
+export async function steeringInterpret(body: {
+  runId: string;
+  changeId: string;
+  choice: 'guidance' | 'new_task' | 'question';
+}): Promise<{ ok: boolean; change?: SteeringChangeRecord; projection?: SteeringProjection; error?: string }> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/interpretation', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    change?: SteeringChangeRecord;
+    projection?: SteeringProjection;
+    error?: string;
+  };
+}
+
+export async function steeringDiscuss(body: {
+  runId: string;
+  question: string;
+}): Promise<{ ok: boolean; answer?: string; error?: string }> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/discuss', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    answer?: string;
+    error?: string;
+  };
+}
+
+export async function steeringBacklog(body: {
+  runId: string;
+  backlogId?: string;
+  changeId?: string;
+  action: 'create-task' | 'capture';
+}): Promise<{ ok: boolean; command?: string; prompt?: string; error?: string }> {
+  const r = await dashboardAPI.sendAdminRequest('/api/steering/backlog', 'POST', body);
+  if (!r) return { ok: false, error: 'Could not reach the dashboard server.' };
+  return (r.data ?? { ok: false, error: `Server returned HTTP ${r.status}` }) as {
+    ok: boolean;
+    command?: string;
+    prompt?: string;
+    error?: string;
+  };
 }

@@ -79,6 +79,7 @@ import { RateCommand } from './rate.js';
 import { DecisionsCommand } from './decisions.js';
 import { ContinuityCommand } from './continuity.js';
 import { ResumeCommand } from './resume.js';
+import { SteerCommand } from './steer.js';
 import { WebsiteCommand } from './website.js';
 import { BedrockCommand } from './bedrock.js';
 import { NluCommand } from './nlu.js';
@@ -334,6 +335,7 @@ export function createCLI(): Command {
   // Register Resume command (continue an unfinished turn from its checkpoint —
   // the reader the session store never had; see `cli/resume.ts`)
   program.addCommand(new ResumeCommand().create());
+  program.addCommand(new SteerCommand().create());
 
   // Register Website command (open the project site — capabilities/docs/setup)
   program.addCommand(new WebsiteCommand().create());

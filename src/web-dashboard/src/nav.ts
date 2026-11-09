@@ -71,6 +71,10 @@ export const NAV_GROUPS: NavGroup[] = [
       // Hooks are agent-management POLICY: the declarative rules that bound what
       // a tool call may do. They sit with the other capabilities a turn uses.
       { path: '/hooks', label: 'Hooks', icon: '🪝' },
+      // The user-owned half of the same question Hooks answers: what may a
+      // tool call do? This one is the command policy (allow / approve / deny),
+      // written to the same file `nuvira config policy` edits.
+      { path: '/policy', label: 'Command Policy', icon: '🛡️' },
     ],
   },
   {

@@ -92,6 +92,11 @@ const DEFAULT_CONFIG: BuffConfig = {
   memory: {
     vectorBackend: 'auto',
   },
+  // Mid-run steering is OPT-IN. A feature that can change a running plan must
+  // default to off, and rollback must be one flag (see `src/steering/`).
+  steering: {
+    enabled: false,
+  },
   // Empty by default: the fallback chain is derived at runtime from what the
   // user has configured + verified (rankAvailableProviders), never a fixed
   // provider list. Users may still set fallback.providers explicitly.

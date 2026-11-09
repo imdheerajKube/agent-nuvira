@@ -261,6 +261,40 @@ Remove the setting, restoring the default (off)
 
 Fetch a fresh catalogue snapshot now (never runs during a turn)
 
+### `nuvira config policy`
+
+Show or change what the agent may run (allow / approve / deny)
+
+### `nuvira config policy list`
+
+Show the built-in floor and your overrides
+
+   - flags: `--json`
+### `nuvira config policy path`
+
+Print the policy file path
+
+### `nuvira config policy allow`
+
+Run without asking (a built-in floor command still asks once)
+
+### `nuvira config policy approve`
+
+Ask once per session, then run (relaxes a built-in denial)
+
+### `nuvira config policy deny`
+
+Never run, whatever the request says
+
+### `nuvira config policy remove`
+
+Remove a prefix from every list
+
+### `nuvira config policy clear`
+
+Remove your overrides (all three lists, or one with --kind)
+
+   - flags: `--kind <kind>, --yes`
 ### `nuvira cache`
 
 Manage inference cache
@@ -1677,6 +1711,11 @@ Show every unfinished (open) turn, newest first
 Continue an unfinished turn (default: the newest open turn in this directory)
 
    - flags: `--all, --cwd <cwd>, --deadline <deadline>, --detach, --until-done`
+### `nuvira steer`
+
+Guide a run that is already in progress. The main task stays locked; guidance is triaged and applied at the next safe point.
+
+   - flags: `--approve <approve>, --as <as>, --cwd <cwd>, --defer <defer>, --discuss <discuss>, --interpret <interpret>, --json, --list, --new-task <new_task>, --note <note>, --question <question>, --reject <reject>, --status, --text <text>, --withdraw <withdraw>`
 ### `nuvira website`
 
 Open the Agent-Nuvira website — capabilities, commands, docs, setup
@@ -1684,4 +1723,4 @@ Open the Agent-Nuvira website — capabilities, commands, docs, setup
    - flags: `--url`
 ---
 
-*376 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*
+*385 commands (incl. subcommands) · generated from the live CLI — this file is the drift-guarded surface.*

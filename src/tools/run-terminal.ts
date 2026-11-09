@@ -73,6 +73,7 @@ import { maskSenderId } from '../utils/mask.js';
 import { decideStateChange } from '../learning/autonomy-policy.js';
 import { envelopeCoversAction } from '../learning/intent-envelope.js';
 import { sessionGrantCovers } from '../learning/session-grant.js';
+import { describePolicyDenial, matchCommandPolicy } from './command-policy.js';
 import { grantCategoryForEffect } from './capability-registry.js';
 import { applyProjectEnvironment, guardCommandEnvironment } from '../utils/project-env.js';
 import { isVerificationInvocation, splitChain, unwrapCommand } from '../utils/command-shape.js';
@@ -1011,26 +1012,132 @@ export function waitBudgetGuidance(
  * substitutions and pipes of denied commands are caught), never run even
  * with confirm:true. These are outside what the loop may do, full stop.
  */
-const DENY_PATTERNS: RegExp[] = [
+interface DenyRule {
+  /** Named in the refusal, so a reader knows WHICH rule refused the command. */
+  rule: string;
+  re: RegExp;
+}
+
+/**
+ * A COMMAND POSITION: string start, a shell separator, or an opening
+ * substitution/brace, optionally after a loop keyword or env assignments.
+ *
+ * WHY ANCHORING IS LOAD-BEARING: a deny is the one class `confirm: true`
+ * cannot override, so a pattern that matches its WORD anywhere refuses safe
+ * commands with no way to approve them. Measured (trace-1794043535467-kl6mwh):
+ * `npx cap init` was denied, and so were `rm -rf ./dist`, `rm -rf *.log`,
+ * `git clean -n`, `echo "sudo rm -rf /"` and `grep "git push"`. Anchoring
+ * separates the destructive ACTION from the word being discussed.
+ */
+const CMD_START =
+  '(?:^|[;&|()`{}])\\s*(?:(?:do|then|else|elif|if|while|until|time|!)\\s+)*(?:[a-z_][a-z0-9_]*=\\S*\\s+)*';
+
+const DENY_PATTERNS: DenyRule[] = [
   // Privilege escalation.
-  /\bsudo\b/,
+  { rule: 'privilege escalation', re: new RegExp(`${CMD_START}sudo\\b`) },
   // Remote mutation — pushing is a human decision (deny-first, like the
   // agent's own git rules: never push from an autonomous loop).
-  /\bgit\s+push\b/,
+  { rule: 'remote mutation (git push)', re: new RegExp(`${CMD_START}git\\s+push\\b`) },
   // Irreversible working-tree destruction.
-  /\bgit\s+reset\s+--hard\b/,
-  /\bgit\s+clean\b/,
-  /\bgit\s+checkout\s+--\s*(\.|--)/,
-  /\bgit\s+checkout\s+\.\s*$/,
-  // System-level destruction.
-  /\b(mkfs|fdisk|dd|shutdown|reboot|halt|poweroff|init|killall)\b/,
-  /\bkill\s+-9\b/,
+  { rule: 'working-tree destruction', re: new RegExp(`${CMD_START}git\\s+reset\\s+--hard\\b`) },
+  // `git clean -n` / `--dry-run` only LISTS what it would remove — a dry run
+  // cannot destroy anything, so it must stay confirm-class, not denied.
+  {
+    rule: 'working-tree destruction',
+    re: new RegExp(
+      `${CMD_START}git\\s+clean\\b(?![^;&|]*(?:--dry-run|\\s-[a-z]*n[a-z]*(?:\\s|$|[;&|)}])))`,
+    ),
+  },
+  { rule: 'working-tree destruction', re: new RegExp(`${CMD_START}git\\s+checkout\\s+--\\s*(?:\\.|--)`) },
+  { rule: 'working-tree destruction', re: new RegExp(`${CMD_START}git\\s+checkout\\s+\\.\\s*(?:$|[;&|)}])`) },
+  // System-level destruction. `init` matches ONLY in COMMAND position.
+  //
+  // MEASURED (trace-1794043535467-kl6mwh, 2026-11-07): the previous
+  // `\binit\b` matched the WORD anywhere in the command, so `npx cap init …`
+  // was denied outright — and `deny` is the one class `confirm: true` cannot
+  // override. An Android-setup turn was refused six times on `cap init` (even
+  // `cap init --help`), was forbidden from asking (the authorization gate
+  // suppressed the permission question), hand-wrote the config instead and
+  // reported the step blocked. `npm init`, `git init`, `node init.js` and
+  // `echo init` were collateral. Anchoring on a command position keeps the
+  // runlevel command denied — `init 0`, `FOO=1 init 3`, `echo $(init 3)` —
+  // while a program that merely takes `init` as an argument stays
+  // confirm-class.
+  {
+    rule: 'system-level destruction',
+    re: new RegExp(
+      `${CMD_START}(?:sudo\\s+)?(?:mkfs|fdisk|dd|shutdown|reboot|halt|poweroff|init|killall)\\b`,
+    ),
+  },
+  { rule: 'forced kill', re: new RegExp(`${CMD_START}kill\\s+-9\\b`) },
   // `rm -rf` at dangerous targets (absolute roots, home, system dirs, globs).
   // NOTE: tested against the LOWERCASED command, so targets are lowercase.
-  /\brm\s+(-[a-z]*r[a-z]*f[a-z]*|-f[a-z]*r[a-z]*)\s+(\/|~|\*|\.|\.\/|\$home|\/home|\/etc|\/usr|\/var|\/bin|\/sbin|\/boot|\/opt|\/root|\/system|\/windows)/,
+  // A destructive TARGET is the whole argument — `rm -rf ./dist` and
+  // `rm -rf ~/Library/Caches/x` are ordinary cleanups, and refusing them made
+  // the class unusable. Only these forms are denied outright:
+  //   /, ~, ., ./, *, $HOME        — the argument IS the root/home/cwd
+  //   ~/*, ./*, $HOME/*            — every entry in it
+  //   /etc, /usr, … (and below)    — system directories
+  //   /home                        — the home ROOT, not a project under it
+  {
+    rule: 'rm -rf at a destructive target',
+    re: new RegExp(
+      `${CMD_START}rm\\s+(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*)\\s+(?:` +
+        '(?:\\/|~|\\$home|\\.|\\.\\/|\\*)(?=\\s*(?:$|[;&|)}]))' +
+        '|(?:~|\\$home|\\.)\\/\\*(?=\\s*(?:$|[;&|)}]))' +
+        '|\\/(?:etc|usr|var|bin|sbin|boot|opt|root|system|windows)(?=\\/|\\s*(?:$|[;&|)}]))' +
+        '|\\/home(?=\\s*(?:$|[;&|)}]))' +
+        ')',
+    ),
+  },
+  // Self-modification: the agent must not widen its own authority.
+  //
+  // A policy entry is the USER's decision, and `approve` exists so a human says
+  // yes. An autonomous loop that can run `nuvira config policy allow …` turns
+  // that human yes into a formality, so the CLI path is refused inside the
+  // tool. The user still runs it themselves in their own terminal. This is a
+  // speed bump, not a wall: it names the direct CLI, not a hand-edited JSON file
+  // or an absolute path to the binary — the file is 0600 and outside the
+  // project for exactly that reason.
+  {
+    rule: 'self-modification (command policy)',
+    re: new RegExp(`${CMD_START}(?:nuvira|agent-nuvira|buff)\\s+config\\s+policy\\b`),
+  },
   // Fork bombs.
-  /:\s*\(\s*\)\s*\{/,
+  { rule: 'fork bomb', re: new RegExp(`${CMD_START}:\\s*\\(\\s*\\)\\s*\\{`) },
 ];
+
+/**
+ * The built-in floor in HUMAN terms — shown by `nuvira config policy list` and
+ * the dashboard's Command Policy page so the user can see what their overrides
+ * act on without reading a regex table.
+ *
+ * A test (`tests/tools/built-in-policy-summary.test.ts`) asserts every example
+ * here is actually refused, WITH THE RULE NAMED, so this list cannot describe a
+ * floor that has moved.
+ */
+export const BUILT_IN_DENY_SUMMARY: ReadonlyArray<{ rule: string; example: string }> = [
+  { rule: 'privilege escalation', example: 'sudo ls' },
+  { rule: 'remote mutation (git push)', example: 'git push origin main' },
+  { rule: 'working-tree destruction', example: 'git reset --hard HEAD' },
+  { rule: 'working-tree destruction', example: 'git clean -fd' },
+  { rule: 'system-level destruction', example: 'init 0' },
+  { rule: 'forced kill', example: 'kill -9 1234' },
+  { rule: 'rm -rf at a destructive target', example: 'rm -rf /' },
+  { rule: 'self-modification (command policy)', example: 'nuvira config policy allow "git push"' },
+  { rule: 'fork bomb', example: ':(){ :|:& };:' },
+];
+
+/**
+ * A shell WRAPPER is a command position an anchored pattern cannot see into:
+ * the payload is what actually runs. Classifying the payload keeps
+ * `bash -c "rm -rf /"` denied without matching the word `sudo` inside
+ * `echo "sudo …"` — the trade-off is that a wrapper is never treated as a
+ * comment.
+ */
+const SHELL_WRAPPER_RE =
+  /(?:^|[;&|()`{}])\s*(?:bash|sh|zsh|dash)\s+-c\s+(["'])([\s\S]*?)\1\s*(?:$|[;&|)}])/;
+const EVAL_RE = /(?:^|[;&|()`{}])\s*eval\s+(.+)$/;
 
 /**
  * Verify-class leading-token prefixes — run WITHOUT confirmation. Positive
@@ -1367,16 +1474,50 @@ function classifySegment(segment: string): CommandClass {
   return 'confirm';
 }
 
+/**
+ * Which deny rule (if any) refuses this command? Exported so the refusal can
+ * NAME the rule that fired: a bare "outside what the agent may run" makes a
+ * regex false positive indistinguishable from a real policy — which is how one
+ * turn concluded the sandbox was the obstacle (trace-1794043535467-kl6mwh).
+ */
+export function describeDenial(command: string): string | undefined {
+  const lower = normalize(command).toLowerCase();
+  if (!lower) return 'empty command';
+  for (const d of DENY_PATTERNS) {
+    if (d.re.test(lower)) return d.rule;
+  }
+  const wrapped = SHELL_WRAPPER_RE.exec(lower);
+  if (wrapped) {
+    const inner = describeDenial(wrapped[2]);
+    if (inner) return inner;
+  }
+  const evaled = EVAL_RE.exec(lower);
+  if (evaled) {
+    const inner = describeDenial(evaled[1].replace(/^["']|["']$/g, ''));
+    if (inner) return inner;
+  }
+  return undefined;
+}
+
 /** Classify a command — deny regexes on the FULL string, worst-class on segments. */
 export function classifyCommand(command: string): CommandClass {
-  const c = normalize(command);
-  const lower = c.toLowerCase();
+  const lower = normalize(command).toLowerCase();
   if (!lower) return 'deny';
   // Deny-first on the WHOLE string — a denied command cannot hide behind a
   // substitution or a pipe (this is what keeps `echo $(rm -rf /)` denied).
-  for (const d of DENY_PATTERNS) {
-    if (d.test(lower)) return 'deny';
+  // The USER owns what may be refused. `approve` downgrades a built-in denial
+  // to confirm (one human approval, then the session grant can cover it); it
+  // can never unlock a command this same policy denies — that returned above.
+  const policy = matchCommandPolicy(lower);
+  if (policy?.kind === 'deny') return 'deny';
+  if (describeDenial(lower) !== undefined) {
+    // EITHER user permission downgrades a floor denial to ONE approval — never
+    // to silence. `allow` is the user saying "I am fine with this", not a
+    // statement that the action is safe, and a policy entry that silently did
+    // nothing would be a trap: the file says allowed, the tool still refuses.
+    return policy && (policy.kind === 'approve' || policy.kind === 'allow') ? 'confirm' : 'deny';
   }
+  if (policy?.kind === 'allow') return 'verify';
   let worst: CommandClass = 'verify';
   for (const segment of splitSegments(lower)) {
     const cls = classifySegment(segment);
@@ -1444,8 +1585,10 @@ export async function runTerminalTool(args: RunTerminalArgs, ctx: ToolContext): 
 
   const cls = classifyCommand(command);
   if (cls === 'deny') {
+    const rule = describePolicyDenial(command) ?? describeDenial(command);
     return (
-      `Error: run_terminal: command DENIED — "${command}" is outside what the agent may run. ` +
+      `Error: run_terminal: command DENIED — "${command}" is outside what the agent may run` +
+      `${rule ? ` (matched denial rule: ${rule})` : ''}. ` +
       `Tell the user, and suggest the safe alternative (or that they run it themselves).`
     );
   }

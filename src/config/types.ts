@@ -149,6 +149,27 @@ export interface HistoryConfig {
  * Memory / vector-store configuration.
  * Set via `nuvira config set memory.<key> <value>` or directly in .nuviraconfig.json.
  */
+/**
+ * Mid-run steering. OFF by default: the rollback contract is one flag.
+ *
+ * See docs/ADR-steering-control-plane.md and src/steering/. A run's plan is only
+ * mutated at a safe point, by the run process, through an immutable plan version.
+ */
+export interface SteeringConfig {
+  /** Enable the durable guidance channel + governed plan changes. Default false. */
+  enabled?: boolean;
+  /** Below this confidence the user is asked to confirm the interpretation. */
+  minConfidence?: number;
+  /** Maximum unapplied guidance items a single run may hold. */
+  maxOpenChanges?: number;
+  /** Maximum changes a single run may apply (a change budget). */
+  maxAppliedChanges?: number;
+  /** Auto-accept low/medium additive work inside the contract. Default true. */
+  autoAcceptLowMedium?: boolean;
+  /** Hours before a pending approval expires. Default 24. */
+  approvalTtlHours?: number;
+}
+
 export interface MemoryConfig {
   /**
    * Vector search backend:
@@ -559,6 +580,8 @@ export interface BuffConfig {
   history?: HistoryConfig;
   /** Memory / vector-store configuration */
   memory?: MemoryConfig;
+  /** Mid-run interactive guidance (steering). OFF by default. */
+  steering?: SteeringConfig;
   /** Per-provider pricing overrides for Auto model routing cost scoring */
   pricing?: PricingConfigMap;
   /** Learning-router config (bandit sampling + hard constraints) */

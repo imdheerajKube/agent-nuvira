@@ -2180,6 +2180,35 @@ export interface HookDeclaration {
   updatedAt?: number;
 }
 
+/** The user-owned command policy (`<config dir>/command-policy.json`). */
+export type CommandPolicyKind = 'allow' | 'approve' | 'deny';
+
+export interface CommandPolicy {
+  allow: string[];
+  approve: string[];
+  deny: string[];
+}
+
+/** One built-in floor rule, with a command it refuses (for the page's table). */
+export interface CommandPolicyRuleSummary {
+  rule: string;
+  example: string;
+}
+
+/** `GET/PUT /api/admin/command-policy`. */
+export interface CommandPolicyView {
+  ok: boolean;
+  file?: string;
+  exists?: boolean;
+  policy?: CommandPolicy;
+  builtIn?: CommandPolicyRuleSummary[];
+  /** True when this session's role may save (`policy.write` = admin). */
+  writable?: boolean;
+  error?: string;
+  unauthorized?: boolean;
+  forbidden?: boolean;
+}
+
 export interface HooksData {
   file: string;
   hooks: HookDeclaration[];
@@ -2376,4 +2405,145 @@ export interface CapabilitiesData {
   blockedCount: number;
   /** Bundle 52 — commands learned on this machine, keyed by (verb, os). */
   learnedCommands?: LearnedCommandInfo[];
+}
+
+// ─── Mid-run steering ────────────────────────────────────────────────────────
+// Mirrors the durable projection served by `GET /api/steering`. The dashboard
+// only reads these fields; plan mutation is the run process's job.
+
+export interface SteeringAssessmentView {
+  relation: string;
+  kind: string;
+  timing: string;
+  impact: string;
+  confidence: number;
+  affectedStepIds: string[];
+  conflictsWith: string[];
+  supersedes: string[];
+  requiresApproval: boolean;
+  rationale: string;
+}
+
+export interface SteeringDecisionView {
+  action: string;
+  reason: string;
+  authority?: string;
+}
+
+export interface SteeringPlanDiffView {
+  added: string[];
+  updated: string[];
+  removed: string[];
+  cancelled: string[];
+  constraintsAdded: string[];
+}
+
+export interface SteeringChangeRecord {
+  id: string;
+  runId: string;
+  sessionId?: string;
+  source: string;
+  author: string;
+  rawText: string;
+  intentHint?: 'guidance' | 'question' | 'new_task';
+  submittedAt: string;
+  planVersionAtSubmit: number;
+  status: string;
+  assessment?: SteeringAssessmentView;
+  decision?: SteeringDecisionView;
+  planVersion?: number;
+  planDiff?: SteeringPlanDiffView;
+  failure?: string;
+  triagedAt?: string;
+  triageLatencyMs?: number;
+  workspaceCheckpointId?: string;
+}
+
+export interface SteeringPlanStepView {
+  id: string;
+  description: string;
+  status: string;
+  acceptanceCriteria?: string[];
+  dependsOn?: string[];
+}
+
+export interface SteeringPlanView {
+  version: number;
+  parentVersion?: number;
+  steps: SteeringPlanStepView[];
+  changeIds?: string[];
+  reason?: string;
+}
+
+export interface SteeringRunView {
+  runId: string;
+  status: string;
+  goal: string;
+  engine?: string;
+  surface?: string;
+  sessionId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface SteeringBacklogItem {
+  id: string;
+  title: string;
+  description?: string;
+  reason: string;
+  sourceRunId: string;
+  status: string;
+  createdAt: string;
+}
+
+export interface SteeringMetricsView {
+  guidanceReceived: number;
+  applied: number;
+  rejected: number;
+  deferred: number;
+  backlogged: number;
+  needsApproval: number;
+  planVersions: number;
+  avgTriageLatencyMs: number;
+  p95TriageLatencyMs: number;
+  avgTimeToApplyMs: number;
+  staleRate: number;
+  avgApprovalLatencyMs: number;
+  abandonedApprovals: number;
+  lowConfidenceCount: number;
+  replansPerAppliedChange: number;
+  highImpactFalseAccepts: number;
+  lastTriageAt?: string;
+}
+
+export interface SteeringProjection {
+  enabled: boolean;
+  run: SteeringRunView | null;
+  plan: SteeringPlanView | null;
+  changes: SteeringChangeRecord[];
+  backlog: SteeringBacklogItem[];
+  metrics: SteeringMetricsView;
+  counts: {
+    received: number;
+    triaged: number;
+    needsApproval: number;
+    accepted: number;
+    applied: number;
+    deferred: number;
+    answerOnly: number;
+    backlog: number;
+    rejected: number;
+    stale: number;
+    failed: number;
+    withdrawn: number;
+    open: number;
+  };
+}
+
+export interface SteeringResponse {
+  ok: boolean;
+  enabled?: boolean;
+  projection?: SteeringProjection;
+  runs?: Array<{ runId: string; status: string; goal: string; updatedAt?: string }>;
+  error?: string;
 }

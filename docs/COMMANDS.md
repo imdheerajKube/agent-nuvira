@@ -566,6 +566,60 @@ would not start and closed with no README).
   the same switch the dashboard Chat page and Process Env page use, and never widens the
   deterministic safety surface.
 
+### 4.2d Command policy — what the agent may run (CLI + dashboard)
+
+- **Objective:** Change what the agent may run on this machine without editing source. Out of the
+  box the **built-in floor** applies. A file you own — `<config dir>/command-policy.json`, honouring
+  `NUVIRA_CONFIG_DIR` and `NUVIRA_COMMAND_POLICY` — overrides the built-in **class** for the command
+  prefixes you name. Nothing is denied by default because you did not configure it; the defaults are
+  the floor, and your file is the override.
+- **Command:** `nuvira config policy [list] [--json]` · `nuvira config policy allow|approve|deny "<command>"` ·
+  `nuvira config policy remove "<command>"` · `nuvira config policy clear [--kind <kind>] [-y]` ·
+  `nuvira config policy path` · `nuvira doctor` (reports a malformed file and entries that cannot
+  do what you expect)
+- **Examples:**
+  ```bash
+  nuvira config policy                              # the built-in floor + your overrides
+  nuvira config policy approve "git push"            # ask once, then the session grant may cover it
+  nuvira config policy approve "kill -9"             # a debugging kill, per your approval
+  nuvira config policy allow "npm run build"         # no ask for an ordinary command
+  nuvira config policy deny "rm -rf build"           # never, whatever the request says
+  nuvira config policy remove "kill -9"              # remove it from every list
+  nuvira config policy clear --kind deny             # empty one list, keep the file
+  nuvira config policy clear --yes                   # delete the file: back to the defaults
+  nuvira config policy path                          # print the file in use
+  ```
+
+- **The three lists, and what they can and cannot do:**
+
+  | You write | Effect |
+  |---|---|
+  | `deny` | Refused. Beats every other list and every built-in class. |
+  | `approve` | A built-in denial becomes **one human approval** (`git push`, `kill -9`). |
+  | `allow` | An ordinary command runs **without asking**. |
+  | `allow` on a floor command | Still one approval — never silent. |
+
+  **Precedence:** your `deny` → a floor command you approved/allowed (one approval) → your `allow` →
+  the built-in class. The floor stays for irreversible acts (`rm -rf /`, `sudo`, fork bombs, history
+  rewrite): a policy can turn a refusal into a question, never into silence. `allow` records "I am
+  fine with this", which is not the same claim as "this is safe" — which is why it cannot skip the
+  question on a floor command.
+
+- **Dashboard:** **Command Policy** (`/policy`) is the same file, read and written through the same
+  validator. It shows the built-in floor rule by rule with an example, edits the three lists (one
+  prefix per line), and saves to `command-policy.json`. Reading requires a signed-in session;
+  **saving requires `policy.write` (admin)**, so an operator or viewer sees the page read-only.
+- **When it takes effect:** immediately — every surface that classifies a command (chat, execute, the
+  dashboard's own turns) reads the file on the next command, because the reader caches on mtime. No
+  restart. A malformed file is reported once and ignored (it never becomes permissive), and both
+  editors refuse to overwrite it rather than destroying entries they cannot parse.
+- **Full guide:** [COMMAND_POLICY.md](./COMMAND_POLICY.md) — the matching rules, the complete built-in
+  floor table (including what is deliberately NOT refused), 15 worked examples with their impact, eight
+  ready-made configurations (local dev, Capacitor, CI, locked-down, monorepo, debugging, release), the
+  JSON contract, doctor's diagnostics, and the security limits (`allow` ≠ safe, wrappers, opaque scripts).
+- **Diagnostics:** `nuvira doctor` warns when a policy entry is ignored, duplicated, shadowed by a
+  broader deny, or is an `allow` that still asks once because the floor refuses the command.
+
 ### 4.1b The website — capabilities, commands, docs, setup
 
 - **Objective:** Open the Agent-Nuvira website, where the capabilities, the full command

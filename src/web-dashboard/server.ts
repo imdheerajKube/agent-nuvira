@@ -141,6 +141,25 @@ import {
 } from '../config/service-catalog.js';
 import { probeService } from '../config/service-probe.js';
 import { pruneScratchWorkspaces } from '../config/scratch-workspace.js';
+import {
+  addBacklogItem,
+  completeSteeringRun,
+  confirmInterpretation,
+  createBacklogTaskPrompt,
+  decideApproval,
+  discussRun,
+  getGuidance,
+  getSteeringRun,
+  listBacklog,
+  listSteeringRuns,
+  openSteeringRun,
+  projectRun,
+  setBacklogStatus,
+  steeringEnabled,
+  submitSteeringGuidance,
+  triagePending,
+  withSteeringRun,
+} from '../steering/index.js';
 
 // ─── Constants ──────────────────────────────────────────────────────────────
 
@@ -3929,6 +3948,271 @@ function bearerToken(req: IncomingMessage): string | null {
  * Read a JSON request body (cap 256KB). Returns null on parse failure, empty
  * body, or size overflow — callers respond 400. Never throws.
  */
+/**
+ * The durable guidance API. Kept in one async function because the request
+ * dispatcher is synchronous and every steering write is filesystem-backed.
+ *
+ * These routes NEVER mutate a plan: they append a change request or an approval
+ * decision. The run process applies accepted changes at its next safe point.
+ */
+async function handleSteeringApi(
+  req: IncomingMessage,
+  res: ServerResponse,
+  pathname: string,
+  url: URL,
+): Promise<void> {
+  const authenticate = (): boolean => {
+    const session = adminSessions.validate(bearerToken(req));
+    if (!session) {
+      writeJson(res, 401, { ok: false, error: 'Unauthorized' });
+      return false;
+    }
+    if (!roleCan(session.role, 'routing.operate')) {
+      writeJson(res, 403, { ok: false, error: 'Forbidden' });
+      return false;
+    }
+    return true;
+  };
+  const enabled = steeringEnabled(new ConfigManager());
+
+  if (pathname === '/api/steering' && req.method === 'GET') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 200, { ok: true, enabled: false, runs: [] });
+      return;
+    }
+    const runId = (url.searchParams.get('runId') ?? '').trim();
+    if (!runId) {
+      writeJson(res, 200, { ok: true, enabled, runs: listSteeringRuns(true) });
+      return;
+    }
+    writeJson(res, 200, { ok: true, enabled, projection: projectRun(runId, { enabled }) });
+    return;
+  }
+
+  if (pathname === '/api/steering/guidance' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    const text = typeof body.text === 'string' ? body.text : '';
+    if (!runId || !text.trim()) {
+      writeJson(res, 400, { ok: false, error: 'runId and non-empty text are required.' });
+      return;
+    }
+    const rawHint = body.intentHint;
+    const intentHint =
+      rawHint === 'guidance' || rawHint === 'question' || rawHint === 'new_task' ? rawHint : undefined;
+    const targetStepId = typeof body.targetStepId === 'string' ? body.targetStepId : undefined;
+    const idempotencyKey = typeof body.idempotencyKey === 'string' ? body.idempotencyKey : undefined;
+    const handleBefore = getSteeringRun(runId);
+    if (!handleBefore) {
+      openSteeringRun({
+        runId,
+        goal: text.trim(),
+        cwd: process.cwd(),
+        engine: 'loop',
+        surface: 'dashboard',
+        sessionId: runId,
+      });
+    }
+    const result = submitSteeringGuidance({
+      runId,
+      text,
+      source: 'dashboard',
+      author: 'dashboard',
+      ...(intentHint ? { intentHint } : {}),
+      ...(targetStepId ? { targetStepId } : {}),
+      ...(idempotencyKey ? { idempotencyKey } : {}),
+    });
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, error: result.error || 'Guidance was refused.' });
+      return;
+    }
+    writeJson(res, 200, {
+      ok: true,
+      change: result.change,
+      deduped: result.deduped === true,
+      projection: projectRun(runId, { enabled: true }),
+    });
+    // If a live loop has attached its model, triage now so the receipt becomes a
+    // real classification card quickly. The scheduler's per-run lock makes this
+    // safe alongside the loop's own safe point, and the executor still applies
+    // only at that safe point.
+    const liveHandle = getSteeringRun(runId);
+    if (liveHandle?.generate) {
+      void triagePending({ runId, generate: liveHandle.generate }).catch(() => undefined);
+    }
+    return;
+  }
+
+  if (pathname === '/api/steering/decision' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    const changeId = typeof body.changeId === 'string' ? body.changeId.trim() : '';
+    const action = body.action;
+    if (
+      !runId ||
+      !changeId ||
+      (action !== 'approve' && action !== 'reject' && action !== 'defer' && action !== 'withdraw')
+    ) {
+      writeJson(res, 400, {
+        ok: false,
+        error: 'runId, changeId and action (approve|reject|defer|withdraw) are required.',
+      });
+      return;
+    }
+    const note = typeof body.note === 'string' ? body.note : undefined;
+    const result = decideApproval({
+      runId,
+      changeId,
+      action,
+      actor: 'dashboard',
+      ...(note ? { note } : {}),
+    });
+    if (!result.ok) {
+      writeJson(res, 400, { ok: false, error: result.error || 'Decision was refused.' });
+      return;
+    }
+    writeJson(res, 200, {
+      ok: true,
+      change: result.change,
+      projection: projectRun(runId, { enabled: true }),
+    });
+    return;
+  }
+
+  if (pathname === '/api/steering/interpretation' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    const changeId = typeof body.changeId === 'string' ? body.changeId.trim() : '';
+    const choice = body.choice;
+    if (
+      !runId ||
+      !changeId ||
+      (choice !== 'guidance' && choice !== 'new_task' && choice !== 'question')
+    ) {
+      writeJson(res, 400, {
+        ok: false,
+        error: 'runId, changeId and choice (guidance|new_task|question) are required.',
+      });
+      return;
+    }
+    const updated = confirmInterpretation({ runId, changeId, choice });
+    if (!updated) {
+      writeJson(res, 404, { ok: false, error: `No guidance item ${changeId} in this run.` });
+      return;
+    }
+    const live = getSteeringRun(runId);
+    // A question or new task is decidable without a model. "Current task" needs
+    // the semantic steward, so it waits for the next safe point when no live
+    // model is attached rather than being re-triaged into another confirmation.
+    if (choice !== 'guidance' || live?.generate) {
+      void triagePending({
+        runId,
+        ...(live?.generate ? { generate: live.generate } : {}),
+      }).catch(() => undefined);
+    }
+    writeJson(res, 200, {
+      ok: true,
+      change: updated,
+      projection: projectRun(runId, { enabled: true }),
+    });
+    return;
+  }
+
+  if (pathname === '/api/steering/discuss' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    const question = typeof body.question === 'string' ? body.question.trim() : '';
+    if (!runId || !question) {
+      writeJson(res, 400, { ok: false, error: 'runId and question are required.' });
+      return;
+    }
+    const handle = getSteeringRun(runId);
+    const result = await discussRun({
+      runId,
+      question,
+      ...(handle ? { generate: handle.generate } : {}),
+    });
+    writeJson(res, 200, { ok: true, ...result });
+    return;
+  }
+
+  if (pathname === '/api/steering/backlog' && req.method === 'POST') {
+    if (!authenticate()) return;
+    if (!enabled) {
+      writeJson(res, 400, { ok: false, error: 'Steering is disabled on this deployment.' });
+      return;
+    }
+    const body = (await readJsonBody(req)) ?? {};
+    const runId = typeof body.runId === 'string' ? body.runId.trim() : '';
+    const action = typeof body.action === 'string' ? body.action.trim() : '';
+    if (!runId || (action !== 'create-task' && action !== 'capture')) {
+      writeJson(res, 400, { ok: false, error: 'runId and action=create-task|capture are required.' });
+      return;
+    }
+    if (action === 'capture') {
+      const changeId = typeof body.changeId === 'string' ? body.changeId.trim() : '';
+      const change = changeId ? getGuidance(runId, changeId) : null;
+      if (!change) {
+        writeJson(res, 404, { ok: false, error: `No guidance item ${changeId || '(missing changeId)'} for this run.` });
+        return;
+      }
+      const captured = addBacklogItem({ runId, change });
+      if (!captured) {
+        writeJson(res, 500, { ok: false, error: 'Could not persist the backlog item.' });
+        return;
+      }
+      writeJson(res, 200, {
+        ok: true,
+        item: captured,
+        projection: projectRun(runId, { enabled: true }),
+      });
+      return;
+    }
+    const backlogId = typeof body.backlogId === 'string' ? body.backlogId.trim() : '';
+    if (!backlogId) {
+      writeJson(res, 400, { ok: false, error: 'backlogId is required for action=create-task.' });
+      return;
+    }
+    const item = listBacklog(runId).find((entry) => entry.id === backlogId);
+    if (!item) {
+      writeJson(res, 404, { ok: false, error: `No backlog item ${backlogId} for this run.` });
+      return;
+    }
+    const prepared = createBacklogTaskPrompt(item);
+    setBacklogStatus(runId, item.id, 'scheduled');
+    writeJson(res, 200, {
+      ok: true,
+      command: prepared.command,
+      prompt: prepared.prompt,
+      item: { ...item, status: 'scheduled' },
+    });
+    return;
+  }
+
+  writeJson(res, 404, { ok: false, error: 'Unknown steering route.' });
+}
+
 function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown> | null> {
   return new Promise((resolve) => {
     const chunks: Buffer[] = [];
@@ -6124,6 +6408,52 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   // ── Contacts management (name-centric contact store for outbound messaging) ──
   // GET  /api/admin/contacts — list all contacts (with name, platform, id, phone, status)
   // PUT  /api/admin/contacts — update a contact (approve/reject/edit/delete)
+  if (pathname === '/api/admin/command-policy') {
+    void (async () => {
+      const session = adminSessions.validate(bearerToken(req));
+      if (!session) {
+        writeJson(res, 401, { ok: false, error: 'Not authenticated — log in first.' });
+        return;
+      }
+      if (req.method === 'GET') {
+        // The page and the refusal message must agree on the floor, so both
+        // read the SAME summary the classifier's rules are pinned to.
+        const { commandPolicyStatus } = await import('../tools/command-policy.js');
+        const { BUILT_IN_DENY_SUMMARY } = await import('../tools/run-terminal.js');
+        const status = commandPolicyStatus();
+        writeJson(res, 200, {
+          ok: true,
+          ...status,
+          builtIn: BUILT_IN_DENY_SUMMARY,
+          writable: roleCan(session.role, 'policy.write'),
+        });
+        return;
+      }
+      if (req.method === 'PUT') {
+        if (!roleCan(session.role, 'policy.write')) {
+          writeJson(res, 403, {
+            ok: false,
+            error: `Access denied — role '${session.role}' cannot change the command policy (requires admin).`,
+          });
+          return;
+        }
+        const body = await readJsonBody(req);
+        const { writeCommandPolicy } = await import('../tools/command-policy.js');
+        const result = writeCommandPolicy(body ?? {});
+        if (!result.ok) {
+          writeJson(res, 400, { ok: false, error: result.error ?? 'Invalid command policy.' });
+          return;
+        }
+        // No restart: the next classify reads the new mtime. Say so in the
+        // response so the page can promise exactly what will happen.
+        writeJson(res, 200, { ok: true, file: result.file, exists: true, policy: result.policy });
+        return;
+      }
+      writeJson(res, 405, { ok: false, error: 'Use GET to read or PUT to save the command policy.' });
+    })();
+    return;
+  }
+
   if (pathname === '/api/admin/contacts') {
     void (async () => {
       const session = adminSessions.validate(bearerToken(req));
@@ -8545,6 +8875,13 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   }
 
   // POST /api/chat — send one message { sessionId?, message, provider?, model? }.
+  if (pathname.startsWith('/api/steering')) {
+    void handleSteeringApi(req, res, pathname, url).catch((error) => {
+      if (!res.headersSent) writeJson(res, 500, { ok: false, error: String(error) });
+    });
+    return;
+  }
+
   if (pathname === '/api/chat' && req.method === 'POST') {
     void (async () => {
       const session = adminSessions.validate(bearerToken(req));
@@ -8785,7 +9122,23 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
       // Mark the failover log BEFORE the turn so a failure can report which
       // models were actually tried (same contract as the gateway).
       const attemptMark = markFailoverAttempts();
-      const result = await withStrictModel(strict, () =>
+      // Scope a steering run to this turn. The loop reads the same handle at its
+      // pre-model safe point; because AsyncLocalStorage carries it, the loop's
+      // public signature does not change and a concurrent session cannot see it.
+      const steeringHandle = steeringEnabled(new ConfigManager())
+        ? openSteeringRun({
+            runId: sessionId,
+            goal: message,
+            cwd: workspace.path || process.cwd(),
+            engine: 'loop',
+            surface: 'dashboard',
+            sessionId,
+            // This is a NEW turn (the previous one ended). A paused, stopped or
+            // completed run is resumed here; the safe-point tick never passes it.
+            resume: true,
+          })
+        : null;
+      const answerTurn = () =>
         chatConsole.answer(sessionId, message, {
           provider,
           model,
@@ -8808,15 +9161,21 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
           ...(worktree === undefined ? {} : { worktree }),
           ...(keepWorktree === undefined ? {} : { keepWorktree }),
           ...(resume === undefined ? {} : { resume }),
-        }),
+        });
+      const result = await withStrictModel(strict, () =>
+        steeringHandle ? withSteeringRun(steeringHandle, answerTurn) : answerTurn(),
       );
       if (!result.ok) {
+        if (steeringHandle) completeSteeringRun(sessionId, 'failed');
         writeJson(res, 400, {
           ok: false,
           error: result.error || 'The agent could not answer — check that a provider API key is configured in the dashboard process.',
         });
         return;
       }
+      // The turn is over: its run must not keep appearing as active to `steer`.
+      // A paused/stopped run is preserved by completeSteeringRun.
+      if (steeringHandle) completeSteeringRun(sessionId);
       // A failed generation gets the SAME treatment as the gateway: report what
       // was tried, offer to keep checking, and queue the ask so the offer is
       // enforced (see ChatRetryBroker). Without this the console was a dead end

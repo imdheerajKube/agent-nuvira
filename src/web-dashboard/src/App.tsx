@@ -53,6 +53,9 @@ import ProcessEnvPage from './components/ProcessEnvPage';
 // and a runtime but no surface: an operator could not see what would fire or
 // what it could do. This page is that surface.
 import HooksPage from './components/HooksPage';
+// What the agent may RUN. The built-in floor is not editable here; this page
+// owns the user's overrides and writes the same command-policy.json the CLI does.
+import CommandPolicyPage from './components/CommandPolicyPage';
 // The capability layer (effect / reversibility / requirements / per-OS commands)
 // was discoverable by the MODEL (tool_search) but invisible to the human. This
 // page is the human view: per-verb readiness, the executables that are missing,
@@ -184,6 +187,7 @@ export default function App() {
           <Route path="/env" element={<SkillEnvPage />} />
           <Route path="/process-env" element={<ProcessEnvPage />} />
           <Route path="/hooks" element={<HooksPage />} />
+          <Route path="/policy" element={<CommandPolicyPage />} />
           <Route path="/memory" element={<MemoryPanel data={data} />} />
           <Route path="/knowledge" element={<KnowledgePage />} />
           <Route path="/history" element={<HistoryBrowser data={data} />} />

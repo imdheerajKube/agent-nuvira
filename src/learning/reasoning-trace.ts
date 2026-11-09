@@ -325,6 +325,10 @@ export type TraceGateName =
   // new successful tool calls kept landing, so the step budget was extended
   // instead of ending a live turn mid-task (see ToolLoopOptions.maxStepExtensions).
   | 'budget-extension'
+  // MID-RUN STEERING: a user guidance item was committed as a new plan version at
+  // a safe point and handed to the executor as a bounded directive. The raw user
+  // text is never the trace subject; the change ids are.
+  | 'steering'
   // The ASSESSMENT budget's own ending: the step bound was reached and a whole
   // round added no new finding to the report, so the turn stopped instead of
   // spending another round on material it had already read (see
