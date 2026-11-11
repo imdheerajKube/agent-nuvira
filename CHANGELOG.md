@@ -2,6 +2,52 @@
 
 All notable changes to **Agent-Nuvira** are documented in this file.
 
+## v3.6.1 — process signals by intent, and federation that admits what it does not know
+
+Two truthfulness fixes at the base of the distributed-delivery work, plus the
+Phase 11 design set.
+
+**Process control — intent, not spelling.**
+
+- **`kill -9` is judged, not pattern-matched.** `src/tools/signal-intent.ts` parses
+  `{signal, target, scope, force}` and decides: a forced kill of a pid this process
+  spawned is allowed; a forced kill of a pid it does not own is denied; `-KILL`,
+  `-s KILL` and `--signal=9` are the same operation; a forced or mass pattern kill
+  (`pkill -9`, `killall -9`) is denied under its own rule. A quoted `"kill -9"` in a
+  `rg` pattern is no longer mistaken for a signal.
+- **Ownership is registered, not guessed.** The terminal tool registers the pid it
+  spawned and drops it on exit, so a recycled pid is never treated as ours.
+- **A blessed stop path exists.** `nuvira workspace process list`, then
+  `nuvira workspace process stop --port <n>` / `--pid <n>`: resolve the owner,
+  SIGTERM, wait the grace window, verify the exit, and escalate only if needed —
+  reporting whether the stop was graceful or forced instead of implying both are equal.
+- **The kill ladder is verified everywhere.** `terminal-tool` sends SIGTERM and
+  escalates after 2 s rather than SIGKILLing on the first timer; `subagent-spawner`
+  escalates and records `failed` if the child survives both signals;
+  `process-registry` no longer marks a process stopped when it has merely *sent* a
+  signal — it updates status from observed liveness.
+
+**Federation — a task either has a verdict or it does not.**
+
+- **No inferred success (F1).** The server records the terminal result per task id
+  and serves `GET /federation/task/:id`. The polling client returns that verdict or
+  throws `unknown outcome`; "not currently active" is never read as completion, and a
+  transport error is no longer mistaken for a finished task.
+- **Advertised capacity is enforced (F2).** A node at `maxConcurrentTasks` answers
+  `429` with `Retry-After` and a rejection envelope, so the broker can place the
+  packet elsewhere instead of silently making every task slower.
+- **Testable by construction.** `FederationConfig.executor` accepts an injected task
+  executor; the capacity, terminal-result and unknown-id paths are asserted
+  deterministically (`tests/federation/server-capacity.test.ts`).
+
+**Phase 11 design set.** Seven cross-linked documents — the Autonomous Delivery Grid
+spec, strategy, review, enterprise company model, self-improvement (including L4′:
+governed self-modification, the improvement ledger and organisational optimisation),
+decision record and Stage 1 plan — plus the roadmap entry that indexes them.
+
+Tests: signal-intent 21, federation capacity 3, federation polling 4, subagent
+end-to-end 17, process/policy suites green; root typecheck clean.
+
 ## v3.6.0 — steering you can audit, and retrieval that survives a real query
 
 This release completes the mid-run steering parity work and ships the attachment

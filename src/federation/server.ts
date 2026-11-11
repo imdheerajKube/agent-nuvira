@@ -340,7 +340,7 @@ async function handleHandshake(req: IncomingMessage, res: ServerResponse, config
 async function handleTaskDelegation(
   req: IncomingMessage,
   res: ServerResponse,
-  _config: FederationConfig,
+  config: FederationConfig,
 ): Promise<void> {
   const token = getBearerToken(req);
   if (!token || !authenticateSession(token)) {
@@ -352,6 +352,27 @@ async function handleTaskDelegation(
 
   if (!body.goal || !body.agentType) {
     sendError(res, 400, 'Missing goal or agentType');
+    return;
+  }
+
+  // Advertised capacity is a CONTRACT. Accepting work past it does not make the
+  // node faster — it makes every task slower and the queue invisible. Reject
+  // with a retry hint so the caller can place the packet elsewhere (F2).
+  const inFlight = runningTasks.size;
+  const capacity = Math.max(1, config.maxConcurrentTasks);
+  if (inFlight >= capacity) {
+    const rejection: TaskDelegationResponse = {
+      taskId: '',
+      status: 'rejected',
+      reason: `node at capacity (${inFlight}/${capacity} running)`,
+      estimatedWaitMs: 5_000,
+    };
+    res.writeHead(429, {
+      'Content-Type': 'application/json',
+      'Retry-After': '5',
+      'Access-Control-Allow-Origin': '*',
+    });
+    res.end(JSON.stringify(createEnvelope('response', rejection)));
     return;
   }
 
@@ -382,9 +403,23 @@ async function handleTaskDelegation(
 
   logger.info(`Federation: Executing task ${taskId} (${body.agentType}: ${body.goal.slice(0, 80)})`);
 
-  const result = await executeDelegatedTask(body, taskId, abortController);
+  // The executor is injectable so the capacity and terminal-result paths are
+  // testable without racing a real agent run.
+  const runTask = config.executor ?? executeDelegatedTask;
+  const result = await runTask(body, taskId, abortController);
 
   runningTasks.delete(taskId);
+  // Record the TERMINAL result by id. Without this, a polling caller can only
+  // observe "no active tasks", which is not the same claim as "my task
+  // succeeded" — the false-success defect (F1).
+  rememberTaskResult({
+    taskId,
+    success: result.success,
+    summary: result.summary,
+    durationMs: result.durationMs,
+    ...(result.error ? { error: result.error } : {}),
+    ...(result.details ? { details: result.details } : {}),
+  });
   if (result.success) {
     completedTaskCount++;
   } else {
@@ -430,6 +465,13 @@ async function handleCancel(
 
   runningTask.abortController.abort();
   runningTasks.delete(body.taskId);
+  rememberTaskResult({
+    taskId: body.taskId,
+    success: false,
+    summary: 'Cancelled by user',
+    error: 'cancelled',
+    durationMs: Date.now() - runningTask.startedAt,
+  });
 
   broadcastTaskProgress(body.taskId, {
     taskId: body.taskId,
@@ -440,6 +482,54 @@ async function handleCancel(
 
   sendJSON(res, 200, createEnvelope('response', { taskId: body.taskId, status: 'cancelled' }));
   logger.info(`Federation: Task ${body.taskId} cancelled`);
+}
+
+// ─── Terminal task results ──────────────────────────────────────────────────
+//
+// `GET /federation/health` reports how many tasks are ACTIVE. A polling client
+// that reads `activeTasks === 0` as "my task succeeded" is right only when one
+// task is running and nothing failed. With concurrency, or after a failure, it
+// reports delivery of work that never happened and records it in the ledger.
+// A terminal result is therefore stored by id; "not active and no result" is
+// UNKNOWN, never success.
+
+interface TerminalResult {
+  taskId: string;
+  success: boolean;
+  summary: string;
+  durationMs: number;
+  error?: string;
+  details?: string;
+}
+
+const terminalResults = new Map<string, TerminalResult>();
+const MAX_TERMINAL_RESULTS = 500;
+
+function rememberTaskResult(result: TerminalResult): void {
+  terminalResults.set(result.taskId, result);
+  while (terminalResults.size > MAX_TERMINAL_RESULTS) {
+    const oldest = terminalResults.keys().next().value as string | undefined;
+    if (!oldest) break;
+    terminalResults.delete(oldest);
+  }
+}
+
+function handleTaskStatus(req: IncomingMessage, res: ServerResponse, taskId: string): void {
+  const token = getBearerToken(req);
+  if (!token || !authenticateSession(token)) {
+    sendError(res, 401, 'Invalid or expired session token');
+    return;
+  }
+  if (runningTasks.has(taskId)) {
+    sendJSON(res, 200, createEnvelope('response', { status: 'running', taskId }));
+    return;
+  }
+  const result = terminalResults.get(taskId);
+  if (result) {
+    sendJSON(res, 200, createEnvelope('response', result));
+    return;
+  }
+  sendError(res, 404, `Unknown task: ${taskId}`);
 }
 
 function handleHealth(_req: IncomingMessage, res: ServerResponse): void {
@@ -479,6 +569,8 @@ function routeRequest(req: IncomingMessage, res: ServerResponse, config: Federat
       handleTaskDelegation(req, res, config);
     } else if (method === 'POST' && url === '/federation/cancel') {
       handleCancel(req, res);
+    } else if (method === 'GET' && url.startsWith('/federation/task/')) {
+      handleTaskStatus(req, res, decodeURIComponent(url.slice('/federation/task/'.length)));
     } else if (method === 'GET' && url === '/federation/health') {
       handleHealth(req, res);
     } else {

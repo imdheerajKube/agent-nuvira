@@ -155,6 +155,19 @@ export interface FederationHealth {
  */
 export type FederationAuthMode = 'secret' | 'oidc';
 
+/**
+ * Injectable executor for a delegated task.
+ *
+ * Production runs the real pipeline; tests supply a controlled one so capacity
+ * rejection and terminal-result recording can be asserted deterministically
+ * instead of racing a real agent run.
+ */
+export type DelegatedTaskExecutor = (
+  request: TaskDelegationRequest,
+  taskId: string,
+  abortController: AbortController,
+) => Promise<TaskResult>;
+
 /** Configuration for a federation server or client */
 export interface FederationConfig {
   /** Whether federation is enabled */
@@ -181,6 +194,12 @@ export interface FederationConfig {
   nodeId: string;
   /** Capabilities (which agent types this node can run) */
   capabilities: string[];
+  /**
+   * Optional executor override. Absent in production — the server then runs
+   * `executeDelegatedTask`. Tests inject one to hold a task open or to force a
+   * terminal outcome.
+   */
+  executor?: DelegatedTaskExecutor;
 }
 
 /** Default federation configuration */

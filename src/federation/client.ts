@@ -214,18 +214,58 @@ export class FederationClient extends EventEmitter {
     const taskId = response.taskId;
     const timeout = request.timeoutMs || this.config.taskTimeoutMs;
     const startTime = Date.now();
+    let consecutiveUnknown = 0;
 
     while (Date.now() - startTime < timeout) {
       await new Promise((resolve) => setTimeout(resolve, 2000));
-      try {
-        const health = await this.getHealth();
-        if (health.activeTasks === 0) {
-          return { taskId, success: true, summary: `Task ${taskId} completed`, durationMs: Date.now() - startTime };
+
+      const poll = await this.getTaskStatus(taskId);
+      if (poll.result) {
+        this.emit(poll.result.success ? 'task-completed' as any : 'task-failed' as any, poll.result);
+        return poll.result;
+      }
+
+      if (poll.state === 'unknown') {
+        consecutiveUnknown++;
+        // "Not running, and no recorded result" is UNKNOWN. The previous code
+        // returned success here as soon as the server had no active tasks — a
+        // false success whenever a second task was running, or after a failure.
+        // Two consecutive unknowns means the task is gone without a verdict.
+        if (consecutiveUnknown >= 2) {
+          throw new Error(`Task ${taskId} left the active set with no recorded result (unknown outcome)`);
         }
-      } catch { /* network error — server may be processing */ }
+      } else {
+        consecutiveUnknown = 0;
+      }
     }
 
     throw new Error(`Task ${taskId} timed out after ${timeout}ms`);
+  }
+
+  /**
+   * Fetch one task's status. `running` is a live task; a terminal result is the
+   * task's OWN verdict; anything else is `unknown` — never inferred success.
+   */
+  private async getTaskStatus(taskId: string): Promise<{ state: 'running' | 'terminal' | 'unknown'; result?: TaskResult }> {
+    let raw: Record<string, unknown>;
+    try {
+      raw = await this.makeRequest<Record<string, unknown>>(
+        `/federation/task/${encodeURIComponent(taskId)}`,
+        'GET',
+      );
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      // 404 = the server has no running task and no stored result for this id.
+      if (/\b404\b/.test(msg)) return { state: 'unknown' };
+      // Any other failure (network, 5xx) is surfaced: a transport error must
+      // never be read as "the work finished".
+      throw err;
+    }
+
+    if (!raw || typeof raw !== 'object') return { state: 'unknown' };
+    if (raw.status === 'running') return { state: 'running' };
+    if (typeof raw.success === 'boolean') return { state: 'terminal', result: raw as unknown as TaskResult };
+    return { state: 'unknown' };
   }
 
   // ─── Task Cancellation ───────────────────────────────────────────────────

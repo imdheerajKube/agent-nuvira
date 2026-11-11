@@ -51,6 +51,11 @@ import {
  */
 const WORKTREE_EXIT_TIMEOUT_MS = 5_000;
 
+// Kill ladder: SIGTERM, then this long before SIGKILL, then this long to confirm
+// the exit. Unref'd, so a pending escalation never holds the CLI open.
+const KILL_GRACE_MS = 2_000;
+const KILL_CONFIRM_MS = 1_000;
+
 // ─── Types ────────────────────────────────────────────────────────────────
 
 export type SubagentStatus = 'spawning' | 'running' | 'completed' | 'failed' | 'timeout' | 'killed';
@@ -499,20 +504,55 @@ export class SubagentManager extends EventEmitter {
   }
 
   /**
-   * Kill a subagent.
+   * Kill a subagent — SIGTERM, then verify, then escalate.
+   *
+   * The status is recorded as `killed` with the reason at request time, because
+   * `handleExit` must not overwrite the WHY with an exit code. What was missing
+   * is the other half: a child that ignores SIGTERM stayed alive while the
+   * registry said it was dead. So the signal is followed by a bounded grace
+   * window, a SIGKILL if the child is still there, and an honest `failed` state
+   * if it survives both — at which point the operator has a real incident, not
+   * a silent orphan holding a port.
    */
   kill(id: string, reason: string = 'killed'): boolean {
     const child = this.processes.get(id);
     const state = this.subagents.get(id);
     if (!child || !state) return false;
 
-    child.kill('SIGTERM');
+    try {
+      child.kill('SIGTERM');
+    } catch {
+      /* already gone — the exit handler will record it */
+    }
     state.status = 'killed';
     state.error = `Killed: ${reason}`;
     state.endedAt = Date.now();
     state.durationMs = state.endedAt - state.startedAt;
     this.saveState(state);
     this.emit('killed', id, reason);
+
+    const stillRunning = (): boolean => child.exitCode === null && child.signalCode === null;
+
+    const escalate = setTimeout(() => {
+      if (!stillRunning()) return;
+      try {
+        child.kill('SIGKILL');
+      } catch {
+        /* exited between the check and the signal */
+      }
+      const confirm = setTimeout(() => {
+        if (!stillRunning()) return;
+        state.status = 'failed';
+        state.error = `Kill failed: child survived SIGTERM and SIGKILL (${reason})`;
+        state.endedAt = Date.now();
+        state.durationMs = state.endedAt - state.startedAt;
+        this.saveState(state);
+        this.emit('failed', id, new Error(state.error));
+      }, KILL_CONFIRM_MS);
+      confirm.unref?.();
+    }, KILL_GRACE_MS);
+    escalate.unref?.();
+
     return true;
   }
 

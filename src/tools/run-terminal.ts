@@ -43,6 +43,7 @@ import {
   remediationAutoApplyEnabled,
 } from './remediation-ladder.js';
 import type { ToolContext } from './registry.js';
+import { classifySignalCommand, registerOwnedPid, unregisterOwnedPid } from './signal-intent.js';
 import {
   classifyLiveness,
   formatSpan,
@@ -1066,10 +1067,14 @@ const DENY_PATTERNS: DenyRule[] = [
   {
     rule: 'system-level destruction',
     re: new RegExp(
-      `${CMD_START}(?:sudo\\s+)?(?:mkfs|fdisk|dd|shutdown|reboot|halt|poweroff|init|killall)\\b`,
+      `${CMD_START}(?:sudo\\s+)?(?:mkfs|fdisk|dd|shutdown|reboot|halt|poweroff|init)\\b`,
     ),
   },
-  { rule: 'forced kill', re: new RegExp(`${CMD_START}kill\\s+-9\\b`) },
+  // Forced and mass kills are decided by INTENT, not spelling — see
+  // `signal-intent.ts`. A regex here refused only `kill -9` while `pkill -9`,
+  // `kill -s KILL`, `kill -KILL` and `kill --signal=9` all passed, and it
+  // refused the graceful form of a legitimate restart. The classifier also
+  // allows a forced stop of a process THIS harness spawned.
   // `rm -rf` at dangerous targets (absolute roots, home, system dirs, globs).
   // NOTE: tested against the LOWERCASED command, so targets are lowercase.
   // A destructive TARGET is the whole argument — `rm -rf ./dist` and
@@ -1123,6 +1128,8 @@ export const BUILT_IN_DENY_SUMMARY: ReadonlyArray<{ rule: string; example: strin
   { rule: 'working-tree destruction', example: 'git clean -fd' },
   { rule: 'system-level destruction', example: 'init 0' },
   { rule: 'forced kill', example: 'kill -9 1234' },
+  { rule: 'forced mass kill', example: 'pkill -9 node' },
+  { rule: 'mass process kill', example: 'killall node' },
   { rule: 'rm -rf at a destructive target', example: 'rm -rf /' },
   { rule: 'self-modification (command policy)', example: 'nuvira config policy allow "git push"' },
   { rule: 'fork bomb', example: ':(){ :|:& };:' },
@@ -1486,6 +1493,10 @@ export function describeDenial(command: string): string | undefined {
   for (const d of DENY_PATTERNS) {
     if (d.re.test(lower)) return d.rule;
   }
+  // Signal operations are classified by intent (signal + target + scope +
+  // ownership), so every spelling of the same action gets the same answer.
+  const signal = classifySignalCommand(lower);
+  if (signal?.action === 'deny' && signal.rule) return signal.rule;
   const wrapped = SHELL_WRAPPER_RE.exec(lower);
   if (wrapped) {
     const inner = describeDenial(wrapped[2]);
@@ -1997,6 +2008,11 @@ function execCommand(
     // its budget discards the spool (see `settleRun`).
     const spool = new SpoolWriter(id);
     const child = spawn(command, shellOptions as any);
+    // Ownership is what makes a forced stop a SUPERVISOR action instead of an
+    // operator one: while this child lives, the harness may reap it without a
+    // prompt. Unregistered on exit so a reused pid is never mistaken for ours.
+    registerOwnedPid(child.pid);
+    child.once('exit', () => unregisterOwnedPid(child.pid));
     const startedAt = Date.now();
     const run: DetachedRun = {
       id,

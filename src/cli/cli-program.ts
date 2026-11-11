@@ -68,6 +68,7 @@ import { FeedbackCommand } from './feedback.js';
 import { MarketplaceCommand } from './marketplace.js';
 import { MCPCommand } from './mcp.js';
 import { CICommand } from './ci.js';
+import { WorkspaceProcessCommand } from './workspace-process.js';
 import { PublishCommand } from './publish.js';
 import { CredentialsCommand } from './credentials.js';
 import { PhaseCommand } from './phase.js';
@@ -227,6 +228,11 @@ export function createCLI(): Command {
   // Register Phase 3.3 new commands
   const dashboardCmd = new DashboardCommand();
   program.addCommand(dashboardCmd.create());
+
+  // The blessed stop path: resolve a port owner, SIGTERM, verify the exit.
+  // Exists so "free this port" never requires `kill -9` from the agent.
+  const workspaceCmd = new WorkspaceProcessCommand();
+  program.addCommand(workspaceCmd.create());
 
   const agentCmd = new AgentCommand();
   program.addCommand(agentCmd.create());

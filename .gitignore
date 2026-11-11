@@ -175,6 +175,27 @@ docs/demos/nuvira-commands-all.cast
 # it links to is whitelisted with it so the evidence does not 404 on a fresh clone.
 !docs/ATTACHMENT_RETRIEVAL_DECISION_2026-11-09.md
 !docs/BENCH_ATTACHMENT_RETRIEVAL_2026-11-09.md
+# The capability-ecosystem plan: the tracked source of truth for user-authored
+# capabilities, code-backed workflows, triggers, and the trust model. It also
+# preserves the earlier brainstorming so the next implementation phase does not
+# re-derive it. `*.md` would otherwise hide the document entirely.
+!docs/ENHANCE_CUSTOM_CAPABILITY.md
+# The Phase 5 implementation contract. Code and tests cite this spec; if it is
+# hidden by `*.md`, a fresh clone loses the schemas, failure matrix, and rollout
+# gates that Phase 5 is measured against.
+!docs/PHASE5_LIFECYCLE_SPEC.md
+!docs/PHASE5_CODEBASE_VALIDATION.md
+# Phase 11 (Distributed Agent Grid): the specification, the plain-English
+# strategy framing, and the review that compares it with the Copilot draft.
+# Kept together because the spec is only defensible next to its scope
+# boundaries and its verdict; one without the others reads as roadmap inflation.
+!docs/PHASE11_DISTRIBUTED_AGENT_GRID.md
+!docs/PHASE11_ADG_STRATEGY.md
+!docs/PHASE11_ADG_REVIEW.md
+!docs/PHASE11_ENTERPRISE_COMPANY_MODEL.md
+!docs/PHASE11_SELF_IMPROVEMENT.md
+!docs/PHASE11_DECISIONS.md
+!docs/PHASE11_STAGE1_PLAN.md
 
 # Book (internal document — not published)
 book/

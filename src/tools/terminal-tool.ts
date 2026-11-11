@@ -161,10 +161,37 @@ export class TerminalManager extends EventEmitter {
       let stderr = '';
       let timedOut = false;
 
+      // Timeout is a LADDER, not a hammer. SIGTERM lets a shell, a test runner
+      // or a build flush its output and exit; SIGKILL is the fallback after the
+      // grace window, never the first move. Killing outright on the first
+      // timer is how a timed-out command leaves half-written files, unreleased
+      // ports and orphaned children behind — the exact debris the agent then
+      // tries to clear with `kill -9`.
+      const SIGKILL_GRACE_MS = 2_000;
+      let killTimer: NodeJS.Timeout | undefined;
       const timer = setTimeout(() => {
         timedOut = true;
-        child.kill('SIGKILL');
+        try {
+          child.kill('SIGTERM');
+        } catch {
+          /* already gone */
+        }
+        killTimer = setTimeout(() => {
+          // exitCode/signalCode stay null while the child is still running.
+          if (child.exitCode === null && child.signalCode === null) {
+            try {
+              child.kill('SIGKILL');
+            } catch {
+              /* already gone */
+            }
+          }
+        }, SIGKILL_GRACE_MS);
       }, timeoutMs);
+
+      const clearTimers = (): void => {
+        clearTimeout(timer);
+        if (killTimer) clearTimeout(killTimer);
+      };
 
       // Track task
       const task: TerminalTask = {
@@ -180,7 +207,7 @@ export class TerminalManager extends EventEmitter {
       child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
 
       child.on('close', (exitCode) => {
-        clearTimeout(timer);
+        clearTimers();
         task.status = exitCode === 0 ? 'completed' : 'failed';
         this.tasks.delete(id);
 
@@ -197,7 +224,7 @@ export class TerminalManager extends EventEmitter {
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
+        clearTimers();
         task.status = 'failed';
         this.tasks.delete(id);
 

@@ -32,6 +32,12 @@ export interface ProcessInfo {
   metadata: Record<string, unknown>;
 }
 
+// ─── Stop timing ────────────────────────────────────────────────────────────
+// A graceful stop gets this long before SIGKILL, then this long to confirm the
+// exit. Both timers are unref'd: a stop in flight must never hold the CLI open.
+const STOP_GRACE_MS = 3_000;
+const STOP_CONFIRM_MS = 1_000;
+
 // ─── Process Registry ────────────────────────────────────────────────────
 
 export class ProcessRegistry extends EventEmitter {
@@ -142,22 +148,76 @@ export class ProcessRegistry extends EventEmitter {
   }
 
   /**
-   * Kill a process by ID.
+   * Ask a process to stop, and VERIFY the exit.
+   *
+   * SIGTERM is a request, not an outcome. The old version sent it and then set
+   * `status = 'stopped'` in the same tick, so a process that ignored or never
+   * received the signal was reported as stopped while still running — and the
+   * caller, believing it was handled, reached for `kill -9` next. That is the
+   * same false-success pattern as a claimed test pass with no artifact.
+   *
+   * So: SIGTERM, a bounded grace window, SIGKILL if still alive, and status
+   * updated only from OBSERVED liveness. Returns true when the stop was
+   * initiated; `stopped` (or `failed`, if it survived both signals) follows.
    */
   kill(id: string): boolean {
     const info = this.processes.get(id);
     if (!info || info.status !== 'running') return false;
+    if (!Number.isFinite(info.pid) || info.pid <= 0) return false;
 
     try {
       process.kill(info.pid, 'SIGTERM');
-      info.status = 'stopped';
-      info.stoppedAt = Date.now();
-      this.emit('killed', info);
-      return true;
     } catch (err) {
-      logger.warn(`[process] Failed to kill ${info.pid}: ${err}`);
+      // ESRCH means it is already gone: the desired state, reached already.
+      if ((err as NodeJS.ErrnoException).code === 'ESRCH') {
+        this.markStopped(info);
+        return true;
+      }
+      logger.warn(`[process] Failed to signal ${info.pid}: ${err}`);
       return false;
     }
+
+    this.emit('stopping', info);
+
+    const escalate = setTimeout(() => {
+      if (this.isAlive(info.pid)) {
+        try {
+          process.kill(info.pid, 'SIGKILL');
+        } catch {
+          /* exited between the check and the signal */
+        }
+      }
+      const confirm = setTimeout(() => {
+        if (this.isAlive(info.pid)) {
+          info.status = 'failed';
+          info.stoppedAt = Date.now();
+          this.emit('failed', info);
+          logger.warn(`[process] pid ${info.pid} survived SIGTERM and SIGKILL`);
+        } else {
+          this.markStopped(info);
+        }
+      }, STOP_CONFIRM_MS);
+      confirm.unref?.();
+    }, STOP_GRACE_MS);
+    escalate.unref?.();
+
+    return true;
+  }
+
+  /** Liveness by pid — `signal 0` performs the permission/existence check. */
+  private isAlive(pid: number): boolean {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private markStopped(info: ProcessInfo): void {
+    info.status = 'stopped';
+    info.stoppedAt = info.stoppedAt ?? Date.now();
+    this.emit('stopped', info);
   }
 
   /**

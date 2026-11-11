@@ -2648,7 +2648,7 @@ registerTool({
               error: err?.message ?? String(err),
             }))
         : JSON.stringify({ success: false, code: 'unsupported_format', error: 'id required' });
-      case 'kill': return id ? (mgr.kill(id) ? 'Killed' : 'Not found') : 'id required';
+      case 'kill': return id ? (mgr.kill(id) ? 'Stop signalled' : 'Not found') : 'id required';
       case 'log': return id ? mgr.getLog(id).join('\n') : 'id required';
       default: return 'Unknown action';
     }
@@ -2825,7 +2825,9 @@ registerTool({
       case 'register': return pid && command ? JSON.stringify(reg.register(pid, command)) : 'pid and command required';
       case 'list': return JSON.stringify(reg.list());
       case 'stats': return JSON.stringify(reg.getStats());
-      case 'kill': return id ? (reg.kill(id) ? 'Killed' : 'Not found') : 'id required';
+      // "Stop signalled", not "Killed": the registry confirms the exit from
+      // observed liveness and emits stopped/failed afterwards.
+      case 'kill': return id ? (reg.kill(id) ? 'Stop signalled' : 'Not found') : 'id required';
       case 'cleanup': return JSON.stringify({ cleaned: reg.cleanup() });
       default: return 'Unknown action';
     }
