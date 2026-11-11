@@ -215,6 +215,7 @@ Day 10's "three times" matters: a demo that passes once is a coincidence. The re
 
 ## 8. What Stage 1 deliberately defers
 
+- The **M6 improvement ledger (v1)** — hash chain, signatures, promotion gate. Stage 1 ships the append-only observation stream it will be built from, because the data cannot be collected retroactively (D16; `./PHASE11_SELF_IMPROVEMENT.md` §13.6).
 - Any network transport (Stage 2).
 - Real model diversity across workers (Stage 2; Stage 1 uses one provider with two model settings).
 - Node enrollment, trust tiers, quarantine (Stage 2–3).
@@ -231,7 +232,7 @@ Stage 1 is done when:
 
 1. all 14 acceptance checks pass on two consecutive runs;
 2. the 12-packet program's artifacts can be reviewed by a human in under fifteen minutes;
-3. the ledger verifies independently of the dashboard;
+3. the Stage 1 **evidence** ledger verifies independently of the dashboard (this is not the M6 improvement ledger, which is Phase 12 — D16);
 4. a worker process killed with `SIGKILL` mid-packet produces a reissued packet and exactly one accepted artifact;
 5. no packet was executed in the live working tree at any point;
 6. the report names every place the contracts were too loose, with the packet that exposed it.

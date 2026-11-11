@@ -222,6 +222,25 @@ The eight open questions in §24 need answers before Stage 1. These are the reco
 | D13 roadmap position | Product | proposed | — |
 | D14 horizons | Product | proposed | — |
 | D15 protocol extension | Federation | proposed | — |
+| D16 ledger timing | Quality | proposed | — |
 | O1–O8 | Runtime (+security) | provisional | — |
 
 A decision is `accepted` only when the owner writes their name and a date. Until then it is a proposal with a recommendation, which is what this document is.
+
+---
+
+## 18. Addendum — when the improvement ledger is built (D16)
+
+**Decision:** the M6 improvement ledger is **not** built in Phase 11. Phase 11/Stage 1 ships an append-only **observation stream** (one record per packet: size, file count, attempts, gate outcome, reviewer, cost). The **ledger v1** — hash chain, signatures, authority diff, preregistration refs, promotion gate — is WP2 of the Phase 12 upgrade programme, preceded by WP1 (authority manifest) and accompanied by WP3 (replay corpus).
+
+**Why:** three reasons, in order of weight.
+
+1. The ledger's load-bearing fields (`evalSetHash`, `preregistrationId`, `authorityDiff`, `reviewerNode`) only have referents once WP4 and WP5 exist. Freezing them earlier guarantees a migration, and a migrated ledger is weaker evidence than one that never had to reinterpret its own history.
+2. A ledger with no promotion path is a liability disguised as governance: it makes the product look more accountable than it is.
+3. The genuinely irreversible thing is **data**, not machinery. Packet-level outcomes that were never recorded cannot be reconstructed; a decision can be reconstructed from a changelog.
+
+**Reversibility:** cheap. Schema v0 is append-only JSONL and a strict subset of the v1 record, so v1 reads v0 without transformation.
+
+**If wrong:** if a promotion can be recorded without any WP4/WP5 artefact, the split was wrong and the ledger must move earlier. That is the confirmation test, and it is checkable rather than arguable.
+
+**Owner:** Quality. **Status:** proposed. **Gate:** the first promotion in Phase 12 must be impossible without a v1 record; if it is possible, D16 is withdrawn.

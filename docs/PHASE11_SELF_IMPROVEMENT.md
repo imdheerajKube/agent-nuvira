@@ -629,3 +629,17 @@ Stop the programme, and say so, if any of these is true at the end of WP4:
 ### 13.5 Definition of done
 
 L4′ is done when a change to working method can travel proposal → replay → gate → canary → promotion → drift → rollback with **no step that the agent can perform alone**, and a year later someone can reconstruct why it happened from the ledger without asking a model.
+
+### 13.6 Carried into the Phase 12 kickoff
+
+The split between what is instrumented now and what waits for the upgrade programme. Nothing here is dropped; each item names where it is built and the test that closes it.
+
+| Item | Where it is built | Why it waits | Acceptance test |
+|---|---|---|---|
+| **Observation stream (schema v0)** — append-only JSONL, one record per packet | Stage 1 evidence bundle | Data must accumulate before replay is possible, and it needs no ledger schema | Every packet yields size, file count, attempts, gate outcome, reviewer, cost — with no hand-written summary |
+| **Authority manifest + monotonicity check (WP1)** | First Phase 12 work package, before any proposal path | `authorityDiff` cannot be computed against nothing | A proposal that adds a tool, scope or egress path fails closed |
+| **Ledger v1** — hash chain, signatures, promotion gate, `show`/`why`/`stats`/`rollback` | WP2 | Fields are downstream of the evaluator (WP4) and pre-registration (WP5) | Tampering with an entry breaks the chain and blocks promotion |
+| **Frozen evaluator + escrow (WP4)** | Phase 12 | Needs the replay corpus (WP3) to evaluate against | A hash mismatch refuses to run; the agent-writable path cannot reach it |
+| **O3/O4 structural changes** | Phase 14 | Needs a quarter of O1/O2 data and a calibrated queueing model | A shape change is canaried per cohort and auto-reverted on guardrail breach |
+
+The ordering rule, recorded as D16 in the decision log: **instrument now, ledger at WP2, authority before proposals.** The observation stream is deliberately *not* called a ledger until it has a chain and a gate — because "we have a ledger" is the claim an auditor will test.
